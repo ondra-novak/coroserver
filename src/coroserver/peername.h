@@ -168,7 +168,7 @@ public:
     }
     ///Retrieve Error informations
     const Error *get_error() const {
-        if (std::holds_alternative<Unix>(_content)) return &std::get<Error>(_content);
+        if (std::holds_alternative<Error>(_content)) return &std::get<Error>(_content);
         else return nullptr;
     }
 

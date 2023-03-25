@@ -27,7 +27,7 @@ struct PeerName::ToStringHlp {
         int d = (addr.addr /*>> 0*/) & 0xFF;
         int port = htons(addr.port);
         char buff[24];
-        snprintf(buff,24,"%d.%d.%d.%d:%d",a,b,c,d,port);
+        snprintf(buff,24,"%d.%d.%d.%d:%d",d,c,b,a,port);
         return buff;
     }
     std::string operator()(const IPv6 &addr) const {
@@ -83,6 +83,7 @@ std::vector<PeerName> PeerName::lookup(std::string_view name, std::string_view d
 
             if (item.compare(0,unix_prefix.size(), unix_prefix) == 0) {
                     resolve_local(item.substr(unix_prefix.size()),list);
+                    continue;
             }
 
             std::string_view host;
@@ -186,6 +187,7 @@ unsigned int PeerName::to_sockaddr(void *sockaddr, unsigned int sockaddr_len) co
             std::copy(std::begin(item.addr), std::end(item.addr), std::begin(saddr->sin6_addr.__in6_u.__u6_addr16));
             saddr->sin6_flowinfo = item.flow_info;
             saddr->sin6_scope_id = item.scope_id;
+            saddr->sin6_port = item.port;
             return sz;
         } else if constexpr(std::is_same_v<Type, Unix>) {
             constexpr unsigned int sz = sizeof(sockaddr_un);
