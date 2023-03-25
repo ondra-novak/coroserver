@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
         CHECK_EQUAL(peer.size(),1);
         auto ipv6 = peer[0].get_ipv6();
         CHECK_NOT_EQUAL(ipv6 , nullptr);
-        CHECK_EQUAL(peer[0].to_string(),std::string("[0000:0000:0000:0000:0000:0000:0000:0001]:12345"));
+        CHECK_EQUAL(peer[0].to_string(),std::string("[0:0:0:0:0:0:0:1]:12345"));
         auto peer2 = peer;
         CHECK(peer == peer2);
     }

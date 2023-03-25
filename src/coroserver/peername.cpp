@@ -32,7 +32,7 @@ struct PeerName::ToStringHlp {
     }
     std::string operator()(const IPv6 &addr) const {
         char buff[50];
-        snprintf(buff, 50, "[%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x]:%d",
+        snprintf(buff, 50, "[%x:%x:%x:%x:%x:%x:%x:%x]:%d",
                 htons(addr.addr[0]),
                 htons(addr.addr[1]),
                 htons(addr.addr[2]),

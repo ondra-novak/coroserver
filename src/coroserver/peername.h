@@ -110,7 +110,7 @@ public:
      * @return return value of function
      */
     template<typename Fn>
-    auto use_sockaddr(Fn &&fn) {
+    auto use_sockaddr(Fn &&fn) const {
         unsigned int sz = max_sockaddr_size;
         void *buff = alloca(max_sockaddr_size);
         sz = to_sockaddr(buff, sz);

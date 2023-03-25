@@ -1,4 +1,6 @@
 #include <coroserver/peername.h>
+#include <coroserver/stream.h>
+
 
 #include <iostream>
 #include <cstdlib>
