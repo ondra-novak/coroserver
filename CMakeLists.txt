@@ -22,5 +22,7 @@ endif()
 include_directories(BEFORE ${CMAKE_BINARY_DIR}/src)
 include(library.cmake)
 enable_testing()
+include(src/cocls/library.cmake)
 add_subdirectory("src/tests")
 add_subdirectory("version")
+

@@ -1,2 +1,5 @@
 /build
 /.current_profile.mk
+/.cproject
+/.project
+/.settings

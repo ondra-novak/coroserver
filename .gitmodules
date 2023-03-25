@@ -1,0 +1,3 @@
+[submodule "src/cocls"]
+	path = src/cocls
+	url = https://github.com/ondra-novak/cocls.git
