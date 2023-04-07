@@ -49,9 +49,34 @@ void ContextIOImpl::close(SocketHandle h) {
     ::close(h);
 }
 
-ListeningSocketHandle ContextIOImpl::listen(const PeerName &addr) {
+SocketHandle ContextIO::create_connected_socket(const PeerName &addr) {
     return addr.use_sockaddr([&](const sockaddr *saddr, socklen_t slen) {
-        int sock = ::socket(saddr->sa_family, SOCK_STREAM, saddr->sa_family == AF_UNIX?0:IPPROTO_TCP);
+        int sock = ::socket(saddr->sa_family, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, saddr->sa_family == AF_UNIX?0:IPPROTO_TCP);
+        if (sock < 0) throw std::system_error(errno, std::system_category(), "::listen - create_socket");
+        try {
+            int flag = 1;
+            if (saddr->sa_family == AF_INET || saddr->sa_family == AF_INET6) {
+                if (::setsockopt(sock,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<char *>(&flag),sizeof(int)))
+                    throw std::system_error(errno, std::system_category(), "setsockopt(TCP_NODELAY)");
+            }
+            if (::connect(sock,saddr, slen)) {
+                int err = errno;
+                if (err != EWOULDBLOCK &&  err != EINPROGRESS && err != EAGAIN) {
+                    throw std::system_error(errno, std::system_category(), "connect");
+                }
+            }
+            return sock;
+        } catch (...) {
+            ::close(sock);
+            throw;
+        }
+    });
+
+}
+
+ListeningSocketHandle ContextIO::listen_socket(const PeerName &addr) {
+    return addr.use_sockaddr([&](const sockaddr *saddr, socklen_t slen) {
+        int sock = ::socket(saddr->sa_family, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, saddr->sa_family == AF_UNIX?0:IPPROTO_TCP);
         if (sock < 0) throw std::system_error(errno, std::system_category(), "::listen - create_socket");
         try {
             int flag = 1;
@@ -125,30 +150,32 @@ void ContextIO::ConnectCtx::resume() noexcept {
 
 #endif
 
-void ContextIOImpl::mark_closing(SocketHandle s) {
-    _disp->mark_closing(s);
+cocls::suspend_point<void> ContextIOImpl::mark_closing(SocketHandle s) {
+    return _disp->mark_closing(s);
 }
 
 
-void ContextIOImpl::stop() {
+cocls::suspend_point<void> ContextIOImpl::stop() {
     if (_disp) {
-        _disp->mark_closing_all();
+        return _disp->mark_closing_all();
+    } else {
+        return {};
     }
 }
 
 
-static cocls::generator<Stream> listen_generator(ContextIO ctx,
+static cocls::generator<Stream> listen_generator(SocketSupport ctx,
         TimeoutSettings tmcfg,
         std::stop_token stoken,
         ListeningSocketHandle h) {
 
     std::stop_callback stopcb(stoken, [&]{
-        ctx->mark_closing(h);
+        ctx.mark_closing(h);
     });
 
     bool run = true;
     while (run) {
-        WaitResult res = co_await ctx->io_wait(h,AsyncOperation::accept,std::chrono::system_clock::time_point::max());
+        WaitResult res = co_await ctx.io_wait(h,AsyncOperation::accept,std::chrono::system_clock::time_point::max());
         switch (res) {
             case WaitResult::timeout:
             case WaitResult::closed: run = false; break;
@@ -173,23 +200,25 @@ static cocls::generator<Stream> listen_generator(ContextIO ctx,
             };break;
         }
     }
-    ctx->close(h);
+    ctx.close(h);
 }
 
 
-#if 0
 
-cocls::generator<Stream> ContextIO::accept(NetAddrList list, std::stop_token token, TimeoutSettings tms) {
+cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> list,
+                                std::stop_token token, TimeoutSettings tms) {
+
     std::vector<cocls::generator<Stream> > gens;
     std::vector<SocketHandle> handles;
+    SocketSupport sup = *this;
     for (const PeerName &x: list) {
         try {
-            SocketHandle h = x.listen();
-            gens.push_back(listen_generator(*this, tms, token, h));
+            SocketHandle h = ContextIO::listen_socket(x);
+            gens.push_back(listen_generator(sup, tms, token, h));
             handles.push_back(h);
         } catch (...) {
             for (SocketHandle x: handles) {
-                (*this)->close(x);
+                sup.close(x);
             }
             throw;
         }
@@ -198,7 +227,116 @@ cocls::generator<Stream> ContextIO::accept(NetAddrList list, std::stop_token tok
     return cocls::generator_aggregator(std::move(gens));
 }
 
-#endif
+
+struct ConnectInfo {
+    const PeerName &peer;
+    std::optional<SocketHandle> socket;
+};
+
+//coroutine which waits f
+static cocls::async<void> wait_connect(ContextIO ctx,
+            const PeerName &peer,
+            int delay_sec,
+            int timeout,
+            std::stop_token stop,
+            cocls::queue<ConnectInfo> &result) {
+
+    SocketSupport supp = ctx;
+    SocketHandle socket = -1;
+
+    WaitResult res;
+    //if delay_sec is nonzero - add some delay
+    if (delay_sec) {
+        //wait for delay - store future - to solve race condition
+        auto dl = supp.wait_for(std::chrono::seconds(delay_sec), &socket);
+        //register stop callback, which will cancel our delay
+        std::stop_callback stpcb(stop, [&]{supp.cancel_wait(&socket);});
+        //check stop requested finally, before wait, it would appear before registration
+        if (stop.stop_requested()) {
+            //if requested, cancel our wait
+            supp.cancel_wait(&socket);
+        }
+        //in all case, wait for delay, retrieve result
+        res = co_await dl;
+        //if cancel is complete, report failure
+        if (res == WaitResult::complete) {
+            co_await result.push(ConnectInfo{peer, {}});
+            //and exit
+            co_return;
+        }
+    }
+    try {
+        //create socket
+        socket = ctx.create_connected_socket(peer);
+    } catch (...) {
+        //failed to create socket - report failure
+        result.push(ConnectInfo{peer, {}});
+        //exit
+        co_return;
+    }
+    //section where we can work with socket
+    {
+        //in this state, we can use socket handle to mark it closing when stop is requested
+        std::stop_callback stpcb(stop, [&]{supp.mark_closing(socket);});
+        //check stop request now, we can continue, if there is no stop request
+        if (!stop.stop_requested()) {
+            //wait for connect
+            res = co_await supp.io_wait(socket,AsyncOperation::connect, TimeoutSettings::from_duration(timeout));
+            //if connection is complete,
+            if (res == WaitResult::complete) {
+                //signal success
+                co_await result.push(ConnectInfo{peer, socket});
+                //and exit
+                co_return;
+            }
+        }
+    }
+    //in all failures
+    //close socket
+    supp.close(socket);
+    //report faulure
+    co_await result.push(ConnectInfo{peer, {}});
+}
+
+cocls::future<Stream> ContextIO::connect(std::vector<PeerName> list, int timeout_ms, TimeoutSettings tms) {
+    //queue collects results for multiple sockets
+    cocls::queue<ConnectInfo> results;
+    //stop source to stop futher waiting
+    std::stop_source stop;
+    std::size_t i;
+    std::size_t cnt = list.size();
+    //start coroutines, each for one peer
+    for (i = 0; i < cnt; i++) {
+        //coroutine is detached, because each put result to queue
+        wait_connect(*this, list[i], i, timeout_ms, stop.get_token(), results).detach();
+    }
+    //contains connected stream
+    std::optional<Stream> connected;
+    //even if we wait for first incomming connection, we must wait for all coroutines
+    for (i = 0; i < cnt; i++) {
+        //retrieve result from queue
+        ConnectInfo nfo = co_await results.pop();
+        //if socket is set, then connection was successful
+        if (nfo.socket.has_value()) {
+            //but if we don't have stream
+            if (!connected.has_value()) {
+                //create it now
+                connected = Stream(std::make_shared<SocketStream>(*this, *nfo.socket, nfo.peer, tms));
+                //and stop other attempts
+                stop.request_stop();
+            } else {
+                //this can happen as race condition when two connections are ready at the same time
+                //so close any other connection
+                _ptr->close(*nfo.socket);
+            }
+        }
+    }
+    //finally if we retrieved no connection, report exception
+    if (!connected.has_value()) throw ConnectFailedException();
+    //otherwise, return stream
+    co_return std::move(*connected);
+}
+
 
 ContextIO ContextIO::create(std::shared_ptr<cocls::thread_pool> pool) {
     return ContextIO(std::make_shared<ContextIOImpl>(pool));
@@ -209,7 +347,10 @@ ContextIO ContextIO::create(std::size_t iothreads){
 }
 
 void ContextIO::stop() {
-   if (*this) (*this)->stop();
+   if (_ptr) {
+       _ptr->stop();
+       _ptr.reset();
+   }
 }
 
 #if 0
@@ -246,11 +387,6 @@ future<Stream> ContextIO::connect(NetAddrList list, unsigned int connect_timeout
     else throw ConnectFailedException();
 }
 
-future<WaitResult> ContextIOImpl::io_wait(SocketHandle handle,
-        AsyncOperation op, std::chrono::system_clock::time_point timeout) {
-
-    return [&](auto p){_disp->async_wait(op, handle, std::move(p), timeout);};
-}
 
 DatagramExchange ContextIO::create_datagram_exchange(PeerName addr, TimeoutSettings tms) {
     SocketHandle h = addr.bind_udp();
@@ -264,9 +400,6 @@ future<WaitResult> ContextIOImpl::wait_until(
     };
 }
 
-bool ContextIOImpl::cancel_wait(const void *ident) {
-    return _disp->cancel_schedule(ident);
-}
 
 DatagramRouter ContextIO::create_datagram_router(PeerName bind_addr,
                                     bool dedup_messages, TimeoutSettings tms) {
@@ -376,6 +509,23 @@ Stream ContextIO::connect_udp(PeerName remote_addr, bool dedup_messages,
 }
 
 #endif
+
+cocls::future<WaitResult> ContextIOImpl::io_wait(SocketHandle handle,
+        AsyncOperation op, std::chrono::system_clock::time_point timeout) {
+
+    return [&](auto p){_disp->async_wait(op, handle, std::move(p), timeout);};
+}
+
+cocls::future<WaitResult> ContextIOImpl::wait_until(
+        std::chrono::system_clock::time_point tp, const void *ident) {
+    return [&](auto promise) {
+        _disp->schedule(ident, std::move(promise), tp);
+    };
+}
+
+bool ContextIOImpl::cancel_wait(const void *ident) {
+    return _disp->cancel_schedule(ident);
+}
 
 }
 

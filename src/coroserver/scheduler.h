@@ -8,22 +8,25 @@
 #ifndef SRC_USERVER_SCHEDULER_H_
 #define SRC_USERVER_SCHEDULER_H_
 
-namespace coroserver {
-
 #include "ipoller.h"
 
+#include <optional>
+#include <variant>
+
+namespace coroserver {
+
+
+template<typename Promise>
 class Scheduler {
 public:
-
-    using Promise = cocls::promise_with_default_v<WaitResult, WaitResult::closed>;
 
     ///timeout wait, use poller as scheduler
     void schedule(const void *ident, Promise p, std::chrono::system_clock::time_point timeout);
 
     ///cancels specified timer
-    bool cancel_schedule(const void *ident);
+    std::optional<Promise> cancel_schedule(const void *ident);
 
-    std::chrono::system_clock::time_point check_expired(std::chrono::system_clock::time_point now);
+    std::variant<Promise, std::chrono::system_clock::time_point> check_expired(std::chrono::system_clock::time_point now);
 
 protected:
 
@@ -44,39 +47,41 @@ protected:
 
 };
 
-inline void Scheduler::schedule(const void *ident, Promise p,
+template<typename Promise>
+inline void Scheduler<Promise>::schedule(const void *ident, Promise p,
         std::chrono::system_clock::time_point timeout) {
     _scheduled.push_back({timeout, std::move(p), ident});
     std::push_heap(_scheduled.begin(), _scheduled.end(), compare_item);
-
 }
 
-inline bool Scheduler::cancel_schedule(const void *ident) {
-    bool r = false;
+template<typename Promise>
+inline std::optional<Promise> Scheduler<Promise>::cancel_schedule(const void *ident) {
     while (_scheduled.empty() && _scheduled[0]._ident == ident) {
+        auto p = std::move(_scheduled[0]._p);
         pop_item();
-        r = true;
+        if (p) return p;
     }
     for (SchItem &item: _scheduled) {
         if (item._ident == ident) {
             auto p = std::move(item._p);
-            p(WaitResult::complete);
-
+            if (p) return p;
         }
     }
-    return r;
+    return {};
 }
 
-inline void Scheduler::pop_item() {
+template<typename Promise>
+inline void Scheduler<Promise>::pop_item() {
     std::pop_heap(_scheduled.begin(), _scheduled.end(), compare_item);
     _scheduled.pop_back();
 }
 
-inline std::chrono::system_clock::time_point Scheduler::check_expired(std::chrono::system_clock::time_point now) {
+template<typename Promise>
+inline std::variant<Promise, std::chrono::system_clock::time_point> Scheduler<Promise>::check_expired(std::chrono::system_clock::time_point now) {
     while (!_scheduled.empty() && (_scheduled[0]._tp <= now || !_scheduled[0]._p)) {
         auto p = std::move(_scheduled[0]._p);
         pop_item();
-        p(WaitResult::timeout);
+        if (p) return p;
     }
     if (_scheduled.empty()) return std::chrono::system_clock::time_point::max();
     else return _scheduled[0]._tp;

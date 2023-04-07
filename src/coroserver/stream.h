@@ -30,14 +30,14 @@ class IStream {
 public:
 
 
-    virtual ~IStream() = 0;
+    virtual ~IStream() = default;
     virtual cocls::future<std::string_view> read() = 0;
     virtual std::string_view read_nb() = 0;
     virtual void put_back(std::string_view buff) = 0;
     virtual bool is_read_timeout() const = 0;
 
     virtual cocls::future<bool> write(std::string_view buffer) = 0;
-    virtual cocls::future<bool> write_eof();
+    virtual cocls::future<bool> write_eof() = 0;
 
     virtual void set_timeouts(const TimeoutSettings &tm) = 0;
     virtual TimeoutSettings get_timeouts() = 0;
@@ -87,14 +87,20 @@ protected:
 class AbstractProxyStream: public AbstractStream {
 public:
     AbstractProxyStream(std::shared_ptr<IStream> proxied):_proxied(std::move(proxied)) {}
-    virtual void set_timeouts(const TimeoutSettings &tm) {
+    virtual void set_timeouts(const TimeoutSettings &tm) override {
         _proxied->set_timeouts(tm);
     }
-    virtual TimeoutSettings get_timeouts() {
+    virtual TimeoutSettings get_timeouts() override {
         return _proxied->get_timeouts();
     }
-    virtual PeerName get_source() const {
+    virtual PeerName get_source() const override {
         return _proxied->get_source();
+    }
+    virtual bool is_read_timeout() const override {
+        return _proxied->is_read_timeout();
+    }
+    virtual void shutdown() override {
+        _proxied->shutdown();
     }
 
 protected:

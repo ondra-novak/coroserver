@@ -6,6 +6,8 @@ add_library(coroserver
 	socket_stream.cpp
 	io_context.cpp
 	poller_epoll.cpp
+	memstream.cpp
+	broadcaster.cpp
 )
 add_dependencies(coroserver coroserver_version)
 

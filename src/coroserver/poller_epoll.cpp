@@ -99,19 +99,23 @@ void Poller_epoll::async_wait(AsyncOperation op, SocketHandle s, Promise p, std:
     rearm_fd(first, iter);
 }
 
-void Poller_epoll::mark_closing(SocketHandle s) {
-    RegList tmp;
-     epoll_event ev ={};
-    {
-        std::lock_guard _(_mx);
-        auto iter = fd_map.find(s);
-        if (iter != fd_map.end()) {
-            std::swap(tmp,iter->second);
-            fd_map.erase(iter);
-            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, s, &ev);
+cocls::suspend_point<void> Poller_epoll::mark_closing(SocketHandle s) {
+    return cocls::coro_queue::create_suspend_point([&]{
+        RegList tmp;
+         epoll_event ev ={};
+        {
+            std::lock_guard _(_mx);
+            auto iter = fd_map.find(s);
+            if (iter != fd_map.end()) {
+                std::swap(tmp,iter->second);
+                fd_map.erase(iter);
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, s, &ev);
+            }
+            mclosing_map.emplace(s);
         }
-        mclosing_map.emplace(s);
-    }
+    });
+
+
 }
 
 
@@ -170,24 +174,27 @@ void Poller_epoll::rearm_fd(bool first_call, FDMap::iterator iter) {
 }
 
 
-void Poller_epoll::mark_closing_all() {
-    FDMap tmp;
-    Scheduler sch_tmp;
-    epoll_event ev ={};
-    {
-        std::lock_guard _(_mx);
-        for (auto &x: fd_map) {
-            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, x.first, &ev);
+cocls::suspend_point<void> Poller_epoll::mark_closing_all() {
+    //enter to coro-mode - flush all corouties before exit
+    return cocls::coro_queue::create_suspend_point([&]{
+        FDMap tmp;
+        Scheduler<Promise> sch_tmp;
+        epoll_event ev ={};
+        {
+            std::lock_guard _(_mx);
+            for (auto &x: fd_map) {
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, x.first, &ev);
+            }
+            std::swap(tmp ,fd_map);
+            std::swap(sch_tmp, _sch);
+            _stopped = true;
+            notify();
         }
-        std::swap(tmp ,fd_map);
-        std::swap(sch_tmp, _sch);
-        _stopped = true;
-        notify();
-    }
+    });
 
 }
 
-std::chrono::system_clock::time_point Poller_epoll::clear_timeouts(cocls::thread_pool &pool, std::chrono::system_clock::time_point now) {
+std::chrono::system_clock::time_point Poller_epoll::clear_timeouts(cocls::suspend_point<void> &spt, std::chrono::system_clock::time_point now) {
     //performing full row scan to search timeouted descriptor
     FDMap::iterator iter = fd_map.begin();
     //longest timeout is max
@@ -201,7 +208,7 @@ std::chrono::system_clock::time_point Poller_epoll::clear_timeouts(cocls::thread
             for (auto &x: iter->second) if (x.cb) {
                 //any timeout event is resolved
                 if (x.timeout < now) {
-                    pool.resolve(x.cb,WaitResult::timeout);
+                    spt.push_back(x.cb(WaitResult::timeout));
                 }
             }
             //rearm the descriptor according new state
@@ -221,22 +228,30 @@ std::chrono::system_clock::time_point Poller_epoll::clear_timeouts(cocls::thread
 
 cocls::async<void> Poller_epoll::worker(cocls::thread_pool &pool) {
     try {
-        //move coroutine to pool
-        co_await pool;
 
         std::unique_lock lock(_mx);
         auto now = std::chrono::system_clock::now();
+        bool any_queued = true;
         while (!_exit) {
-            lock.unlock();
-            co_await pool;
-            lock.lock();
+            //release current thread, if there is any queued coroutines
+            if (any_queued) {
+                lock.unlock();
+                co_await pool;
+                lock.lock();
+            }
             epoll_event events[16];
             int r;
 
             do {
                 int timeout = -1;
+                any_queued = pool.any_enqueued();
                 //ask the pool, if there is a task in queue
-                if (!cocls::thread_pool::current::any_enqueued()) {
+                if (any_queued) {
+                    //this prevents deadlock when threads are exhausted. So do not
+                    //perform blocking operation
+                    //so just check epoll without timeout
+                    timeout = 0;
+                } else {
                     //if not, we can continue in blocking operation
                     if (first_timeout == std::chrono::system_clock::time_point::max()) {
                         timeout = -1;
@@ -245,11 +260,6 @@ cocls::async<void> Poller_epoll::worker(cocls::thread_pool &pool) {
                     } else {
                         timeout = std::chrono::duration_cast<std::chrono::milliseconds>(first_timeout - now).count();
                     }
-                } else {
-                    //this prevents deadlock when threads are exhausted. So do not
-                    //perform blocking operation
-                    //so just check epoll without timeout
-                    timeout = 0;
                 }
                 lock.unlock();
                 r = epoll_wait(epoll_fd, events, 16, timeout);
@@ -263,11 +273,20 @@ cocls::async<void> Poller_epoll::worker(cocls::thread_pool &pool) {
             } while (r < 0);
             now = std::chrono::system_clock::now();
 
+            cocls::suspend_point<void> spt;
+
             if (r == 0) {
                 //clean any timeout in descriptor map
-                auto tm1 = clear_timeouts(pool, now);
+                auto tm1 = clear_timeouts(spt, now);
                 //clean any timeout in scheduler map
-                auto tm2 = _sch.check_expired(now);
+                auto expr = _sch.check_expired(now);
+
+                while (std::holds_alternative<Promise>(expr)) {
+                    spt.push_back(std::get<Promise>(expr)(WaitResult::timeout));
+                    expr = _sch.check_expired(now);
+                }
+
+                auto tm2 = std::get<std::chrono::system_clock::time_point>(expr);
                 //calculate nearest timeout point
                 first_timeout = std::min(tm1, tm2);
             } else {
@@ -280,20 +299,20 @@ cocls::async<void> Poller_epoll::worker(cocls::thread_pool &pool) {
                             RegList &regs = fd_map[fd];
                             if (e.events & EPOLLERR) {
                                 for (auto &x: regs) {
-                                    pool.resolve(x.cb, WaitResult::error);
+                                    spt.push_back(x.cb(WaitResult::error));
                                 }
                             }
                             if (e.events & EPOLLIN) {
                                 auto &xa = regs[static_cast<int>(Op::accept)];
                                 auto &xr = regs[static_cast<int>(Op::read)];
-                                pool.resolve(xa.cb, WaitResult::complete);
-                                pool.resolve(xr.cb, WaitResult::complete);
+                                spt.push_back(xa.cb(WaitResult::complete));
+                                spt.push_back(xr.cb(WaitResult::complete));
                             }
                             if (e.events & EPOLLOUT) {
                                 auto &xc = regs[static_cast<int>(Op::connect)];
                                 auto &xw = regs[static_cast<int>(Op::write)];
-                                pool.resolve(xc.cb, WaitResult::complete);
-                                pool.resolve(xw.cb, WaitResult::complete);
+                                spt.push_back(xc.cb(WaitResult::complete));
+                                spt.push_back(xw.cb(WaitResult::complete));
                             }
                             rearm_fd(false, iter);
                         }
@@ -301,6 +320,8 @@ cocls::async<void> Poller_epoll::worker(cocls::thread_pool &pool) {
                     }
                 }
             }
+            pool.resume(spt);
+            any_queued = pool.any_enqueued();
         }
         lock.unlock();
     } catch (const cocls::await_canceled_exception &) {
@@ -326,9 +347,14 @@ void Poller_epoll::schedule(const void *ident, Promise p, std::chrono::system_cl
     }
 }
 
-bool Poller_epoll::cancel_schedule(const void *ident) {
+cocls::suspend_point<bool> Poller_epoll::cancel_schedule(const void *ident) {
     std::lock_guard _(_mx);
-    return _sch.cancel_schedule(ident);
+    auto p =_sch.cancel_schedule(ident);
+    if (p.has_value()) {
+        return (*p)(WaitResult::complete);
+    } else {
+        return false;
+    }
 }
 
 }

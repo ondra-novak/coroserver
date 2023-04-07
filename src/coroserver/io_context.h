@@ -10,6 +10,7 @@
 #include "defs.h"
 #include "ipoller.h"
 #include "stream.h"
+#include "socket_support.h"
 #include "peername.h"
 
 #include <cocls/thread_pool.h>
@@ -19,11 +20,16 @@
 
 using coroserver::PeerName;
 
+#ifndef COROSERVER_DEFAULT_TIMEOUT
+#define COROSERVER_DEFAULT_TIMEOUT 60000
+#endif
+
 namespace coroserver {
 
 
-class ContextIOImpl {
+class ContextIOImpl: public ISocketSupport {
 public:
+
 
 
     using Promise = IPoller<SocketHandle>::Promise;
@@ -34,14 +40,16 @@ public:
     ContextIOImpl(std::size_t iothreads = 0);
     ~ContextIOImpl();
 
-    void close(SocketHandle h);
+    virtual void close(SocketHandle h) override;
+    virtual cocls::suspend_point<void> mark_closing(SocketHandle s) override;
+    virtual cocls::future<WaitResult> io_wait(SocketHandle handle,
+                                    AsyncOperation op,
+                                    std::chrono::system_clock::time_point timeout) override;
 
-    ListeningSocketHandle listen(const PeerName &addr);
 
-    void mark_closing(SocketHandle s);
 
     ///stop the context, cancel all waitings, all opened streams are marked as closed
-    void stop();
+    cocls::suspend_point<void> stop();
 
     ///Wait for io operation
     /**
@@ -52,49 +60,14 @@ public:
      * @param timeout wait timeout
      * @return awaitable object, which returns WaitResult
      */
-    cocls::future<WaitResult> io_wait(SocketHandle handle,
-                                    AsyncOperation op,
-                                    std::chrono::system_clock::time_point timeout);
 
 
-    ///Wait until specified timepoint is reached
-    /**
-     * This is just generic "sleep" helps to implement user level timeouts. The promise
-     * becomes resolved once the timepoint is reached. The waiting can be also canceled
-     * @param tp timepoint to reach
-     * @param ident identifier, to ability to cancel such wait. Can be any arbitrary
-     * value serves as identifier. It is presented as pointer as it is expected, that
-     * pointer to owner will be used as identifier (this)
-     * @return future which resolves one of following values
-     * @retval WaitResult::timeout operation reached specified timeout
-     * @retval WaitResult::complete operation has been canceled (cancel request is complete)
-     * @retval WaitResult::closed operation has been canceled because context has been stopped
-     */
-    cocls::future<WaitResult> wait_until(std::chrono::system_clock::time_point tp, const void *ident);
-    ///Wait for specified duration
-    /**
-     * This is just generic "sleep" helps to implement user level timeouts. The promise
-     * becomes resolved once the timepoint is reached. The waiting can be also canceled
-     * @param duration duration. The final timeout is calculated as now()+duration
-     * @param ident identifier, to ability to cancel such wait. Can be any arbitrary
-     * value serves as identifier. It is presented as pointer as it is expected, that
-     * pointer to owner will be used as identifier (this)
-     * @return future which resolves one of following values
-     * @retval WaitResult::timeout operation reached specified timeout
-     * @retval WaitResult::complete operation has been canceled (cancel request is complete)
-     * @retval WaitResult::closed operation has been canceled because context has been stopped
-     */
+    virtual cocls::future<WaitResult> wait_until(std::chrono::system_clock::time_point tp, const void *ident) override;
     template<typename Dur>
     cocls::future<WaitResult> wait_for(Dur duration, const void *ident) {
         return wait_until(std::chrono::system_clock::now()+duration, ident);
     }
 
-    ///Cancels specified waiting
-    /**
-     * @param ident identifier of operation. The canceled waiting is resolved as WaitResult::closed
-     * @retval true found and canceled
-     * @retval false not found, probably complete already
-     */
     bool cancel_wait(const void *ident);
 
 
@@ -121,9 +94,12 @@ protected:
  * operations are canceled
  *
  */
-class ContextIO :public  std::shared_ptr<ContextIOImpl> {
+class ContextIO {
 public:
 
+    static constexpr int defaultTimeout = COROSERVER_DEFAULT_TIMEOUT;
+
+    ContextIO(std::shared_ptr<ContextIOImpl> ptr):_ptr(std::move(ptr)) {}
 
     ///create socket context
     /**
@@ -140,6 +116,43 @@ public:
      */
     static ContextIO create(std::shared_ptr<cocls::thread_pool> pool);
     static ContextIO create(std::size_t iothreads = 0);
+
+    ///Create listening socket at given peer
+    ListeningSocketHandle listen_socket(const PeerName &addr);
+    ///Create connected socket. Connection is asynchronous, you need to check status of socket
+    SocketHandle create_connected_socket(const PeerName &addr);
+
+    operator SocketSupport() const {
+        return SocketSupport(_ptr);
+    }
+
+    ///Create accept generator
+    /**
+     * Accept generator opens one or more ports at given addresses,
+     * and starts listening on it. Each generator call returns cocls::future which
+     * is resolved by connected stream.
+     *
+     * The listening can be stopped by one of following ways. You can use
+     * supplied stop token, or you can stop whole context, which also stops the generator
+     *
+     * @param list list of addresses
+     * @param token stop token to stop generator. Stop can be requested anytime, regadless on
+     * which state is the generator
+     *
+     * @param tms timeouts sets on resulting stream
+     *
+     * @return generator
+     */
+    cocls::generator<Stream> accept(
+            std::vector<PeerName> list,
+            std::stop_token token = {},
+            TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+
+
+    ///Connect stream to one of given addressed
+
+    cocls::future<Stream> connect(std::vector<PeerName> list, int timeout_ms = defaultTimeout, TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+
 
 
 
@@ -165,10 +178,13 @@ public:
     auto stop_fn() {
         return [ctx = *this]() mutable {
             ctx.stop();
-            ctx = ContextIO();
+            ctx._ptr.reset();
         };
     }
 
+
+    protected:
+      std::shared_ptr<ContextIOImpl> _ptr;
 
 
     ///Create accept generator
@@ -182,7 +198,6 @@ public:
      * @param tms timeouts for newly created streams
      * @return generator
      */
-//    cocls::generator<Stream> accept( list, std::stop_token token = {}, TimeoutSettings tms = {60000,60000});
 
 
 

@@ -11,6 +11,7 @@
 #include "defs.h"
 #include "stream.h"
 #include <cocls/generator.h>
+#include "socket_support.h"
 
 namespace coroserver {
 
@@ -20,7 +21,7 @@ class ContextIOImpl;
 
 class SocketStream: public AbstractStreamWithMetadata {
 public:
-    SocketStream(std::shared_ptr<ContextIOImpl> context, SocketHandle h,
+    SocketStream(SocketSupport context, SocketHandle h,
                             PeerName source, TimeoutSettings tms);
     ~SocketStream();
     virtual cocls::future<std::string_view> read() override;
@@ -31,7 +32,7 @@ public:
     virtual void shutdown() override;
 
 protected:
-    std::shared_ptr<ContextIOImpl> _ctx;
+    SocketSupport _ctx;
     SocketHandle _h;
     cocls::generator<std::string_view> _reader;
     cocls::generator<bool, std::string_view> _writer; //writer

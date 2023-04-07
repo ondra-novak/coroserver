@@ -5,7 +5,7 @@
 namespace coroserver {
 
 
-SocketStream::SocketStream(std::shared_ptr<ContextIOImpl> context, SocketHandle h,
+SocketStream::SocketStream(SocketSupport context, SocketHandle h,
         PeerName source, TimeoutSettings tms)
 :AbstractStreamWithMetadata(std::move(source), std::move(tms))
 ,_ctx(std::move(context))
@@ -17,7 +17,7 @@ SocketStream::SocketStream(std::shared_ptr<ContextIOImpl> context, SocketHandle 
 }
 
 SocketStream::~SocketStream() {
-    //default
+    _ctx.close(_h);
 }
 cocls::generator<std::string_view> SocketStream::start_read() {
     while (true) {
@@ -40,7 +40,7 @@ cocls::generator<std::string_view> SocketStream::start_read() {
                 int err = errno;
                 if (err == EWOULDBLOCK || err == EAGAIN) {
                     _last_read_full = 0;
-                    WaitResult w = co_await _ctx->io_wait(_h,AsyncOperation::read,
+                    WaitResult w = co_await _ctx.io_wait(_h,AsyncOperation::read,
                             _tms.from_duration(_tms.read_timeout_ms));
                     switch (w) {
                         case WaitResult::closed:
@@ -106,7 +106,7 @@ void SocketStream::shutdown() {
     _is_closed = true;
     _is_eof = true;
     _is_timeout = false;
-    _ctx->mark_closing(_h);
+    _ctx.mark_closing(_h);
 }
 
 cocls::generator<bool, std::string_view> SocketStream::start_write() {
@@ -120,7 +120,7 @@ cocls::generator<bool, std::string_view> SocketStream::start_write() {
             } else {
                 int err = errno;
                 if (err == EWOULDBLOCK || err == EAGAIN) {
-                    WaitResult w = co_await _ctx->io_wait(_h, AsyncOperation::write,
+                    WaitResult w = co_await _ctx.io_wait(_h, AsyncOperation::write,
                             _tms.from_duration(_tms.write_timeout_ms));
                     switch(w) {
                         case WaitResult::timeout:

@@ -9,35 +9,11 @@
 #define SRC_USERVER_IPOLLER_H_
 
 #include <cocls/future.h>
+#include "socket_support.h"
 
 
 namespace coroserver {
 
-
-enum class WaitResult {
-    ///wait operation complete
-    complete = 0,
-    ///wait unsuccessful, timeout elapsed
-    timeout,
-    ///socket as been marked as closing
-    closed,
-    ///an error detected during processing
-    error,
-
-_count};    //contains count of states
-
-
-enum class AsyncOperation {
-    ///reading from stream
-    read = 0,
-    ///writing to stream
-    write,
-    ///accept new connection
-    accept,
-    ///connect to a server
-    connect,
-
-_count};  //contains count of states
 
 
 
@@ -84,23 +60,29 @@ public:
     ///cancels specified timer
     /**
      * @param ident identifier of the timer
+     * @return suspend point
      * @retval true canceled
      * @retval false not found
+     *
      */
-    virtual bool cancel_schedule(const void *ident) = 0;
+    virtual cocls::suspend_point<bool> cancel_schedule(const void *ident) = 0;
 
     ///cancels any async IO operation, marks handle closing, but doesn't close it
     /**
      * @param s handle to mark close
+     * @return suspend point contains all pending coroutines. You need to co_await
+     * the suspend point or discard it to finalize coroutines
      */
 
-    virtual void mark_closing(SocketHandle s) = 0;
+    virtual cocls::suspend_point<void> mark_closing(SocketHandle s) = 0;
 
     ///cancels all async IO operations, marks all handles as closing
     /**
      * @note it also cancels all timeouts
+     * @return suspend point contains all pending coroutines. You need to co_await
+     * the suspend point or discard it to finalize coroutines
      */
-    virtual void mark_closing_all() = 0;
+    virtual cocls::suspend_point<void> mark_closing_all() = 0;
 
     ///notifies that handle has been closed
     /**

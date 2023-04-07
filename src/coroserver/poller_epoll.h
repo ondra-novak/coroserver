@@ -41,10 +41,10 @@ public:
     virtual void async_wait(AsyncOperation op, SocketHandle s, Promise p, std::chrono::system_clock::time_point timeout = std::chrono::system_clock::time_point::max()) override;
 
     ///cancel read, and all further reads, socket is marked as closed
-    virtual void mark_closing(SocketHandle s) override;
+    virtual cocls::suspend_point<void> mark_closing(SocketHandle s) override;
 
     ///cancel all io operations - all sockets are marked as closed
-    virtual void mark_closing_all() override;
+    virtual cocls::suspend_point<void> mark_closing_all() override;
 
     ///a handle has been closed
     virtual void handle_closed(SocketHandle s) override;
@@ -53,7 +53,7 @@ public:
     virtual void schedule(const void *ident, Promise p, std::chrono::system_clock::time_point timeout) override;
 
     ///cancels specified timer
-    virtual bool cancel_schedule(const void *ident) override;
+    virtual cocls::suspend_point<bool> cancel_schedule(const void *ident) override;
 
 
 protected:
@@ -94,10 +94,10 @@ protected:
 	void notify();
 	void rearm_fd(bool first_call, FDMap::iterator iter);
 
-	std::chrono::system_clock::time_point clear_timeouts(cocls::thread_pool &pool, std::chrono::system_clock::time_point now);
+	std::chrono::system_clock::time_point clear_timeouts(cocls::suspend_point<void> &spt, std::chrono::system_clock::time_point now);
 
 
-	Scheduler _sch;
+	Scheduler<Promise> _sch;
 
 
 
