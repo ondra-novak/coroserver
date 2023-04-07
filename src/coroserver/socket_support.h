@@ -47,7 +47,7 @@ public:
     virtual cocls::suspend_point<void> mark_closing(SocketHandle handle) = 0;
     virtual void close(SocketHandle handle) = 0;
     virtual cocls::future<WaitResult> wait_until(std::chrono::system_clock::time_point tp, const void *ident) = 0;
-    virtual bool cancel_wait(const void *ident) = 0;
+    virtual cocls::suspend_point<bool> cancel_wait(const void *ident) = 0;
 };
 
 /// Suppport context for sockets. (minimal interface)
@@ -145,7 +145,7 @@ public:
      * @retval true found and canceled
      * @retval false not found, probably complete already
      */
-    bool cancel_wait(const void *ident) {
+    cocls::suspend_point<bool> cancel_wait(const void *ident) {
         return _ptr->cancel_wait(ident);
     }
 

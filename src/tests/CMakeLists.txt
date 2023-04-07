@@ -6,6 +6,7 @@ set(testFiles
 	compile_test.cpp
 	peername.cpp
 	server_and_connect.cpp
+	kmp.cpp
 )
 
 link_libraries(

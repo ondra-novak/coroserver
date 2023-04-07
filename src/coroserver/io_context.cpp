@@ -523,7 +523,7 @@ cocls::future<WaitResult> ContextIOImpl::wait_until(
     };
 }
 
-bool ContextIOImpl::cancel_wait(const void *ident) {
+cocls::suspend_point<bool> ContextIOImpl::cancel_wait(const void *ident) {
     return _disp->cancel_schedule(ident);
 }
 

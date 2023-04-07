@@ -9,6 +9,7 @@
 #define SRC_COROSERVER_STREAM_H_
 
 #include "peername.h"
+#include "substring.h"
 
 #include <cocls/future.h>
 #include <cocls/with_allocator.h>
@@ -220,6 +221,7 @@ public:
      */
     template<typename Alloc, typename Container>
     cocls::future<bool> read_until(Alloc &a, Container &container, std::string_view sep, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        container.clear();
         return read_until_coro(a, *_stream,container, sep, limit);
     }
 
@@ -238,91 +240,53 @@ public:
      */
     template<typename Container>
     cocls::future<bool> read_until(Container &container, std::string_view sep, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        container.clear();
         cocls::default_storage stor;
         return read_until_coro(stor, *_stream,container, sep, limit);
     }
 
 
+protected:
+
     template<typename Alloc, typename Container>
     static cocls::with_allocator<Alloc, cocls::async<bool> > read_until_coro(Alloc &, IStream &stream, Container &container, std::string_view sep, std::size_t limit) {
-        //clear the container
-        container.clear();
-        //read anything from the stream
+        //remember container size - this allows to implement "append" version of this function
+        auto csz = container.size();
+        //use Knuth-Pratt-Morris search algorithm. Install the object for it
+        SubstringSearch<char> srch(sep);
+        //read first fragment
         std::string_view buff = co_await stream.read();
-        //if empty, report unsuccess
+        //if the fragment is empty, return failure (eof or timeout)
         if (buff.empty()) co_return false;
-        //find separator
-        std::size_t pos = buff.find(sep);
-        //if separator found
-        if (pos != buff.npos) {
-            //copy content before separator to the container
-            for (std::size_t i = 0; i< pos; i++) container.push_back(buff[i]);
-            //put back unprocessed buffer
-            stream.put_back(buff.substr(pos+sep.size()));
-            //return success
-            co_return true;
-        }
-        //separator was not found in first buffer
-        //copy the buffer to the container
-        //for two or more characters separator, we need to search in the combined container
-        std::copy(buff.begin(), buff.end(), std::back_inserter(container));
-        //repeat until limit reached
-        while (container.size() < limit) {
-            //read next buffer
-            buff = co_await stream.read();
-            //if eof then content of container is returned
-            if (buff.empty()) co_return true;
-            //calculate starting search pos
-            std::size_t srchpos = std::max(container.size(), sep.size()) - sep.size();
+        //append the buffer for search, repeat until something is found
+        while (!srch.append(buff)) {
+            //if container reached limit, failure now
+            if (container.size() > limit) co_return false;
             //copy buffer to container
-            std::copy(buff.begin(), buff.end(), std::back_inserter(container));
-            //advance begin iterator to search pos
-            auto iter = std::advance(container.begin(), srchpos);
-            do {
-                //find first character in the container
-                iter = std::find(iter, container.end(), sep[0]);
-                //if reached end, exit search
-                if (iter == container.end()) break;
-                //x = separator begin
-                auto x = sep.begin();
-                //first character already checked, try next one
-                ++x;
-                //y - container position
-                auto y = iter;
-                //also skip first character
-                ++y;
-                //advance until end of separator, end of container or difference
-                while (x != sep.end() && y != container.end() && *x == *y) {
-                    ++x;++y;
-                }
-                //reached end- we found
-                if (x == sep.end()) {
-                    //calculate remain characters
-                    //y->end
-                    auto remain = std::distance(y, container.end());
-                    //erase extra items (iter->end)
-                    container.erase(iter, container.end());
-                    //put back unprocessed input
-                    stream.put_back(buff.size() - remain);
-                    //success
-                    co_return true;
-                }
-                //reached container end
-                if (y == sep.end()) {
-                    //stop lookup
-                    break;
-                }
-                //advance iterator
-                ++iter;
-                //and repeast
-            } while (true);
+            std::copy(buff.begin(), buff.end, std::back_inserter(container));
+            //read next fragment
+            buff = co_await stream.read();
+            //if buffer is empty (eof or timeout), report failure
+            if (buff.empty()) co_return false;
+            //repeat
         }
-        co_return false;
-
+        //retrieve index of next character
+        auto idx = srch.get_pos_after_pattern();
+        //calculate remain buffer
+        auto remain = buff.substr(idx);
+        //retrieve matching fragment
+        auto rest = buff.substr(0, idx);
+        //copy buffer
+        std::copy(rest.begin(), rest.end, std::back_inserter(container));
+        //adjust size
+        container.resize(csz + srch.get_global_pos());
+        //return back unprocessed data
+        stream.put_back(remain);
+        //success
+        co_return true;
     }
 
 
-protected:
     std::shared_ptr<IStream> _stream;
 };
 

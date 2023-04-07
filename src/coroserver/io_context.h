@@ -68,7 +68,7 @@ public:
         return wait_until(std::chrono::system_clock::now()+duration, ident);
     }
 
-    bool cancel_wait(const void *ident);
+    cocls::suspend_point<bool> cancel_wait(const void *ident);
 
 
 
@@ -152,8 +152,6 @@ public:
     ///Connect stream to one of given addressed
 
     cocls::future<Stream> connect(std::vector<PeerName> list, int timeout_ms = defaultTimeout, TimeoutSettings tms = {defaultTimeout,defaultTimeout});
-
-
 
 
     ///Stop the running context
