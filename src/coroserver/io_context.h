@@ -68,7 +68,7 @@ public:
         return wait_until(std::chrono::system_clock::now()+duration, ident);
     }
 
-    cocls::suspend_point<bool> cancel_wait(const void *ident);
+    cocls::suspend_point<bool> cancel_wait(const void *ident) override;
 
 
 

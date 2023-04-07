@@ -173,7 +173,7 @@ public:
      * then it was EOF. Function returns false, if the last read
      * returned a nonzero-length string
      */
-    virtual bool is_read_timeout() const {return _stream->is_read_timeout();}
+    bool is_read_timeout() const {return _stream->is_read_timeout();}
 
     ///writes the buffer
     /**
@@ -263,7 +263,7 @@ protected:
             //if container reached limit, failure now
             if (container.size() > limit) co_return false;
             //copy buffer to container
-            std::copy(buff.begin(), buff.end, std::back_inserter(container));
+            std::copy(buff.begin(), buff.end(), std::back_inserter(container));
             //read next fragment
             buff = co_await stream.read();
             //if buffer is empty (eof or timeout), report failure
@@ -277,7 +277,7 @@ protected:
         //retrieve matching fragment
         auto rest = buff.substr(0, idx);
         //copy buffer
-        std::copy(rest.begin(), rest.end, std::back_inserter(container));
+        std::copy(rest.begin(), rest.end(), std::back_inserter(container));
         //adjust size
         container.resize(csz + srch.get_global_pos());
         //return back unprocessed data

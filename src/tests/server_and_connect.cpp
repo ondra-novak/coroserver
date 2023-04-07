@@ -1,5 +1,6 @@
 #include "check.h"
 
+#include <coroserver/stream.h>
 #include <coroserver/io_context.h>
 
 using namespace coroserver;
