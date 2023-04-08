@@ -5,8 +5,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/)
 set(testFiles 
 	compile_test.cpp
 	peername.cpp
-	server_and_connect.cpp
-	kmp.cpp
+	server_and_connect.cpp	
+	read_until.cpp
+	chartest.cpp
 )
 
 link_libraries(

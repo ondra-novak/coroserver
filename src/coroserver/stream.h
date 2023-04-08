@@ -9,7 +9,6 @@
 #define SRC_COROSERVER_STREAM_H_
 
 #include "peername.h"
-#include "substring.h"
 
 #include <cocls/future.h>
 #include <cocls/with_allocator.h>
@@ -207,7 +206,7 @@ public:
 
     ///read until separator reached
     /**
-     * The separator is extracted but not stored
+     * The separator is also extracted and stored.
      * @param a allocator (storage) to allocate coroutine frame
      * @param container container where to put result
      * @param sep separator to find
@@ -227,7 +226,7 @@ public:
 
     ///read until separator reached
     /**
-     * The separator is extracted but not stored
+     * The separator is also extracted and stored.
      * @param container container where to put result
      * @param sep separator to find
      * @param limit specified limit when read is stopped with error. This limit
@@ -246,95 +245,125 @@ public:
     }
 
 
+    ///Read specified count of bytes
+    /**
+     * @param a allocator for coroutine frame
+     * @param container container object where result will be stored
+     * @param size count of bytes
+     * @retval true read successfully
+     * @retval false eof or timeout reached
+     */
+    template<typename Alloc, typename Container>
+    cocls::future<bool> read_block(Alloc &a, Container &container, std::size_t size) {
+        container.clear();
+        return read_block_coro(a, *_stream, container, size);
+    }
+
+
+    ///Read specified count of bytes
+    /**
+     * @param container container object where result will be stored
+     * @param size count of bytes
+     * @retval true read successfully
+     * @retval false eof or timeout reached
+     */
+    template<typename Container>
+    cocls::future<bool> read_block(Container &container, std::size_t size) {
+        container.clear();
+        cocls::default_storage stor;
+        return read_block_coro(stor, *_stream, container, size);
+    }
+
+
 protected:
+
+    static auto search_pattern(std::string_view pattern) {
+        std::basic_string<unsigned char> lps;
+        lps.resize(pattern.length());
+        unsigned char i = 1;
+        unsigned char len = 0;
+        lps[0]=0;
+        while (i < pattern.length()) {
+            if (pattern[i] == pattern[len]) {
+                len++;
+                lps[i] = len;
+                i++;
+            } else if (len != 0) {
+                 len = lps[len - 1];
+            } else {
+                 lps[i] = 0;
+                 i++;
+            }
+        }
+        return [lps = std::move(lps), j = std::size_t(0), pattern](char c) mutable {
+            while (j > 0 && pattern[j] != c)
+                j = lps[j - 1];
+            if (pattern[j] == c) j++;
+
+            if (j == pattern.length()) {
+                j = 0;
+                return true;
+            }
+            return false;
+        };
+    }
 
     template<typename Alloc, typename Container>
     static cocls::with_allocator<Alloc, cocls::async<bool> > read_until_coro(Alloc &, IStream &stream, Container &container, std::string_view sep, std::size_t limit) {
-        //remember container size - this allows to implement "append" version of this function
-        auto csz = container.size();
-        //use Knuth-Pratt-Morris search algorithm. Install the object for it
-        SubstringSearch<char> srch(sep);
+        //separator must be non-empty, otherwise empty container is result
+        if (sep.empty()) co_return true;
+        //initialize KMP
+        auto srch = search_pattern(sep);
         //read first fragment
         std::string_view buff = co_await stream.read();
-        //if the fragment is empty, return failure (eof or timeout)
-        if (buff.empty()) co_return false;
-        //append the buffer for search, repeat until something is found
-        while (!srch.append(buff)) {
-            //if container reached limit, failure now
-            if (container.size() > limit) co_return false;
-            //copy buffer to container
-            std::copy(buff.begin(), buff.end(), std::back_inserter(container));
-            //read next fragment
+        //while buffer is not empty
+        std::size_t cnt = 0;
+        while (!buff.empty()) {
+            cnt+=buff.size();
+            //add extra section to define variables used outside of co_await section
+            {
+                //offset counter
+                std::size_t ofs = 0;
+                //process each character
+                for (auto c: buff) {
+                    ++ofs;
+                    //put to bufer
+                    container.push_back(c);
+                    //use KMP to match pattern, if true returns, c completed the pattern
+                    if (srch(c)) {
+                        //putback rest of buffer
+                        stream.put_back(buff.substr(ofs));
+                        //return success
+                        co_return true;
+                    }
+                }
+            }
+            //processed all characters, read next
             buff = co_await stream.read();
-            //if buffer is empty (eof or timeout), report failure
-            if (buff.empty()) co_return false;
-            //repeat
+            if (limit < cnt) co_return false;
         }
-        //retrieve index of next character
-        auto idx = srch.get_pos_after_pattern();
-        //calculate remain buffer
-        auto remain = buff.substr(idx);
-        //retrieve matching fragment
-        auto rest = buff.substr(0, idx);
-        //copy buffer
-        std::copy(rest.begin(), rest.end(), std::back_inserter(container));
-        //adjust size
-        container.resize(csz + srch.get_global_pos());
-        //return back unprocessed data
-        stream.put_back(remain);
-        //success
+        co_return false;
+    }
+
+    template<typename Alloc, typename Container>
+    cocls::with_allocator<Alloc, cocls::async<bool> > read_block_coro(Alloc &a, IStream &stream, Container &container, std::size_t size) {
+        while (size > 0) {
+            std::string_view buff = co_await stream.read();
+            if (buff.empty()) co_return false;
+            std::string_view p = buff.substr(0, size);
+            std::string_view q = buff.substr(p.size());
+            stream.put_back(q);
+            size -= p.size();
+            std::copy(p.begin(), p.end(), std::back_inserter(container));
+        }
         co_return true;
     }
 
 
+
     std::shared_ptr<IStream> _stream;
 };
 
-///Stream object, which supports just reading, not writing
-class ReadStream {
-public:
-
-    ReadStream(Stream stream):_stream(stream.getStreamDevice()) {}
-    ReadStream(ReadStream &&stream):_stream(std::move(stream._stream)) {}
-    ReadStream(const ReadStream &) = delete;
-    ReadStream &operator=(const ReadStream &) = delete;
-
-    cocls::future<std::string_view> read() {return _stream->read();}
-    std::string_view read_nb() {return _stream->read_nb();}
-    void put_back(std::string_view buff) {return _stream->put_back(buff);}
-    virtual bool is_read_timeout() const {return _stream->is_read_timeout();}
-
-    template<typename Alloc, typename Container>
-    cocls::future<bool> read_until(Alloc &a, Container &container, std::string_view sep, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        return Stream::read_until_coro(a, *_stream, container, sep, limit);
-    }
-
-    template<typename Container>
-    cocls::future<bool> read_until(Container &container, std::string_view sep, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        cocls::default_storage stor;
-        return Stream::read_until_coro(stor, *_stream, container, sep, limit);
-    }
-
-
-protected:
-    std::shared_ptr<IStream> _stream;
-
-};
-
-///Stream object, which supports just writing not reading
-class WriteStream {
-public:
-
-    WriteStream(Stream stream): _stream(stream.getStreamDevice()) {}
-
-    cocls::future<bool> write(std::string_view buffer) {return _stream->write(buffer);}
-    cocls::future<bool> write_eof() {return _stream->write_eof();}
-    void shutdown() {return _stream->shutdown();}
-
-protected:
-    std::shared_ptr<IStream> _stream;
-
-};
 
 }
 
