@@ -30,6 +30,7 @@ namespace coroserver {
  otherwise UB. If you need to read stream using standard API, you need to destroy this
  object first.
  */
+template<typename Stream>
 class CharacterReader: public cocls::awaiter {
 public:
     ///construct reader
@@ -96,6 +97,9 @@ public:
         }
         return *(_ptr++);
     }
+    void put_back() {
+        --_ptr;
+    }
 
 protected:
     Stream _s;
@@ -103,6 +107,9 @@ protected:
     const char *_ptr = nullptr;
     const char *_end = nullptr;
 };
+
+template<typename Stream>
+CharacterReader(Stream) -> CharacterReader<Stream>;
 
 
 ///Character writer allows to write character to the stream which automatic caching
@@ -120,9 +127,9 @@ protected:
  */
 
 #ifdef COROSERVER_DEFAULT_WRITE_BUFFER_SIZE
-template<std::size_t buffer_size=(COROSERVER_DEFAULT_WRITE_BUFFER_SIZE)>
+template<typename Stream, std::size_t buffer_size=(COROSERVER_DEFAULT_WRITE_BUFFER_SIZE)>
 #else
-template<std::size_t buffer_size=4096>
+template<typename Stream, std::size_t buffer_size=8192>
 #endif
 class CharacterWriter {
 public:
@@ -225,6 +232,9 @@ protected:
     std::array<char, buffer_size>  _buffer;
     std::size_t _pos;
 };
+
+template<typename Stream>
+CharacterWriter(Stream) -> CharacterWriter<Stream>;
 
 
 }

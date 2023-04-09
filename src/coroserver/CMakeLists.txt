@@ -7,7 +7,7 @@ add_library(coroserver
 	io_context.cpp
 	poller_epoll.cpp
 	memstream.cpp
-	broadcaster.cpp
+	json/json.cpp
 )
 add_dependencies(coroserver coroserver_version)
 

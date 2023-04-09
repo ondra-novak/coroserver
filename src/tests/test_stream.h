@@ -79,6 +79,10 @@ public:
     }
     virtual void shutdown() override {}
 
+    static coroserver::Stream create(std::vector<std::string> data, std::string *out = nullptr) {
+        return coroserver::Stream(std::make_shared<TestStream>(std::move(data), out));
+    }
+
 protected:
     std::string _tmp;
     std::string *_out;

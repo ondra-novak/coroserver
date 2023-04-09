@@ -8,6 +8,7 @@ set(testFiles
 	server_and_connect.cpp	
 	read_until.cpp
 	chartest.cpp
+	json.cpp
 )
 
 link_libraries(

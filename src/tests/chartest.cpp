@@ -24,7 +24,7 @@ cocls::async<void> test_write() {
     std::string output;
     coroserver::Stream s (std::make_shared<TestStream<100> >(std::vector<std::string>(), &output));
 
-    coroserver::CharacterWriter<10> wr(s);
+    coroserver::CharacterWriter<coroserver::Stream, 10> wr(s);
     for (char c: expected) {
         co_await wr(c);
     }

@@ -25,7 +25,7 @@ public:
     MemStream(std::string_view input) {
         AbstractStream::put_back(input);
     }
-    MemStream(std::vector<char> input)
+    MemStream(std::vector<char> &&input)
         :_input_buff(std::move(input)) {
         AbstractStream::put_back(std::string_view(_input_buff.data(), _input_buff.size()));
     }
@@ -39,14 +39,19 @@ public:
         return _output_buff;
     }
 
+
     void clear_output() {
         _output_buff.clear();
         _write_closed = false;
     }
 
-    static PMemStream create();
-    static PMemStream create(std::string_view input);
-    static PMemStream create(std::vector<char> input);
+    static std::string_view get_output(Stream s);
+    static std::vector<char>& get_output_buff(Stream s);
+    static void clear_output(Stream s);
+
+    static Stream create();
+    static Stream create(std::string_view input);
+    static Stream create(std::vector<char> input);
 
     virtual TimeoutSettings get_timeouts() override;
     virtual PeerName get_source() const override;
@@ -58,6 +63,8 @@ public:
     virtual void shutdown() override;
     virtual bool is_read_timeout() const override;
 
+
+
 protected:
     std::vector<char> _input_buff;
     std::vector<char> _output_buff;
@@ -66,6 +73,8 @@ protected:
 
 
 };
+
+
 
 }
 

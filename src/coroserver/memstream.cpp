@@ -34,12 +34,55 @@ void MemStream::set_timeouts(const TimeoutSettings &tm) {
     _tms = tm;
 }
 
+Stream MemStream::create() {
+    return Stream(std::make_shared<MemStream>());
+}
+
+Stream MemStream::create(std::string_view input) {
+    return Stream(std::make_shared<MemStream>(input));
+}
+
+Stream MemStream::create(std::vector<char> input) {
+    return Stream(std::make_shared<MemStream>(std::move(input)));
+}
+
 void MemStream::shutdown() {
     //empty
 }
 
-bool MemStream::is_read_timeout() const {
+std::string_view MemStream::get_output(Stream s) {
+    auto device = s.getStreamDevice();
+    MemStream *m = dynamic_cast<MemStream *>(device.get());
+    if (m) {
+        return m->get_output();
+    } else {
+        return {};
+    }
+}
+
+std::vector<char>& MemStream::get_output_buff(Stream s) {
+    auto device = s.getStreamDevice();
+    MemStream *m = dynamic_cast<MemStream *>(device.get());
+    if (m) {
+        return m->get_output_buff();
+    } else {
+        throw std::bad_cast();
+    }
+}
+
+void MemStream::clear_output(Stream s) {
+    auto device = s.getStreamDevice();
+    MemStream *m = dynamic_cast<MemStream *>(device.get());
+    if (m) {
+        m->clear_output();
+    }
+}
+
+bool MemStream::is_read_timeout() const
+{
     return false;
 }
 
+
 }
+
