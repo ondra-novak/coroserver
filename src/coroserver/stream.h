@@ -53,8 +53,11 @@ public:
 
 class AbstractStream: public IStream {
 public:
-    virtual void put_back(std::string_view buff) {
+    virtual void put_back(std::string_view buff) override {
         _putback_buffer = buff;
+    }
+    virtual std::string_view read_nb() override {
+        return read_putback_buffer();
     }
 
 protected:
@@ -70,13 +73,13 @@ class AbstractStreamWithMetadata: public AbstractStream {
 public:
     AbstractStreamWithMetadata(PeerName &&source, TimeoutSettings &&tms)
         :_source(std::move(source)),_tms(std::move(tms)) {}
-    virtual void set_timeouts(const TimeoutSettings &tm) {
+    virtual void set_timeouts(const TimeoutSettings &tm) override{
         _tms = tm;
     }
-    virtual TimeoutSettings get_timeouts() {
+    virtual TimeoutSettings get_timeouts() override{
         return _tms;
     }
-    virtual PeerName get_source() const {
+    virtual PeerName get_source() const override{
         return _source;
     }
 protected:
