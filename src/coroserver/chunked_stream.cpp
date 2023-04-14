@@ -9,9 +9,13 @@ ChunkedStream::ChunkedStream(std::shared_ptr<IStream> proxied, bool allow_read, 
 {
     if (allow_read) {
         _reader = start_reader();
+    } else {
+        _eof_reached = true;
     }
     if (allow_write) {
         _writer = start_writer();
+    } else {
+        _eof_writen = true;
     }
 }
 
@@ -66,6 +70,7 @@ cocls::generator<std::string_view> ChunkedStream::start_reader() {
             if (c != '\n') error();
             next_chunk = true;
             if (!chunk_size) {
+                _eof_reached = true;
                 while (true) {
                     co_yield std::string_view();
                 }
@@ -94,10 +99,28 @@ static char * write_hex(std::size_t sz, char *ptr) {
 
 }
 
+Stream ChunkedStream::read(Stream target) {
+    return Stream(std::make_shared<ChunkedStream>(target.getStreamDevice(), true, false));
+}
+
+Stream ChunkedStream::write(Stream target) {
+    return Stream(std::make_shared<ChunkedStream>(target.getStreamDevice(), false, true));
+}
+
+Stream ChunkedStream::read_and_write(Stream target) {
+    return Stream(std::make_shared<ChunkedStream>(target.getStreamDevice(), true, true));
+}
+
+ChunkedStream::~ChunkedStream() {
+    if (!_eof_reached && !_eof_writen) {
+        _proxied->shutdown();
+    }
+}
+
 cocls::generator<bool, std::string_view> ChunkedStream::start_writer() {
     std::string_view data = co_yield nullptr;
     std::vector<char> buff;
-    while (!buff.empty()) {
+    while (!data.empty()) {
         std::size_t needsz = data.size()+20;
         if (buff.size() < needsz) {
             buff.resize(0);
@@ -113,10 +136,13 @@ cocls::generator<bool, std::string_view> ChunkedStream::start_writer() {
         data = {buff.data(), std::size_t(ptr - buff.data())};
         data = co_yield co_await _proxied->write(data);
     }
-    co_await _proxied->write("\r\n0\r\n");
+    co_await _proxied->write("0\r\n\r\n");
+    _eof_writen = true;
     while (true) {
         co_yield false;
     }
 }
+
+
 
 }

@@ -10,6 +10,7 @@ set(testFiles
 	chartest.cpp
 	json.cpp
     tcp_test.cpp
+    chunked_stream.cpp
 )
 
 link_libraries(

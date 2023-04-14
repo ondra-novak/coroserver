@@ -277,6 +277,36 @@ public:
         return read_block_coro(stor, *_stream, container, size);
     }
 
+    ///Discard any input up to specified count of bytes
+    /**
+     * @param Alloc coroutine allocator (cocls)
+     * @param count count of bytes to discard. Default value discards all bytes
+     * until EOF. If you specify 0, no bytes will be discarded, however an empty
+     * read is still performed and return value is set apropriately
+     * @retval true all bytes has been discarded, EOF not reached. In case that count
+     * is zero, it manifests, that there are still data in the stream
+     * @retval false not all bytes has been discarded, EOF has been reached. If case
+     * that count is zero, this means no more data are available.
+     */
+    template<typename Alloc>
+    cocls::future<bool> discard(Alloc &a, std::size_t count = -1) {
+        return discard_coro(a, *_stream, count);
+    }
+
+    ///Discard any input up to specified count of bytes
+    /**
+     * @param count count of bytes to discard. Default value discards all bytes
+     * until EOF. If you specify 0, no bytes will be discarded, however an empty
+     * read is still performed and return value is set apropriately
+     * @retval true all bytes has been discarded, EOF not reached. In case that count
+     * is zero, it manifests, that there are still data in the stream
+     * @retval false not all bytes has been discarded, EOF has been reached. If case
+     * that count is zero, this means no more data are available.
+     */
+    cocls::future<bool> discard(std::size_t count = -1) {
+        cocls::default_storage stor;
+        return discard_coro(stor, *_stream, count);
+    }
 
 protected:
 
@@ -349,7 +379,7 @@ protected:
     }
 
     template<typename Alloc, typename Container>
-    cocls::with_allocator<Alloc, cocls::async<bool> > read_block_coro(Alloc &a, IStream &stream, Container &container, std::size_t size) {
+    static cocls::with_allocator<Alloc, cocls::async<bool> > read_block_coro(Alloc &a, IStream &stream, Container &container, std::size_t size) {
         while (size > 0) {
             std::string_view buff = co_await stream.read();
             if (buff.empty()) co_return false;
@@ -358,6 +388,26 @@ protected:
             stream.put_back(q);
             size -= p.size();
             std::copy(p.begin(), p.end(), std::back_inserter(container));
+        }
+        co_return true;
+    }
+
+    template<typename Alloc>
+    static cocls::with_allocator<Alloc, cocls::async<bool> > discard_coro(Alloc &, IStream &stream, std::size_t sz) {
+        if (sz == 0) {
+            std::string_view b = co_await stream.read();
+            stream.put_back(b);
+            co_return !b.empty();
+        }
+        while (sz) {
+            std::string_view b = co_await stream.read();
+            if (b.empty()) co_return false;
+            if (sz < b.size()) {
+                stream.put_back(b.substr(sz));
+                sz = 0;
+            } else {
+                sz -= b.size();
+            }
         }
         co_return true;
     }
