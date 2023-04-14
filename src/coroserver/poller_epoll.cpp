@@ -208,7 +208,7 @@ std::chrono::system_clock::time_point Poller_epoll::clear_timeouts(cocls::suspen
             for (auto &x: iter->second) if (x.cb) {
                 //any timeout event is resolved
                 if (x.timeout < now) {
-                    spt.push_back(x.cb(WaitResult::timeout));
+                    spt << x.cb(WaitResult::timeout);
                 }
             }
             //rearm the descriptor according new state
@@ -282,7 +282,7 @@ cocls::async<void> Poller_epoll::worker(cocls::thread_pool &pool) {
                 auto expr = _sch.check_expired(now);
 
                 while (std::holds_alternative<Promise>(expr)) {
-                    spt.push_back(std::get<Promise>(expr)(WaitResult::timeout));
+                    spt << std::get<Promise>(expr)(WaitResult::timeout);
                     expr = _sch.check_expired(now);
                 }
 
@@ -299,20 +299,20 @@ cocls::async<void> Poller_epoll::worker(cocls::thread_pool &pool) {
                             RegList &regs = fd_map[fd];
                             if (e.events & EPOLLERR) {
                                 for (auto &x: regs) {
-                                    spt.push_back(x.cb(WaitResult::error));
+                                    spt << x.cb(WaitResult::error);
                                 }
                             }
                             if (e.events & EPOLLIN) {
                                 auto &xa = regs[static_cast<int>(Op::accept)];
                                 auto &xr = regs[static_cast<int>(Op::read)];
-                                spt.push_back(xa.cb(WaitResult::complete));
-                                spt.push_back(xr.cb(WaitResult::complete));
+                                spt << xa.cb(WaitResult::complete);
+                                spt << xr.cb(WaitResult::complete);
                             }
                             if (e.events & EPOLLOUT) {
                                 auto &xc = regs[static_cast<int>(Op::connect)];
                                 auto &xw = regs[static_cast<int>(Op::write)];
-                                spt.push_back(xc.cb(WaitResult::complete));
-                                spt.push_back(xw.cb(WaitResult::complete));
+                                spt << xc.cb(WaitResult::complete);
+                                spt << xw.cb(WaitResult::complete);
                             }
                             rearm_fd(false, iter);
                         }

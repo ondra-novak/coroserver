@@ -74,7 +74,7 @@ public:
             _end = _ptr+text.size();
         }
         //return next characters
-        return *(_ptr++);
+        return static_cast<unsigned char>(*(_ptr++));
     }
     ///destructor - returns back unprocessed input
     ~CharacterReader() {
@@ -95,7 +95,7 @@ public:
             _ptr = text.data();
             _end = _ptr+text.size();
         }
-        return *(_ptr++);
+        return static_cast<unsigned char>(*(_ptr++));
     }
     void put_back() {
         --_ptr;

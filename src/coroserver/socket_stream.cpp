@@ -65,7 +65,7 @@ cocls::generator<std::string_view> SocketStream::start_read() {
 cocls::future<std::string_view> SocketStream::read() {
     auto buff = read_putback_buffer();
     if (!buff.empty() || _reader.done()) return cocls::future<std::string_view>::set_value(buff);
-    return _reader();
+    return [&]{return _reader();};
 }
 
 std::string_view SocketStream::read_nb() {
@@ -92,7 +92,7 @@ bool SocketStream::is_read_timeout() const {
 
 cocls::future<bool> SocketStream::write(std::string_view buffer) {
     if (_writer.done()) return cocls::future<bool>::set_value(false);
-    return _writer(buffer);
+    return [&]{return _writer(buffer);};
 }
 
 cocls::future<bool> SocketStream::write_eof() {

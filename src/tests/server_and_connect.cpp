@@ -8,10 +8,11 @@ using namespace coroserver;
 void check1() {
     ContextIO ctx = ContextIO::create(2);
 
-    auto addrs_listen = PeerName::lookup("127.0.0.1", "12345");
-    auto addrs_connect = PeerName::lookup("localhost", "12345");
+    auto addrs_listen = PeerName::lookup("127.0.0.1", "*");
+    auto listening = ctx.accept(std::move(addrs_listen));
 
-    auto listening = ctx.accept(addrs_listen);
+    auto addrs_connect = PeerName::lookup("localhost", addrs_listen[0].get_port());
+
     auto wtconn1 = listening();
 
 
@@ -24,10 +25,9 @@ void check1() {
 void check2() {
     ContextIO ctx = ContextIO::create(2);
 
-    auto addrs_listen = PeerName::lookup("[::1]", "12345");
-    auto addrs_connect = PeerName::lookup("localhost", "12345");
-
-    auto listening = ctx.accept(addrs_listen);
+    auto addrs_listen = PeerName::lookup("[::1]", "*");
+    auto listening = ctx.accept(std::move(addrs_listen));
+    auto addrs_connect = PeerName::lookup("localhost", addrs_listen[0].get_port());
     auto wtconn1 = listening();
 
 

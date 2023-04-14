@@ -205,15 +205,16 @@ static cocls::generator<Stream> listen_generator(SocketSupport ctx,
 
 
 
-cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> list,
+cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> &list,
                                 std::stop_token token, TimeoutSettings tms) {
 
     std::vector<cocls::generator<Stream> > gens;
     std::vector<SocketHandle> handles;
     SocketSupport sup = *this;
-    for (const PeerName &x: list) {
+    for (PeerName &x: list) {
         try {
             SocketHandle h = ContextIO::listen_socket(x);
+            x = PeerName::from_socket(h);
             gens.push_back(listen_generator(sup, tms, token, h));
             handles.push_back(h);
         } catch (...) {
@@ -225,6 +226,11 @@ cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> list,
     }
 
     return cocls::generator_aggregator(std::move(gens));
+}
+
+cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> &&list,
+                                std::stop_token token, TimeoutSettings tms) {
+    return accept(list,std::move(token),std::move(tms));
 }
 
 

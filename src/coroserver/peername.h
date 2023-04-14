@@ -7,6 +7,9 @@
 
 #ifndef SRC_COROSERVER_PEERNAME_H_
 #define SRC_COROSERVER_PEERNAME_H_
+
+#include "defs.h"
+
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -93,6 +96,9 @@ public:
      * @return constructed objecet
      */
     static PeerName from_sockaddr(const void *sockaddr);
+
+    ///constructs PeerName from socket
+    static PeerName from_socket(SocketHandle h);
 
     ///Visit the content
     /**
@@ -205,6 +211,16 @@ public:
         int _err;
 
     };
+
+
+    ///retrieve port
+    /** This retrieves port number of the peer, which can be passed to lookup as default port
+     *
+     * if the object doesn't have a port, empty value is returned
+     *
+     * */
+    std::string get_port();
+
 
     bool operator==(const PeerName &x) const {
         return equal_to(x);

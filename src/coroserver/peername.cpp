@@ -148,8 +148,14 @@ void PeerName::nslookup(std::string &&host, std::string &&port, std::vector<Peer
     }
     hint.ai_flags |= AI_ADDRCONFIG;
 
+    const char *portptr = port.c_str();
+    if (port.compare("*") == 0) {
+        portptr = "0";
+        hint.ai_flags = AI_PASSIVE;
+    }
 
-    int err = getaddrinfo(hostptr, port.c_str(),&hint,&result);
+
+    int err = getaddrinfo(hostptr, portptr,&hint,&result);
 
     if (err) {
         throw LookupException(err);
@@ -325,6 +331,28 @@ bool PeerName::IPv6::operator ==(const IPv6 &x) const {
 
 bool PeerName::Unix::operator ==(const Unix &x) const {
     return path == x.path;
+}
+
+PeerName PeerName::from_socket(SocketHandle h) {
+    sockaddr_storage saddr;
+    socklen_t slen = sizeof(saddr);
+    if (getsockname(h,reinterpret_cast<sockaddr *>(&saddr), &slen) == -1) {
+        int err = errno;
+        throw std::system_error(err, std::system_category(), "getsockname");
+    }
+    return from_sockaddr(reinterpret_cast<sockaddr *>(&saddr));
+
+}
+
+std::string PeerName::get_port() {
+    return std::visit([](const auto &x)->std::string {
+        using T = std::decay_t<decltype(x)>;
+        if constexpr(std::is_same_v<T, IPv4> || std::is_same_v<T, IPv6>) {
+            return std::to_string(htons(x.port));
+        } else {
+            return std::string();
+        }
+    }, _content);
 }
 
 }

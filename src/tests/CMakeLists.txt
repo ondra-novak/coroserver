@@ -9,6 +9,7 @@ set(testFiles
 	read_until.cpp
 	chartest.cpp
 	json.cpp
+    tcp_test.cpp
 )
 
 link_libraries(

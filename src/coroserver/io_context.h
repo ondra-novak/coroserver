@@ -135,7 +135,10 @@ public:
      * The listening can be stopped by one of following ways. You can use
      * supplied stop token, or you can stop whole context, which also stops the generator
      *
-     * @param list list of addresses
+     * @param list list of addresses. The list is carried as lvalue reference and can be
+     *  modified by the function. This is useful, when PeerName refers to random opened
+     *  port. When function returns, apropriate PeerName is updated with real port number
+     *
      * @param token stop token to stop generator. Stop can be requested anytime, regadless on
      * which state is the generator
      *
@@ -144,7 +147,31 @@ public:
      * @return generator
      */
     cocls::generator<Stream> accept(
-            std::vector<PeerName> list,
+            std::vector<PeerName> &list,
+            std::stop_token token = {},
+            TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+
+    ///Create accept generator
+    /**
+     * Accept generator opens one or more ports at given addresses,
+     * and starts listening on it. Each generator call returns cocls::future which
+     * is resolved by connected stream.
+     *
+     * The listening can be stopped by one of following ways. You can use
+     * supplied stop token, or you can stop whole context, which also stops the generator
+     *
+     * @param list list of addresses. The list is carried as rvalue reference and can be
+     *  modified by the function.
+     *
+     * @param token stop token to stop generator. Stop can be requested anytime, regadless on
+     * which state is the generator
+     *
+     * @param tms timeouts sets on resulting stream
+     *
+     * @return generator
+     */
+    cocls::generator<Stream> accept(
+            std::vector<PeerName> &&list,
             std::stop_token token = {},
             TimeoutSettings tms = {defaultTimeout,defaultTimeout});
 
