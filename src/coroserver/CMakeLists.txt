@@ -8,6 +8,7 @@ add_library(coroserver
 	poller_epoll.cpp
 	memstream.cpp
 	chunked_stream.cpp
+	limited_stream.cpp
 	json/json.cpp
 )
 add_dependencies(coroserver coroserver_version)

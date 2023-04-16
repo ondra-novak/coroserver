@@ -9,6 +9,7 @@
 #define SRC_COROSERVER_JSON_SERIALIZER_H_
 
 #include <cocls/future.h>
+#include <cocls/async.h>
 #include "../character_io.h"
 #include "value.h"
 
