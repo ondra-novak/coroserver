@@ -10,6 +10,8 @@ add_library(coroserver
 	chunked_stream.cpp
 	limited_stream.cpp
 	json/json.cpp
+	http_common.cpp
+	http_server_request.cpp
 )
 add_dependencies(coroserver coroserver_version)
 

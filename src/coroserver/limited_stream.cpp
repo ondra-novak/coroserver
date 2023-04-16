@@ -51,7 +51,7 @@ cocls::suspend_point<void> LimitedStream::join_read(cocls::future<std::string_vi
         std::string_view data = *fut;
         auto ret = data.substr(0, _limit_read);
         _proxied->put_back(data.substr(ret.size()));
-        _limit_read = ret.size();
+        _limit_read -= ret.size();
         return _read_result(ret);
     } catch (...) {
         return _read_result(std::current_exception());
@@ -69,9 +69,14 @@ cocls::future<bool> LimitedStream::write_eof() {
     if (_limit_write) {
         return ([&]()->cocls::async<bool> {
             CharacterWriter<Stream> wr(_proxied);
+            bool ret;
             while (_limit_write) {
-                co_await wr(0);
+                ret = co_await wr(0);
+                if (!ret) co_return ret;
+                --_limit_write;
             }
+            ret = co_await wr.flush();
+            co_return ret;
         })();
     } else {
         return cocls::future<bool>::set_value(true);

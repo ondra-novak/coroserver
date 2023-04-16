@@ -9,6 +9,7 @@
 #define SRC_COROSERVER_STREAM_H_
 
 #include "peername.h"
+#include "strutils.h"
 
 #include <cocls/future.h>
 #include <cocls/async.h>
@@ -309,38 +310,10 @@ public:
         return discard_coro(stor, *_stream, count);
     }
 
+
+
+
 protected:
-
-    static auto search_pattern(std::string_view pattern) {
-        std::basic_string<unsigned char> lps;
-        lps.resize(pattern.length());
-        unsigned char i = 1;
-        unsigned char len = 0;
-        lps[0]=0;
-        while (i < pattern.length()) {
-            if (pattern[i] == pattern[len]) {
-                len++;
-                lps[i] = len;
-                i++;
-            } else if (len != 0) {
-                 len = lps[len - 1];
-            } else {
-                 lps[i] = 0;
-                 i++;
-            }
-        }
-        return [lps = std::move(lps), j = std::size_t(0), pattern](char c) mutable {
-            while (j > 0 && pattern[j] != c)
-                j = lps[j - 1];
-            if (pattern[j] == c) j++;
-
-            if (j == pattern.length()) {
-                j = 0;
-                return true;
-            }
-            return false;
-        };
-    }
 
     template<typename Alloc, typename Container>
     static cocls::with_allocator<Alloc, cocls::async<bool> > read_until_coro(Alloc &, IStream &stream, Container &container, std::string_view sep, std::size_t limit) {
@@ -380,7 +353,7 @@ protected:
     }
 
     template<typename Alloc, typename Container>
-    static cocls::with_allocator<Alloc, cocls::async<bool> > read_block_coro(Alloc &a, IStream &stream, Container &container, std::size_t size) {
+    static cocls::with_allocator<Alloc, cocls::async<bool> > read_block_coro(Alloc &, IStream &stream, Container &container, std::size_t size) {
         while (size > 0) {
             std::string_view buff = co_await stream.read();
             if (buff.empty()) co_return false;
