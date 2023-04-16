@@ -26,7 +26,7 @@ void test2() {
         "6\r",
         "\nworld",
         " \r\n32\r\nA long long string, long string, very long string ",
-        "\r\n1\r\nx\r\n0\r\n\r\n"
+        "\r\n1\r\nx\r\n0\r\n\r\nExtraData"
     });
     auto chs = coroserver::ChunkedStream::read(s);
     std::string result;
@@ -38,6 +38,8 @@ void test2() {
         }
     }
     CHECK_EQUAL(result, expected);
+    std::string_view extra = s.read().wait();
+    CHECK_EQUAL(extra, "ExtraData");
 }
 
 int main() {

@@ -7,6 +7,7 @@
 
 #include "limited_stream.h"
 
+#include "character_io.h"
 namespace coroserver {
 
 coroserver::LimitedStream::LimitedStream(std::shared_ptr<IStream> proxied,
@@ -14,6 +15,7 @@ coroserver::LimitedStream::LimitedStream(std::shared_ptr<IStream> proxied,
 :AbstractProxyStream(std::move(proxied))
 ,_limit_read(limit_read)
 ,_limit_write(limit_write)
+,_read_awt(*this)
 {
 
 }
@@ -22,20 +24,38 @@ cocls::future<std::string_view> LimitedStream::read() {
     auto buff = read_putback_buffer();
     if (!buff.empty() || !_limit_read) return cocls::future<std::string_view>::set_value(buff);
     return [&](auto promise) {
-        _awt.set_resume_fn([](cocls::awaiter *, void *ptr) noexcept ->cocls::suspend_point<void>{
-            LimitedStream *me = reinterpret_cast<LimitedStream *>(ptr);
-            std::string_view s = *me->_rdfut;
-            std::string_view ret = s.substr(0,me->_limit_read);
-            me->_proxied->put_back(s.substr(ret.size()));
-            me->_limit_read -= ret.size();
-            return me->_fltfut(ret);
-        }, this);
-        _fltfut = std::move(promise);
-        _rdfut << [&]{return _proxied->read();};
-        if (!_rdfut.subscribe(&_awt)) {
-            _awt.resume();
-        }
+        _read_result = std::move(promise);
+        _read_awt << [&]{return _proxied->read();}; //continue by join
     };
+}
+
+Stream LimitedStream::read(Stream target, std::size_t limit_read) {
+    return Stream(std::make_shared<LimitedStream>(target.getStreamDevice(), limit_read,0));
+}
+
+Stream LimitedStream::write(Stream target, std::size_t limit_write) {
+    return Stream(std::make_shared<LimitedStream>(target.getStreamDevice(), 0,limit_write));
+}
+
+Stream LimitedStream::read_and_write(Stream target, std::size_t limit_read,
+        std::size_t limit_write) {
+    return Stream(std::make_shared<LimitedStream>(target.getStreamDevice(), limit_read,limit_write));
+}
+
+LimitedStream::~LimitedStream() {
+    if (_limit_read || _limit_write) _proxied->shutdown();
+}
+
+cocls::suspend_point<void> LimitedStream::join_read(cocls::future<std::string_view> &fut) noexcept {
+    try {
+        std::string_view data = *fut;
+        auto ret = data.substr(0, _limit_read);
+        _proxied->put_back(data.substr(ret.size()));
+        _limit_read = ret.size();
+        return _read_result(ret);
+    } catch (...) {
+        return _read_result(std::current_exception());
+    }
 
 }
 
@@ -46,6 +66,16 @@ cocls::future<bool> LimitedStream::write(std::string_view buffer) {
 }
 
 cocls::future<bool> LimitedStream::write_eof() {
+    if (_limit_write) {
+        return ([&]()->cocls::async<bool> {
+            CharacterWriter<Stream> wr(_proxied);
+            while (_limit_write) {
+                co_await wr(0);
+            }
+        })();
+    } else {
+        return cocls::future<bool>::set_value(true);
+    }
 }
 
 }

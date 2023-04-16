@@ -6,34 +6,181 @@ namespace coroserver {
 
 ChunkedStream::ChunkedStream(std::shared_ptr<IStream> proxied, bool allow_read, bool allow_write)
 :AbstractProxyStream(std::move(proxied))
+,_write_awt(*this)
+, _eof_written (!allow_write)
+, _read_awt(*this)
+,_rd_state (allow_read?ReadState::number:ReadState::eof)
 {
-    if (allow_read) {
-        _reader = start_reader();
-    } else {
-        _eof_reached = true;
-    }
-    if (allow_write) {
-        _writer = start_writer();
-    } else {
-        _eof_writen = true;
-    }
+
+
 }
 
 cocls::future<std::string_view> ChunkedStream::read() {
-    if (!_reader) return  cocls::future<std::string_view>::set_value();
-    return _reader();
+    auto buff = read_putback_buffer();
+    if (!buff.empty() || _rd_state == ReadState::eof) return cocls::future<std::string_view>::set_value(buff);
+    return [&](cocls::promise<std::string_view> p) {
+        _read_result = std::move(p);
+        _read_awt << [&]{return _proxied->read();};
+    };
+
+}
+
+cocls::suspend_point<void> ChunkedStream::join_read(cocls::future<std::string_view> &f) noexcept {
+
+    auto error = []{
+            throw std::runtime_error("Invalid chunk format");
+    };
+
+    auto next_state = [](ReadState &rd) {
+        rd = static_cast<ReadState>(static_cast<int>(rd)+1);
+    };
+
+    try {
+        std::string_view buff = f.value();
+        if (buff.empty()) {
+            _rd_state = ReadState::eof;
+            _read_result(buff);
+        }
+        auto itr = buff.begin();
+        auto beg = itr;
+        auto end = buff.end();
+        while (itr != end) {
+            switch(_rd_state) {
+                case ReadState::data: if (_chunk_size) {
+                        std::string_view result(buff.data()+std::distance(beg, itr), std::distance(itr,end));
+                        std::string_view out = result.substr(0,_chunk_size);
+                        _proxied->put_back(result.substr(out.size()));
+                        _chunk_size-=out.size();
+                        return _read_result(out);
+                    } else {
+                        _rd_state = ReadState::r1;
+                    }break;
+                case ReadState::r1:
+                case ReadState::r2:
+                case ReadState::r3:
+                    if (*itr != '\r') error();
+                    ++itr;
+                    next_state(_rd_state);
+                    break;
+                case ReadState::n1:
+                case ReadState::n2:
+                case ReadState::n3:
+                    if (*itr != '\n') error();
+                    ++itr;
+                    next_state(_rd_state);
+                    break;
+                case ReadState::number: {
+                        int n = 0;
+                        switch (*itr) {
+                            case '0':n = 0;break;
+                            case '1':n = 1;break;
+                            case '2':n = 2;break;
+                            case '3':n = 3;break;
+                            case '4':n = 4;break;
+                            case '5':n = 5;break;
+                            case '6':n = 6;break;
+                            case '7':n = 7;break;
+                            case '8':n = 8;break;
+                            case '9':n = 9;break;
+                            case 'A':n = 10;break;
+                            case 'B':n = 11;break;
+                            case 'C':n = 12;break;
+                            case 'D':n = 13;break;
+                            case 'E':n = 14;break;
+                            case 'F':n = 15;break;
+                            case 'a':n = 10;break;
+                            case 'b':n = 11;break;
+                            case 'c':n = 12;break;
+                            case 'd':n = 13;break;
+                            case 'e':n = 14;break;
+                            case 'f':n = 15;break;
+                            default:
+                                next_state(_rd_state);
+                                continue;
+                        }
+                        _chunk_size = (_chunk_size << 4) | n;
+                        ++itr;
+                    }break;
+                case ReadState::check_empty: {
+                    if (_chunk_size == 0) {
+                        _rd_state = ReadState::r3;
+                    } else {
+                        _rd_state = ReadState::data;
+                    }
+                    break;
+                case ReadState::eof: {
+                        std::string_view pb(buff.data()+std::distance(beg, itr), std::distance(itr,end));
+                        _proxied->put_back(pb);
+                        return _read_result();
+                }
+                default:
+                    error();
+                    break;
+                }
+            }
+        }
+
+        if (_rd_state == ReadState::eof) return _read_result();
+
+        _read_awt << [&]{return _proxied->read();};
+        return {};
+
+
+
+    } catch (...) {
+        return _read_result(std::current_exception());
+    }
+}
+
+
+
+static void hex2str(std::size_t sz, std::string &out) {
+    static const char hextbl[16] = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
+    if (sz) {
+        hex2str(sz>>4, out);
+        out.push_back(hextbl[sz & 0xF]);
+    }
 }
 
 cocls::future<bool> ChunkedStream::write(std::string_view buffer) {
-    if (!_writer) return cocls::future<bool>::set_value(true);
-    if (buffer.empty()) return cocls::future<bool>::set_value(true);
-    return _writer(buffer);
+    if (_eof_written) return cocls::future<bool>::set_value(false);
+    assert(_data_to_write.empty() && "Write is still pending");
+    _data_to_write = buffer;
+    hex2str(buffer.size(), _new_chunk_write);
+    _new_chunk_write.append("\r\n");
+    return [&](cocls::promise<bool> p) {
+        _write_result = std::move(p);
+        _write_awt << [&]{return _proxied->write(_new_chunk_write);};
+    };
+}
+
+cocls::suspend_point<void> ChunkedStream::join_write(cocls::future<bool> &f) noexcept {
+    try {
+        bool res = f.value();
+        if (res && !_data_to_write.empty()) {
+            _new_chunk_write.clear();
+            _new_chunk_write.append("\r\n");
+            auto d = _data_to_write;
+            _data_to_write = {};
+            _write_awt << [&]{return _proxied->write(d);};
+            return {};
+        } else {
+            return _write_result(res);
+        }
+    } catch (...) {
+        return _write_result(std::current_exception());
+    }
 }
 
 cocls::future<bool> ChunkedStream::write_eof() {
-    return _writer(std::string_view());
+    _eof_written = true;
+    _new_chunk_write.append("0\r\n\r\n");
+    return [&](cocls::promise<bool> p) {
+        _write_result = std::move(p);
+        _write_awt << [&]{return _proxied->write(_new_chunk_write);};
+    };
 }
-
+#if 0
 cocls::generator<std::string_view> ChunkedStream::start_reader() {
     std::size_t chunk_size = 0;
     bool next_chunk = false;
@@ -78,27 +225,7 @@ cocls::generator<std::string_view> ChunkedStream::start_reader() {
         }
     }
 }
-
-static char * write_hex(std::size_t sz, char *ptr) {
-    auto n = sz;
-    char *c = ptr;
-    ++ptr;
-    while (n > 0xF) {
-        n >>=4;
-        ++ptr;
-    }
-    char *d = ptr;
-    char digits[] = "0123456789abcdef";
-    while (d != c) {
-        d--;
-        n = sz & 0xF;
-        sz = sz >> 4;
-        *d = digits[n];
-    }
-    return ptr;
-
-}
-
+#endif
 Stream ChunkedStream::read(Stream target) {
     return Stream(std::make_shared<ChunkedStream>(target.getStreamDevice(), true, false));
 }
@@ -112,34 +239,8 @@ Stream ChunkedStream::read_and_write(Stream target) {
 }
 
 ChunkedStream::~ChunkedStream() {
-    if (!_eof_reached && !_eof_writen) {
+    if (_rd_state != ReadState::eof && !_eof_written) {
         _proxied->shutdown();
-    }
-}
-
-cocls::generator<bool, std::string_view> ChunkedStream::start_writer() {
-    std::string_view data = co_yield nullptr;
-    std::vector<char> buff;
-    while (!data.empty()) {
-        std::size_t needsz = data.size()+20;
-        if (buff.size() < needsz) {
-            buff.resize(0);
-            buff.resize(needsz);
-        }
-        char *ptr = buff.data();
-        ptr = write_hex(data.size(), ptr);
-        *ptr++='\r';
-        *ptr++='\n';
-        ptr = std::copy(data.begin(), data.end(), ptr);
-        *ptr++='\r';
-        *ptr++='\n';
-        data = {buff.data(), std::size_t(ptr - buff.data())};
-        data = co_yield co_await _proxied->write(data);
-    }
-    co_await _proxied->write("0\r\n\r\n");
-    _eof_writen = true;
-    while (true) {
-        co_yield false;
     }
 }
 

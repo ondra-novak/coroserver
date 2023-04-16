@@ -29,7 +29,7 @@ public:
     ///Create chunked stream for reading
     static Stream read(Stream target, std::size_t limit_read);
     ///Create chunked stream for writing
-    static Stream write(Stream target, std::size_t limit_read);
+    static Stream write(Stream target, std::size_t limit_write);
     ///Create chunked stream for both reading and writing
     static Stream read_and_write(Stream target, std::size_t limit_read, std::size_t limit_write);
 
@@ -37,22 +37,13 @@ public:
 
 protected:
 
-    cocls::generator<std::string_view> _reader;
-    cocls::generator<bool, std::string_view> _writer;
-
-
-    cocls::generator<std::string_view> start_reader();
-    cocls::generator<bool, std::string_view> start_writer();
-
 
     std::size_t _limit_read;
     std::size_t _limit_write;
 
-
-
-    cocls::malleable_awaiter _awt;
-    cocls::future<std::string_view> _rdfut;
-    cocls::promise<std::string_view> _fltfut;
+    cocls::suspend_point<void> join_read(cocls::future<std::string_view> &fut) noexcept;
+    cocls::call_fn_future_awaiter<std::string_view, LimitedStream, &LimitedStream::join_read> _read_awt;
+    cocls::promise<std::string_view> _read_result;
 };
 
 
