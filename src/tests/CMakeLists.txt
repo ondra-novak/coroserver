@@ -11,6 +11,7 @@ set(testFiles
 	json.cpp
     tcp_test.cpp
     chunked_stream.cpp
+    limited_stream.cpp
 )
 
 link_libraries(
