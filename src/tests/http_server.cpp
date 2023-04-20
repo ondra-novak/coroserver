@@ -122,6 +122,43 @@ cocls::async<void> test_POST_body_expect() {
     CHECK(loaded);
     Stream body_stream = co_await req.get_body();
     CHECK_EQUAL(out, "HTTP/1.1 100 Continue\r\n\r\n");
+    req.add_date(std::chrono::system_clock::from_time_t(1651236587));
+    co_await req.send("Done");
+    CHECK(out== "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDone");
+}
+
+cocls::async<void> test_POST_body_expect_discard() {
+    std::string out;
+    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
+                            "0123456789ABCDEF\r\nExtra data"}, &out);
+                       
+    ServerRequest req(s);
+    bool loaded = co_await req.load();
+    CHECK(loaded);
+    req.add_date(std::chrono::system_clock::from_time_t(1651236587));
+    co_await req.send("Done");
+    CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDone");
+    std::string b;
+    co_await s.read_block(b, 1000);
+    CHECK_EQUAL(b, "0123456789ABCDEF\r\nExtra data");
+
+}
+
+cocls::async<void> test_POST_body_discard() {
+    std::string out;
+    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
+                            "0123456789ABCDEF\r\nExtra data"}, &out);
+                       
+    ServerRequest req(s);
+    bool loaded = co_await req.load();
+    CHECK(loaded);
+    req.add_date(std::chrono::system_clock::from_time_t(1651236587));
+    co_await req.send("Done");
+    CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDone");
+    std::string b;
+    co_await s.read_block(b, 1000);
+    CHECK_EQUAL(b, "Extra data");
+
 }
 
 
@@ -133,4 +170,6 @@ int main() {
     test_POST_body().join();    
     test_POST_body_chunked().join();    
     test_POST_body_expect().join();    
+    test_POST_body_expect_discard().join();    
+    test_POST_body_discard().join();    
 }
