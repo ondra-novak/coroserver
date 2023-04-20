@@ -79,10 +79,58 @@ cocls::async<void> test_GET_http11_infstrm() {
 }
 
 
+cocls::async<void> test_POST_body() {
+    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
+                            "0123456789ABCDEF\r\nExtra data"});
+                       
+    ServerRequest req(s);
+    bool loaded = co_await req.load();
+    CHECK(loaded);
+    Stream body_stream = co_await req.get_body();
+    std::string b;
+    co_await body_stream.read_block(b, 1000);
+    CHECK_EQUAL(b, "0123456789ABCDEF\r\n");
+    co_await s.read_block(b, 1000);
+    CHECK_EQUAL(b, "Extra data");
+}
+
+cocls::async<void> test_POST_body_chunked() {
+    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n",
+                            "8\r\n",
+                            "01234567\r",
+                            "\nA\r\n89ABCDEF\r\n\r\n",
+                            "0\r\n\r\nExtra data"});
+                       
+    ServerRequest req(s);
+    bool loaded = co_await req.load();
+    CHECK(loaded);
+    Stream body_stream = co_await req.get_body();
+    std::string b;
+    co_await body_stream.read_block(b, 1000);
+    CHECK_EQUAL(b, "0123456789ABCDEF\r\n");
+    co_await s.read_block(b, 1000);
+    CHECK_EQUAL(b, "Extra data");
+}
+
+cocls::async<void> test_POST_body_expect() {
+    std::string out;
+    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
+                            "0123456789ABCDEF\r\nExtra data"}, &out);
+                       
+    ServerRequest req(s);
+    bool loaded = co_await req.load();
+    CHECK(loaded);
+    Stream body_stream = co_await req.get_body();
+    CHECK_EQUAL(out, "HTTP/1.1 100 Continue\r\n\r\n");
+}
+
+
 int main() {
     test_GET_http10().join();
     test_GET_http10_infstrm().join();
     test_GET_http11().join();
     test_GET_http11_infstrm().join();
-
+    test_POST_body().join();    
+    test_POST_body_chunked().join();    
+    test_POST_body_expect().join();    
 }

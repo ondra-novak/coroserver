@@ -503,13 +503,13 @@ cocls::with_allocator<Alloc, cocls::async<Stream> > ServerRequest::get_body_coro
 
 
 cocls::future<Stream> ServerRequest::get_body() {
-    if (_has_body)
+    if (!_has_body) {
         return cocls::future<Stream>::set_value(LimitedStream::read(_cur_stream, 0));
+    }
     if (_expect_100_continue) {
         return get_body_coro(_coro_storage);
-    } else {
-        return cocls::future<Stream>::set_value(_body_stream);
-    }
+    } 
+    return cocls::future<Stream>::set_value(_body_stream);
 }
 
 
