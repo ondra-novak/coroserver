@@ -28,6 +28,7 @@ std::string_view val_upgrade("upgrade");
 std::string_view hdr_set_cookie("Set-Cookie");
 std::string_view hdr_sep("\r\n");
 std::string_view hdr_date("Date");
+std::string_view hdr_server("Server");
 std::string_view hdr_cookie("Cookie");
 std::string_view hdr_expect("Expect");
 std::string_view val_100_continue("100-continue");
@@ -301,16 +302,14 @@ bool HeaderMap::headers(std::string_view hdrstr, HeaderMap &hdrmap, std::string_
     auto lnsplt = splitAt(hdrstr, "\r\n");
     firstLine = lnsplt();
     if (firstLine.empty()) {
-        firstLine = splitAt("\r\n", hdrstr);
-    }
-    if (firstLine.empty()) {
         return false;
     }
     auto ln = lnsplt();
     while (!ln.empty()) {
         // An HTTP header consists of its case-insensitive name followed by a colon (:),
-        std::string_view key = splitAt(":", ln);
-        std::string_view value = trim(ln);
+        auto ddsplt = splitAt(ln,":");
+        std::string_view key = ddsplt();
+        std::string_view value = trim(ddsplt);
         if (key.empty()) return false;
         hdrmap.push_back({key,value});
         ln = lnsplt();

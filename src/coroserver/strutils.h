@@ -7,42 +7,53 @@
 
 #ifndef SRC_COROSERVER_STRUTILS_H_
 #define SRC_COROSERVER_STRUTILS_H_
+#include <ctime>
 #include <string_view>
 
 namespace coroserver {
 
-
-inline auto search_pattern(std::string_view pattern) {
-    std::basic_string<unsigned char> lps;
-    lps.resize(pattern.length());
-    unsigned char i = 1;
-    unsigned char len = 0;
-    lps[0]=0;
-    while (i < pattern.length()) {
-        if (pattern[i] == pattern[len]) {
-            len++;
-            lps[i] = len;
-            i++;
-        } else if (len != 0) {
-             len = lps[len - 1];
-        } else {
-             lps[i] = 0;
-             i++;
+class search_pattern {
+public:
+    search_pattern(std::string_view pattern):_pattern(pattern),_j(0) {
+        lps.resize(pattern.length());
+        unsigned char i = 1;
+        unsigned char len = 0;
+        lps[0]=0;
+        while (i < pattern.length()) {
+            if (pattern[i] == pattern[len]) {
+                len++;
+                lps[i] = len;
+                i++;
+            } else if (len != 0) {
+                 len = lps[len - 1];
+            } else {
+                 lps[i] = 0;
+                 i++;
+            }
         }
     }
-    return [lps = std::move(lps), j = std::size_t(0), pattern](char c) mutable {
-        while (j > 0 && pattern[j] != c)
-            j = lps[j - 1];
-        if (pattern[j] == c) j++;
+    bool operator()(char c) {
+        while (_j > 0 && _pattern[_j] != c)
+            _j = lps[_j - 1];
+        if (_pattern[_j] == c) _j++;
 
-        if (j == pattern.length()) {
-            j = 0;
+        if (_j == _pattern.length()) {
+            _j = 0;
             return true;
         }
         return false;
-    };
-}
-
+    }
+    std::size_t length() {
+        return _pattern.length();
+    }
+    void reset() {
+        _j = 0;
+    }
+protected:
+    std::string _pattern;
+    std::size_t _j;
+    std::basic_string<unsigned char> lps;
+};
 
 
 inline auto splitAt(std::string_view src, std::string_view pattern) {
@@ -88,6 +99,20 @@ inline std::string_view trim(std::string_view s) {
     }
     return s;
 }
+
+template<typename Fn>
+inline void httpDate(std::time_t tpoint, Fn &&fn) {
+     char buf[256];
+     struct tm tm;
+#ifdef _WIN32
+     gmtime_s(&tm, &tpoint);
+#else
+     gmtime_r(&tpoint, &tm);
+#endif
+     auto sz = std::strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S %Z", &tm);
+     fn(std::string_view(buf,sz));
+}
+
 
 
 }

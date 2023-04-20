@@ -236,6 +236,7 @@ extern std::string_view val_upgrade;
 extern std::string_view hdr_set_cookie;
 extern std::string_view hdr_sep;
 extern std::string_view hdr_date;
+extern std::string_view hdr_server;
 extern std::string_view hdr_cookie;
 extern std::string_view hdr_expect;
 extern std::string_view val_100_continue;

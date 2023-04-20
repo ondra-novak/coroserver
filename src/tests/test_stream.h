@@ -62,7 +62,7 @@ public:
 
             } else {
                _out->append(s);
-               return cocls::future<bool>::set_value(false);
+               return cocls::future<bool>::set_value(true);
             }
         } else {
             return cocls::future<bool>::set_value(false);

@@ -42,7 +42,7 @@ protected:
     std::size_t _limit_write;
 
     cocls::suspend_point<void> join_read(cocls::future<std::string_view> &fut) noexcept;
-    cocls::call_fn_future_awaiter<std::string_view, LimitedStream, &LimitedStream::join_read> _read_awt;
+    cocls::call_fn_future_awaiter<&LimitedStream::join_read> _read_awt;
     cocls::promise<std::string_view> _read_result;
 };
 

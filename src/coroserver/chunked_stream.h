@@ -42,7 +42,7 @@ public:
 protected:
 //write part
     cocls::suspend_point<void> join_write(cocls::future<bool> &f) noexcept;
-    cocls::call_fn_future_awaiter<bool, ChunkedStream, &ChunkedStream::join_write> _write_awt;
+    cocls::call_fn_future_awaiter<&ChunkedStream::join_write> _write_awt;
     std::string_view _data_to_write;
     std::string _new_chunk_write;
     cocls::promise<bool> _write_result;
@@ -51,7 +51,7 @@ protected:
 //read part
     enum class ReadState {r1,n1,number,r2,n2,check_empty,data,r3,n3,eof};
     cocls::suspend_point<void> join_read(cocls::future<std::string_view> &f) noexcept;
-    cocls::call_fn_future_awaiter<std::string_view, ChunkedStream, &ChunkedStream::join_read> _read_awt;
+    cocls::call_fn_future_awaiter<&ChunkedStream::join_read> _read_awt;
     cocls::promise<std::string_view> _read_result;
     ReadState _rd_state = ReadState::number;
     std::size_t _chunk_size = 0;

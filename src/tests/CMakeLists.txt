@@ -12,6 +12,7 @@ set(testFiles
     tcp_test.cpp
     chunked_stream.cpp
     limited_stream.cpp
+    http_server.cpp
 )
 
 link_libraries(
