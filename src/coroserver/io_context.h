@@ -71,7 +71,9 @@ public:
     cocls::suspend_point<bool> cancel_wait(const void *ident) override;
 
 
-
+    cocls::thread_pool &get_pool() {
+        return *_pool;
+    }
 
 protected:
     std::shared_ptr<cocls::thread_pool> _pool;
@@ -332,6 +334,20 @@ public:
 
 
 #endif
+public:
+    template<typename Fn>
+    CXX20_REQUIRES(std::invocable<Fn, Stream>)
+    cocls::future<void> tcp_server(Fn &&main_fn, std::vector<PeerName> lsn_peers,
+            std::stop_token stoptoken = {},
+            TimeoutSettings tms = {defaultTimeout, defaultTimeout}) {
+        auto gen = accept(std::move(lsn_peers),stoptoken, tms);
+        auto fn = [](cocls::generator<Stream> gen, Fn main_fn) -> cocls::async<void> {
+            while (co_await gen.next()) {
+                main_fn(std::move(gen.value()));
+            }
+        };
+        return fn(std::move(gen), std::move(main_fn));
+    }
 };
 
 }

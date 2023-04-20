@@ -24,5 +24,6 @@ enable_testing()
 include(src/cocls/library.cmake)
 include(library.cmake)
 add_subdirectory("src/tests")
+add_subdirectory("src/examples")
 add_subdirectory("version")
 
