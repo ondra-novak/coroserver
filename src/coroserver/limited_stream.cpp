@@ -60,9 +60,11 @@ cocls::suspend_point<void> LimitedStream::join_read(cocls::future<std::string_vi
 }
 
 cocls::future<bool> LimitedStream::write(std::string_view buffer) {
-    if (buffer.size() > _limit_write) return cocls::future<bool>::set_value(false);
-    _limit_write-=buffer.size();
-    return _proxied->write(buffer);
+    if (buffer.empty()) return cocls::future<bool>::set_value(true);
+    auto b = buffer.substr(0, _limit_write);
+    if (b.empty()) return cocls::future<bool>::set_value(false);
+    _limit_write-=b.size();
+    return _proxied->write(b);
 }
 
 cocls::future<bool> LimitedStream::write_eof() {

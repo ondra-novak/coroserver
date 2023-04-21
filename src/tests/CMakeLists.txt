@@ -13,6 +13,7 @@ set(testFiles
     chunked_stream.cpp
     limited_stream.cpp
     http_server.cpp
+    pathmap.cpp
 )
 
 link_libraries(

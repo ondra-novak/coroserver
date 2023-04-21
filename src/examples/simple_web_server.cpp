@@ -3,6 +3,7 @@
 #include <iostream>
 #include <coroserver/peername.h>
 #include <coroserver/http_server_request.h>
+#include <coroserver/http_server.h>
 
 using namespace coroserver;
 
@@ -25,9 +26,6 @@ cocls::async<void> co_main(Stream s) {
         }
         if (!req.keep_alive())
             break;
-    }
-    if (req.get_status()) {
-        co_await
     }
 }
 

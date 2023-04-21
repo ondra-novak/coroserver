@@ -113,6 +113,7 @@ protected:
 
 };
 
+class ReadUntilFuture;
 
 ///Generic stream
 /**

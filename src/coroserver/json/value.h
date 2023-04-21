@@ -14,6 +14,7 @@
 #include <vector>
 #include <variant>
 #include <sstream>
+#include <algorithm>
 
 namespace coroserver {
 

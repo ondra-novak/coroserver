@@ -10,7 +10,7 @@ using namespace coroserver::http;
 cocls::async<void> test_GET_http10() {
 
     std::string out;
-    auto s = TestStream<>::create({"GET /path HTTP/1.0\r\nHost: example.com\r\nX-Header: ","test\r\nX-Header2 : test2\r\n","\r\n"}, &out);
+    auto s = TestStream<50>::create({"GET /path HTTP/1.0\r\nHost: example.com\r\nX-Header: ","test\r\nX-Header2 : test2\r\n","\r\n"}, &out);
 
     ServerRequest req(s);
     bool loaded = co_await req.load();
@@ -27,7 +27,7 @@ cocls::async<void> test_GET_http10() {
 cocls::async<void> test_GET_http10_infstrm() {
 
     std::string out;
-    auto s = TestStream<>::create({"GET /path HTTP/1.0\r\nHost: example.com\r\nX-Header: ","test\r\nX-Header2 : test2\r\n","\r\n"}, &out);
+    auto s = TestStream<50>::create({"GET /path HTTP/1.0\r\nHost: example.com\r\nX-Header: ","test\r\nX-Header2 : test2\r\n","\r\n"}, &out);
 
     ServerRequest req(s);
     bool loaded = co_await req.load();
@@ -43,7 +43,7 @@ cocls::async<void> test_GET_http10_infstrm() {
 cocls::async<void> test_GET_http11() {
 
     std::string out;
-    auto s = TestStream<>::create({"GET /path HTTP/1.1\r\nHost: example.com\r\nX-Header: test\r\nX-Header2 : test2\r\n\r\n"}, &out);
+    auto s = TestStream<50>::create({"GET /path HTTP/1.1\r\nHost: example.com\r\nX-Header: test\r\nX-Header2 : test2\r\n\r\n"}, &out);
 
     ServerRequest req(s);
     bool loaded = co_await req.load();
@@ -66,7 +66,7 @@ cocls::async<void> test_GET_http11() {
 cocls::async<void> test_GET_http11_infstrm() {
 
     std::string out;
-    auto s = TestStream<>::create({"GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n"}, &out);
+    auto s = TestStream<50>::create({"GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n"}, &out);
 
     ServerRequest req(s);
     bool loaded = co_await req.load();
@@ -80,9 +80,9 @@ cocls::async<void> test_GET_http11_infstrm() {
 
 
 cocls::async<void> test_POST_body() {
-    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
+    auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"});
-                       
+
     ServerRequest req(s);
     bool loaded = co_await req.load();
     CHECK(loaded);
@@ -95,12 +95,12 @@ cocls::async<void> test_POST_body() {
 }
 
 cocls::async<void> test_POST_body_chunked() {
-    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n",
+    auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n",
                             "8\r\n",
                             "01234567\r",
                             "\nA\r\n89ABCDEF\r\n\r\n",
                             "0\r\n\r\nExtra data"});
-                       
+
     ServerRequest req(s);
     bool loaded = co_await req.load();
     CHECK(loaded);
@@ -114,9 +114,9 @@ cocls::async<void> test_POST_body_chunked() {
 
 cocls::async<void> test_POST_body_expect() {
     std::string out;
-    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
+    auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"}, &out);
-                       
+
     ServerRequest req(s);
     bool loaded = co_await req.load();
     CHECK(loaded);
@@ -129,9 +129,9 @@ cocls::async<void> test_POST_body_expect() {
 
 cocls::async<void> test_POST_body_expect_discard() {
     std::string out;
-    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
+    auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"}, &out);
-                       
+
     ServerRequest req(s);
     bool loaded = co_await req.load();
     CHECK(loaded);
@@ -146,9 +146,9 @@ cocls::async<void> test_POST_body_expect_discard() {
 
 cocls::async<void> test_POST_body_discard() {
     std::string out;
-    auto s = TestStream<>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
+    auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"}, &out);
-                       
+
     ServerRequest req(s);
     bool loaded = co_await req.load();
     CHECK(loaded);
@@ -167,9 +167,9 @@ int main() {
     test_GET_http10_infstrm().join();
     test_GET_http11().join();
     test_GET_http11_infstrm().join();
-    test_POST_body().join();    
-    test_POST_body_chunked().join();    
-    test_POST_body_expect().join();    
-    test_POST_body_expect_discard().join();    
-    test_POST_body_discard().join();    
+    test_POST_body().join();
+    test_POST_body_chunked().join();
+    test_POST_body_expect().join();
+    test_POST_body_expect_discard().join();
+    test_POST_body_discard().join();
 }

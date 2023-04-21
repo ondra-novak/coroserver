@@ -1,5 +1,6 @@
 #include "http_common.h"
 #include "strutils.h"
+#include <algorithm>
 
 namespace coroserver {
 

@@ -185,6 +185,7 @@ public:
 
     static std::string server_name;
 
+
 protected:
 
     struct OutputHdrs {
@@ -200,8 +201,6 @@ protected:
         std::size_t _ctlen;
     };
 
-    stackful_storage _coro_storage;
-
     Stream _cur_stream;
 
     bool parse_request(std::string_view req_header);
@@ -216,6 +215,7 @@ protected:
     Method _method = Method::unknown;
     Version _version = Version::unknown;
     std::string_view _path;
+    std::string_view _vpath;
     std::string_view _host;
     std::string_view _status_message;
     bool _keep_alive = false;
@@ -228,17 +228,30 @@ protected:
     Stream _body_stream;
 
 
+    cocls::suspend_point<void> load_coro(std::string_view &data, cocls::promise<bool> &res);
+    cocls::future_conv<&ServerRequest::load_coro> _load_awt;
+    std::size_t _search_hdr_state = 0;
 
-    template<typename Alloc>
-    cocls::with_allocator<Alloc, cocls::async<Stream> > get_body_coro(Alloc &);
-    template<typename Alloc>
-    cocls::with_allocator<Alloc, cocls::async<Stream> > send_coro(Alloc &);
-    template<typename Alloc>
-    cocls::with_allocator<Alloc, cocls::async<void> > send_coro(Alloc &, std::string_view body);
-    template<typename Alloc>
-    cocls::with_allocator<Alloc, cocls::async<void> > discard_body_coro(Alloc &);
-    template<typename Alloc>
-    cocls::with_allocator<Alloc, cocls::async<bool> > load_coro(Alloc &);
+    Stream get_body_coro(bool &res);
+    cocls::future_conv<&ServerRequest::get_body_coro> _get_body_awt;
+
+
+    cocls::future<bool> discard_body_intr();
+
+    cocls::suspend_point<void> discard_body_coro(std::string_view &data, cocls::promise<bool> &res);
+    cocls::future_conv<&ServerRequest::discard_body_coro> _discard_body_awt;
+
+    cocls::suspend_point<void> send_resp(bool &, cocls::promise<Stream> &res);
+    cocls::future_conv<&ServerRequest::send_resp> _send_resp_awt;
+
+    cocls::suspend_point<void> send_resp_body(Stream &s, cocls::promise<void> &res);
+    cocls::future_conv<&ServerRequest::send_resp_body> _send_resp_body_awt;
+    std::string_view _send_body_data;
+
+    static void bool2void(bool &) {}
+    cocls::future_conv<bool2void> _bool2void_awt;
+
+
 
     std::string_view prepare_output_headers();
 
