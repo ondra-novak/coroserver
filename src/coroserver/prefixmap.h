@@ -120,6 +120,18 @@ public:
         return res;
     }
 
+    T *find_exact(std::string_view s) {
+        auto hash = fnv1a();
+        std::size_t h = 0;
+        for (char c: s) h = hash(c);
+        auto r = _map.equal_range(h);
+        auto iter = std::find_if(r.first, r.second, [&](const auto &v) {
+            return v.second.path == s;
+        });
+        if (iter == r.second) return nullptr;
+        else return &iter->second.payload;
+    }
+
 protected:
     Map _map;
     std::size_t _maxlen = 0;

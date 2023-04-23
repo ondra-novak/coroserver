@@ -12,6 +12,7 @@ add_library(coroserver
 	json/json.cpp
 	http_common.cpp
 	http_server_request.cpp
+	http_server.cpp
 )
 add_dependencies(coroserver coroserver_version)
 

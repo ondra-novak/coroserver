@@ -21,7 +21,8 @@ cocls::async<void> test_GET_http10() {
     CHECK(req.keep_alive()== false);
     CHECK(req.get_version() == Version::http1_0);
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
-    co_await req.send(ContentType::text_html_utf8, "<html><body>It's works</body></html>");
+    req.content_type(ContentType::text_html_utf8);
+    co_await req.send("<html><body>It's works</body></html>");
     CHECK(out == "HTTP/1.0 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 36\r\nServer: CoroServer 1.0 (C++20)\r\nConnection: close\r\n\r\n<html><body>It's works</body></html>");
 }
 cocls::async<void> test_GET_http10_infstrm() {
@@ -36,7 +37,7 @@ cocls::async<void> test_GET_http10_infstrm() {
     Stream x = co_await req.send();
     co_await x.write("<html><body>It's works</body></html>");
     co_await x.write_eof();
-    CHECK(out == "HTTP/1.0 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n<html><body>It's works</body></html>");
+    CHECK(out == "HTTP/1.0 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n<html><body>It's works</body></html>");
 
 }
 
@@ -59,7 +60,8 @@ cocls::async<void> test_GET_http11() {
        .last_modified(std::chrono::system_clock::from_time_t(1651236588))
        ("X-Test",123);
 
-    co_await req.send(ContentType::text_html_utf8, "<html><body>It's works</body></html>");
+    req.content_type(ContentType::text_html_utf8);
+    co_await req.send("<html><body>It's works</body></html>");
     CHECK(out == "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nCache-Control: max-age=1234\r\nX-Accel-Buffering: no\r\nLast-Modified: Fri, 29 Apr 2022 12:49:48 GMT\r\nX-Test: 123\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 36\r\nServer: CoroServer 1.0 (C++20)\r\n\r\n<html><body>It's works</body></html>");
 }
 
@@ -75,7 +77,7 @@ cocls::async<void> test_GET_http11_infstrm() {
     Stream x = co_await req.send();
     co_await x.write("<html><body>It's works</body></html>");
     co_await x.write_eof();
-    CHECK(out == "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\nTransfer-Encoding: chunked\r\n\r\n24\r\n<html><body>It's works</body></html>\r\n0\r\n\r\n");
+    CHECK(out == "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n24\r\n<html><body>It's works</body></html>\r\n0\r\n\r\n");
 }
 
 
@@ -124,7 +126,7 @@ cocls::async<void> test_POST_body_expect() {
     CHECK_EQUAL(out, "HTTP/1.1 100 Continue\r\n\r\n");
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
     co_await req.send("Done");
-    CHECK(out== "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDone");
+    CHECK(out== "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
 }
 
 cocls::async<void> test_POST_body_expect_discard() {
@@ -137,7 +139,7 @@ cocls::async<void> test_POST_body_expect_discard() {
     CHECK(loaded);
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
     co_await req.send("Done");
-    CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDone");
+    CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
     std::string b;
     co_await s.read_block(b, 1000);
     CHECK_EQUAL(b, "0123456789ABCDEF\r\nExtra data");
@@ -154,7 +156,7 @@ cocls::async<void> test_POST_body_discard() {
     CHECK(loaded);
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
     co_await req.send("Done");
-    CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nDone");
+    CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
     std::string b;
     co_await s.read_block(b, 1000);
     CHECK_EQUAL(b, "Extra data");

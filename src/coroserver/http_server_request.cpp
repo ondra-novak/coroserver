@@ -356,11 +356,9 @@ cocls::future<void> ServerRequest::send(std::string_view body) {
     //return send_coro(_coro_storage, body);
 }
 
-
-
-cocls::future<void> ServerRequest::send(ContentType ct, std::string_view body) {
-    content_type(ct);
-    return send(body);
+cocls::future<void> ServerRequest::send(std::ostringstream &body) {
+    _user_buffer = body.str();
+    return send(std::string_view(_user_buffer));
 }
 
 cocls::suspend_point<void> ServerRequest::send_resp(bool &st, cocls::promise<Stream> &res) {
@@ -398,7 +396,7 @@ std::string_view ServerRequest::prepare_output_headers() {
         add_date(std::chrono::system_clock::now());
     }
     if (!_output_headers_summary._has_ctxtp) {
-        add_header(strtable::hdr_content_type, "text/plain; charset=utf-8");
+        add_header(strtable::hdr_content_type, strContentType(ContentType::binary));
     }
     //neither te, no ctxlen set
     if (!_output_headers_summary._has_te && !_output_headers_summary._has_ctlen) {

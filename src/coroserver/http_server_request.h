@@ -59,6 +59,8 @@ public:
 
     ///retrieve set status
     int get_status() const {return _status_code;}
+
+    std::string_view get_status_message() const {return _status_message;}
     ///set status
     ServerRequest& set_status(int status);
     ///set status and status message
@@ -175,17 +177,91 @@ public:
      */
     cocls::future<Stream> get_body();
     ///Sends response (status code is set to 200 in case, that status code is not set)
+    /**
+     * @param body body to send as string. Note that underlying string must remain
+     * valid until the function is complete. Otherwise, convert content to string in
+     * the argument
+     *
+     *
+     * @return future for completion
+     *
+     * @code
+     * cocls::asyn<void> coro(ServerRequest &req) {
+     *      std::string_view text("text to send");
+     *      co_await req.send(text);
+     * }
+     *
+     * cocls::future<void> not_coro(ServerRequest &req) {
+     *      std::string_view text("text to send");
+     *      return req.send(std::string(text));
+     * }
+     * @endcode
+     *
+     */
     cocls::future<void> send(std::string_view body);
-    ///Sends response (status code is set to 200 in case, that status code is not set)
-    cocls::future<void> send(ContentType ct, std::string_view body);
     ///Send response and retrieve stream to send response body
     cocls::future<Stream> send();
+    ///Send response prepared in content of std::ostringstream
+    /**
+     * @param body in stringstream. Function moves the content to the internal buffer
+     * and then calls send(<string>), so the reference to parameter don't need to be kept
+     * until the completion
+     * @return
+     */
+    cocls::future<void> send(std::ostringstream &body);
 
+    ///Send the string
+    /**
+     * @param body string to send, must be passed as rvalue reference
+     * The string is stored in a internal buffer, so you don't
+     * need to wait for completion
+     * @return
+     *
+     * @code
+     * cocls::future<void> not_coro(ServerRequest &req) {
+     *      std::string_view text("text to send");
+     *      return req.send(std::string(text));
+     * }
+     * @endcode
+     */
+    cocls::future<void> send(std::string &&body) {
+        _user_buffer = std::move(body);
+        return send(std::string_view(_user_buffer));
+    }
+
+    ///Send C-like string
+    /**
+     * @param x string to send. Note that C-like strings are always
+     * considered as statically allocated. For dynamically allocated
+     * strings you need to use std::string.
+     * For this purpose, the pointer and content where pointer
+     * points must remain valid until function completes
+     *
+     * @return
+     */
+    cocls::future<void> send(const char *x) {
+        return send(std::string_view(x));
+    }
+
+    ///Send file
+    /**
+     * @param path pathname to file to send
+     * @param use_chunked set true to use chunked format (otherwise it is used content-length)
+     * @note it is possible to set headers before. You should set
+     * Content-Type, catching, last-modified, etc
+     * @return a future
+     */
     cocls::future<bool> send_file(const std::string &path, bool use_chunked = false);
 
+    ///Contains name of server (passed to the response)
     static std::string server_name;
 
 
+    ///a user bufer
+    /** You can store anything there, however, some function
+     * can overwrite it (send() functions)
+     */
+    std::string _user_buffer;
 protected:
 
     struct OutputHdrs {
@@ -223,7 +299,6 @@ protected:
     bool _has_body = false;
     bool _body_processed = false;
     bool _headers_sent = false;
-    std::string _response_line;
 
     Stream _body_stream;
 
