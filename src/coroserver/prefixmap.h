@@ -60,7 +60,7 @@ public:
     void insert(std::string s, T payload) {
         auto hash = fnv1a();
         std::size_t h = 0;
-        for (char c: s) h = fnv1a(c);
+        for (char c: s) h = hash(c);
         _map.emplace(h, Value {s, payload});
         _maxlen = std::max(_maxlen, s.length());
     }
@@ -87,6 +87,7 @@ public:
         void pop() {
             --_count;
         }
+        std::size_t size() const {return _count;}
     };
 
 
@@ -104,7 +105,7 @@ public:
             for (typename Map::const_iterator iter = r.first; iter != r.second; ++iter) {
                 const Value &v = iter->second;
                 if  (ss == v.path) {
-                    res.push_back(v);
+                    res.push(v);
                 }
             }
         };
@@ -114,8 +115,9 @@ public:
             char c = s[i];
             auto h = hash(c);
             auto r = _map.equal_range(h);
-            if (r.first != r.second) update_res(r, s.substr(0, i));
+            if (r.first != r.second) update_res(r, s.substr(0, i+1));
         }
+        return res;
     }
 
 protected:
