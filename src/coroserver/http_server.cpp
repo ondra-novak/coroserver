@@ -85,26 +85,6 @@ void Server::set_handler(std::string_view path, std::initializer_list<Method> me
     }
 }
 
-void Server::set_handler(std::string_view path, std::size_t method_bitvector, Handler h) {
-    std::unique_lock lk(_mx);
-    MethodMap *mm = _endpoints.find_exact(path);
-    if (mm) {
-        for (int i = 0; i < static_cast<int>(Method::unknown); i++) {
-            if (method_bitvector & (1<<i)) {
-                mm->set(static_cast<Method>(i), h);
-            }
-        }
-    } else {
-        MethodMap smm;
-        for (int i = 0; i < static_cast<int>(Method::unknown); i++) {
-            if (method_bitvector & (1<<i)) {
-                smm.set(static_cast<Method>(i), h);
-            }
-        }
-        _endpoints.insert(std::string(path), std::move(smm));
-    }
-
-}
 
 void Server::select_handler(ServerRequest &req, cocls::future<void> &fut) {
     //everything under shared lock
@@ -121,7 +101,7 @@ void Server::select_handler(ServerRequest &req, cocls::future<void> &fut) {
     //process results until all removed
     while  (!hfnd.empty()) {
         //get top most endpoint
-        auto ep = hfnd.top();
+        const auto &ep = hfnd.top();
         //pop it (however it is valid operation, has the reference is still exists)
         hfnd.pop();
         //calculate vpath
@@ -160,7 +140,7 @@ void Server::select_handler(ServerRequest &req, cocls::future<void> &fut) {
         //search for handler for modified path
         auto hfnd2 = _endpoints.find(p);
         //we found handler, handler can handle selected method or general method
-        if (!hfnd2.empty() && (!hfnd2.top().payload.get(method) || !hfnd2.top().payload.get(Method::not_set))) {
+        if (!hfnd2.empty() && (hfnd2.top().payload.get(method) || hfnd2.top().payload.get(Method::not_set))) {
             req.location(p);
             //Use 301 for GET, otherwise 307, as 308 is not well standardized
             req.set_status(method==Method::GET?301:307);

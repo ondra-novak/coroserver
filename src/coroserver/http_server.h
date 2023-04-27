@@ -31,8 +31,14 @@ public:
         public:
             Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
             virtual cocls::future<void> call(ServerRequest &req, std::string_view vpath) const noexcept {
+                using RetVal = decltype(_fn(req, vpath));
                 try {
-                    return _fn(req, vpath);
+                    if constexpr(std::is_void_v<RetVal>) {
+                        _fn(req, vpath);
+                        return cocls::future<void>::set_value();
+                    } else {
+                        return _fn(req, vpath);
+                    }
                 } catch (...) {
                     return cocls::future<void>::set_exception(std::current_exception());
                 }
@@ -50,8 +56,14 @@ public:
         public:
             Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
             virtual cocls::future<void> call(ServerRequest &req, std::string_view ) const noexcept {
+                using RetVal = decltype(_fn(req));
                 try {
-                    return _fn(req);
+                    if constexpr(std::is_void_v<RetVal>) {
+                        _fn(req);
+                        return cocls::future<void>::set_value();
+                    } else {
+                        return _fn(req);
+                    }
                 } catch (...) {
                     return cocls::future<void>::set_exception(std::current_exception());
                 }
@@ -156,6 +168,16 @@ public:
         return serve(std::move(tcp_server),[](TraceEvent, ServerRequest &) {});
     }
 
+    template<typename ContextIO, typename Tracer>
+    cocls::future<void> run(ContextIO ctx, std::vector<PeerName> ports, Tracer tracer) {
+        return serve(ctx.accept(), tracer);
+    }
+
+    template<typename ContextIO>
+    cocls::future<void> run(ContextIO ctx, std::vector<PeerName> ports) {
+        return serve(ctx.accept(),[](TraceEvent, ServerRequest &) {});
+    }
+
     ///Register a handler to a given path
     /**
      * @param path Path to register. Note that path is always starts with /. To register
@@ -182,6 +204,15 @@ public:
      */
     void set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h);
 
+    cocls::future<void> serve_req(Stream s) {
+        return serve_req_coro(std::move(s), [](TraceEvent, ServerRequest &) {});
+    }
+    template<typename Tracer>
+    cocls::future<void> serve_req(Stream s, Tracer tracer) {
+        return serve_req_coro(std::move(s), std::move(tracer));
+    }
+
+
 
 
 protected:
@@ -205,13 +236,14 @@ protected:
     cocls::async<void> serve_gen(cocls::generator<Stream> tcp_server, Tracer tracer) {
         std::lock_guard _(*this);
         while (co_await tcp_server.next()) {
-            serve_req(std::move(tcp_server.value()), tracer).detach();
+            serve_req_coro(std::move(tcp_server.value()), tracer).detach();
         }
         co_return;
     }
 
+
     template<typename Tracer>
-    cocls::async<void> serve_req(Stream s, Tracer tracer) {
+    cocls::async<void> serve_req_coro(Stream s, Tracer tracer) {
         //lock this object - count request - this is called in context of serve()
         std::lock_guard _(*this);
         //prepare server request
@@ -219,7 +251,7 @@ protected:
         //report that request has been opened
         tracer(TraceEvent::open, req);
         //load requests from the stream - return false if error
-        while (req.load()) {
+        while (co_await req.load()) {
             //future to await handler
             cocls::future<void> fut;
             try {
@@ -298,53 +330,33 @@ protected:
 
     cocls::future<void> send_error_page(ServerRequest &req);
     void select_handler(ServerRequest &req, cocls::future<void> &fut);
-
 };
 
-#if 0
+template<typename Output>
+class DefaultLogger {
 
-class MappedHandler {
+    struct Content {
+        std::mutex _mx;
+        Output _output;
+        Content (Output &&out):_output(out) {}
+        void send_out(std::string_view text) {
+            std::lock_guard _(_mx);
+            _output(text);
+        }
+    };
+
+
+
 public:
-    MappedHandler(Handler handler, std::string_view vpath)
-        :_handler(handler)
-        ,vpath(vpath) {}
-    cocls::future<void> operator()(ServerRequest &req) {
-        return _handler(req, vpath);
-    }
-protected:
-    Handler _handler;
-    std::string_view vpath;
-};
-
-template<typename Mapper>
-class Server {
-public:
-    Server(const Mapper &mapper):_mapper(mapper) {}
-
-
-    template<typename Tracer>
-    CXX20_REQUIRES(std::invocable<Tracer, TraceEvent, ServerRequest &>)
-    cocls::future<void> serve(cocls::generator<Stream> tcp_server, Tracer tracer) {
-        return [&](cocls::promise<void> prom) {
-            _exit_promise = std::move(prom);
-            serve_gen(std::move(tcp_server), std::move(tracer)).detach();
-        };
-    }
-
-
+    DefaultLogger(Output output):_ctx(std::make_shared<Content>(std::forward<Output>(output))) {}
+    DefaultLogger(const DefaultLogger &lg):_ctx(lg._ctx) {}
 
 protected:
-    const Mapper &_mapper;
-    cocls::promise<void> _exit_promise;
-    std::atomic<int> _requests = 0;
-
-
-
-
+    std::shared_ptr<Content> _ctx;
+    std::string _buffer;
 
 };
 
-#endif
 
 }
 

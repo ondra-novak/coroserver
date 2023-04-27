@@ -14,6 +14,7 @@ set(testFiles
     limited_stream.cpp
     http_server.cpp
     prefixmap.cpp
+    named_enum.cpp
 )
 
 link_libraries(

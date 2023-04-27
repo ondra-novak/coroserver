@@ -7,6 +7,7 @@
 
 #ifndef SRC_COROSERVER_PREFIXMAP_H_
 #define SRC_COROSERVER_PREFIXMAP_H_
+#include <algorithm>
 #include <array>
 #include <string>
 #include <unordered_map>
@@ -83,7 +84,7 @@ public:
             if (_count < 10) _nodes[_count++] = &v;
         }
         bool empty() const {return _count == 0;}
-        const Value &top() const {return *_nodes[_count];}
+        const Value &top() const {return *_nodes[_count-1];}
         void pop() {
             --_count;
         }

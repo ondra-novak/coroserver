@@ -30,6 +30,7 @@ ServerRequest::~ServerRequest() {
 
 cocls::future<bool> ServerRequest::load() {
     _status_code = 0;
+    _status_message = {};
     _search_hdr_state = 0;
     _body_processed = false;
     _headers_sent = false;
@@ -65,7 +66,7 @@ bool ServerRequest::parse_request(std::string_view req_header) {
     std::string_view first_line;
     if (!HeaderMap::headers(req_header, _req_headers, first_line)) {
         //failed to load headers, return false
-        _status_code = 400; //BAD REQUEST
+        set_status(400); //BAD REQUEST
         return false;
     }
 
@@ -74,7 +75,7 @@ bool ServerRequest::parse_request(std::string_view req_header) {
     std::string_view str_path = splt();
     std::string_view str_vers = splt();
     if (splt || str_method.empty() || str_vers.empty() || str_path.empty()) {
-        _status_code = 400;
+        set_status(400);
         return false;
     }
 
@@ -82,7 +83,7 @@ bool ServerRequest::parse_request(std::string_view req_header) {
     _method = strMethod(str_method);
     _vpath = _path = str_path;
     if (_method == Method::unknown || _version == Version::unknown) {
-        _status_code = 400;
+        set_status(400);
         return false;
     }
 
@@ -115,7 +116,7 @@ bool ServerRequest::parse_headers() {
         if (hv == val_100_continue && _method != Method::GET && _method != Method::HEAD) {
             _expect_100_continue = true;
         } else {
-            _status_code = 417;
+            set_status(417);
             return false;
         }
     }
@@ -124,12 +125,12 @@ bool ServerRequest::parse_headers() {
         //for GET or HEAD neither content length, nor transfer encoding is allowed
         hv = _req_headers[hdr_content_length];
         if (hv.has_value()) {
-            _status_code = 400;
+            set_status(400);
             return false;
         }
         hv = _req_headers[hdr_transfer_encoding];
         if (hv.has_value()) {
-            _status_code = 400;
+            set_status(400);
             return false;
         }
         //no stream
@@ -143,7 +144,7 @@ bool ServerRequest::parse_headers() {
         hv = _req_headers[hdr_transfer_encoding];
         //transfer encoding is not allowed here
         if (hv.has_value()) {
-            _status_code = 400;
+            set_status(400);
             return false;
         }
         if (len) {
@@ -161,7 +162,7 @@ bool ServerRequest::parse_headers() {
             _body_stream = ChunkedStream::read(_cur_stream);
             return true;
         } else {
-            _status_code = 501;
+            set_status(501);
             return false;
         }
     }
