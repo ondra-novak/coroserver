@@ -12,6 +12,7 @@ PeerName MemStream::get_source() const {
 
 cocls::future<std::string_view> MemStream::read() {
     std::string_view data = read_putback_buffer();
+    _cntr.read+=data.size();
     return cocls::future<std::string_view>::set_value(data);
 }
 
@@ -21,6 +22,7 @@ std::string_view MemStream::read_nb() {
 
 cocls::future<bool> MemStream::write(std::string_view buffer) {
     if (_write_closed) return cocls::future<bool>::set_value(false);
+    _cntr.write+=buffer.size();
     std::copy(buffer.begin(), buffer.end(), std::back_inserter(_output_buff));
     return cocls::future<bool>::set_value(true);
 }
@@ -83,6 +85,9 @@ bool MemStream::is_read_timeout() const
     return false;
 }
 
+MemStream::Counters MemStream::get_counters() const noexcept {
+    return _cntr;
+}
 
 }
 

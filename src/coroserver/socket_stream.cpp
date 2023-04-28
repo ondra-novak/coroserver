@@ -26,6 +26,7 @@ cocls::generator<std::string_view> SocketStream::start_read() {
             _read_buffer.resize(_new_buffer_size);
             int r = ::recv(_h, _read_buffer.data(), _read_buffer.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
             if (r > 0) {
+                _cntr.read+=r;
                 std::size_t sz = static_cast<std::size_t>(r);
                 data = std::string_view(_read_buffer.data(), sz);
                 bool was_full = sz == _read_buffer.size();
@@ -74,6 +75,7 @@ std::string_view SocketStream::read_nb() {
     int r = ::recv(_h, _read_buffer.data(), _read_buffer.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
     if (r >= 0) {
         _is_eof = r == 0;
+        _cntr.read+=r;
         buff = std::string_view(_read_buffer.data(), r);
         return buff;
     } else {
@@ -115,6 +117,7 @@ cocls::generator<bool, std::string_view> SocketStream::start_write() {
         while (!_is_closed && !buff.empty()) {
             int r = ::send(_h, buff.data(), buff.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
             if (r >= 0) {
+                _cntr.write+=r;
                 buff = buff.substr(r);
                 _is_closed = r == 0;
             } else {
@@ -139,6 +142,10 @@ cocls::generator<bool, std::string_view> SocketStream::start_write() {
         }
         buff = co_yield !_is_closed;
     }
+}
+
+SocketStream::Counters SocketStream::get_counters() const noexcept {
+    return _cntr;
 }
 
 }

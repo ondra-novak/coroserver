@@ -23,15 +23,19 @@ StaticPage::StaticPage(std::filesystem::path document_root, std::string index_ht
 
 cocls::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view path) const {
     auto p = _doc_root;
-
+    std::string decoded;
+    auto sep = path.find('?');
+    if (sep != path.npos) path = path.substr(0,sep);
     if (path.empty()) p/=_index_html;
     else {
         auto splt = splitAt(path, "/");
         while (splt) {
             std::string_view n = splt();
-            if (n.empty() || n == ".") continue;
-            if (n == "..") return cocls::future<bool>::set_value();
-            p /= n;
+            if (n.empty() || n== ".") continue;
+            if (n== "..") return cocls::future<bool>::set_value();
+            decoded.clear();
+            url::decode(n, [&](char c){decoded.push_back(c);});
+            p /= decoded;
         }
     }
 

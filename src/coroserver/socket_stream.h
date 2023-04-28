@@ -30,10 +30,12 @@ public:
     virtual cocls::future<bool> write(std::string_view buffer) override;
     virtual cocls::future<bool> write_eof() override;
     virtual void shutdown() override;
+    virtual Counters get_counters() const noexcept override;
 
 protected:
     SocketSupport _ctx;
     SocketHandle _h;
+    Counters _cntr;
     cocls::generator<std::string_view> _reader;
     cocls::generator<bool, std::string_view> _writer; //writer
 

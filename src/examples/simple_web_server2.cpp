@@ -6,30 +6,6 @@
 #include <coroserver/http_static_page.h>
 
 using namespace coroserver;
-#if 0
-cocls::async<void> co_main(Stream s) {
-    http::ServerRequest req(s);
-    while (co_await req.load()) {
-        if (req.allow({http::Method::GET,http::Method::HEAD})) {
-            std::string path(req.url_decode(req.get_path().substr(1)));
-            req.content_type_from_extension(path);
-            if (!co_await req.send_file(path)) {
-                req.set_status(404);
-                req.content_type(http::ContentType::text_plain_utf8);
-                co_await req.send("Not found");
-                std::cout << "Not found " << path << std::endl;
-            } else {
-                std::cout << "Served " << path << std::endl;
-            }
-        } else{
-            co_await req.send("");
-        }
-        if (!req.keep_alive())
-            break;
-    }
-}
-
-#endif
 
 int main() {
 

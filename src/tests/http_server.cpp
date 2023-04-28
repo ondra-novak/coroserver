@@ -211,7 +211,17 @@ void test_server() {
     CHECK(c2);
 }
 
+void testHeaderParser() {
+
+    http::ForwardedHeader f("for=12.34.56.78; by=\"aaa;bbb\"; proto = https; proto = \"http\"");
+    CHECK_EQUAL(f.for_client, "12.34.56.78");
+    CHECK_EQUAL(f.by, "aaa;bbb");
+    CHECK_EQUAL(f.proto, "https");
+
+}
+
 int main() {
+    testHeaderParser();
     test_GET_http10().join();
     test_GET_http10_infstrm().join();
     test_GET_http11().join();

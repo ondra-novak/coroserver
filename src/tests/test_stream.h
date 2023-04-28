@@ -46,6 +46,7 @@ public:
         if (_data.empty()) return {};
         _tmp = std::move(_data.front());
         _data.pop();
+        _cntr.read+=_tmp.size();
         return _tmp;
     }
     virtual cocls::future<bool> write(std::string_view s) override {
@@ -54,6 +55,7 @@ public:
                 return [&](auto promise) {
                     std::thread thr([this,s,promise = std::move(promise)]() mutable {
                         std::this_thread::sleep_for(std::chrono::milliseconds(async_delay_ms));
+                        _cntr.write+=s.size();
                         _out->append(s);
                         promise(true);
                     });
@@ -61,6 +63,7 @@ public:
                 };
 
             } else {
+                _cntr.write+=s.size();
                _out->append(s);
                return cocls::future<bool>::set_value(true);
             }
@@ -79,6 +82,11 @@ public:
     }
     virtual void shutdown() override {}
 
+    virtual Counters get_counters() const noexcept override  {
+        return _cntr;
+    }
+
+
     static coroserver::Stream create(std::vector<std::string> data, std::string *out = nullptr) {
         return coroserver::Stream(std::make_shared<TestStream>(std::move(data), out));
     }
@@ -87,6 +95,8 @@ protected:
     std::string _tmp;
     std::string *_out;
     std::queue<std::string> _data;
+    Counters _cntr;
+
 };
 
 

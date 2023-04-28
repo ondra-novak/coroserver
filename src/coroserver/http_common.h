@@ -2,6 +2,7 @@
 #ifndef SRC_USERVER_HTTP_COMMON_H_
 #define SRC_USERVER_HTTP_COMMON_H_
 #include "static_lookup.h"
+#include "strutils.h"
 #include <cctype>
 #include <charconv>
 #include <optional>
@@ -194,6 +195,49 @@ public:
     static StatusCodeMap instance;
 };
 
+struct ForwardedHeader{
+    ///specifies ID proxy who performs forwarding
+    std::string_view by;
+    ///specifies IP address of client connected to proxy
+    std::string_view for_client;
+    ///specifies original host
+    std::string_view host;
+    ///specifies original protocol
+    std::string_view proto;
+
+    ForwardedHeader(std::string_view text) {
+
+        constexpr StaticLookupTable<int, std::string_view,4> items({
+            {1, "by"},
+            {2, "for"},
+            {3, "host"},
+            {4, "proto"}
+        });
+
+        auto splt = splitSeparated(text, ",;");
+        std::string_view token = splt();
+        while (!token.empty()) {
+            auto kpos = token.find('=');
+            if (kpos != token.npos) {
+                std::string_view key = trim(token.substr(0,kpos));
+                std::string_view value = trim(token.substr(kpos+1));
+                if (!value.empty() && value.front() == '"' && value.back() == '"') {
+                    value = value.substr(1, value.length()-2);
+                }
+                switch (items[key]) {
+                    case 1: if (by.empty()) by = value;break;
+                    case 2: if (for_client.empty()) for_client= value;break;
+                    case 3: if (host.empty()) host = value;break;
+                    case 4: if (proto.empty()) proto = value;break;
+                    default:break;
+                }
+            }
+            token = splt();
+        }
+    }
+
+};
+
 
 namespace strtable {
 
@@ -226,6 +270,7 @@ extern std::string_view hdr_origin;
 extern std::string_view hdr_pragma;
 extern std::string_view hdr_user_agent;
 extern std::string_view hdr_x_forwarded_for;
+extern std::string_view hdr_forwarded;
 extern std::string_view hdr_x_forwarded_host;
 extern std::string_view hdr_x_forwarded_proto;
 extern std::string_view hdr_front_end_https;

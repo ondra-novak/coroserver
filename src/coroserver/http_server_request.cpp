@@ -40,6 +40,7 @@ cocls::future<bool> ServerRequest::load() {
     _output_headers.reserve(256);
     _output_headers.resize(status_response_max_len);
     _output_headers_summary = {};
+    _url_cache.clear();
     return _load_awt << [&]{return _cur_stream.read();};
 }
 
@@ -297,23 +298,26 @@ bool ServerRequest::allow(const std::initializer_list<Method> &methods) {
     return false;
 }
 
-std::string ServerRequest::get_url(bool secure) const {
-    std::string ret;
-    bool ws =false;
-    auto wshdr = operator[](strtable::hdr_upgrade);
-    if (wshdr.has_value()) {
-        strIEqual eq;
-        if (eq(wshdr, strtable::val_websocket)) ws = true;
+std::string_view ServerRequest::get_url() const {
+    if (_url_cache.empty()) {
+        ForwardedHeader fwhdr(_req_headers[strtable::hdr_forwarded]);
+        bool secure = fwhdr.proto == "https";
+        bool ws =false;
+        auto wshdr = operator[](strtable::hdr_upgrade);
+        if (wshdr.has_value()) {
+            strIEqual eq;
+            if (eq(wshdr, strtable::val_websocket)) ws = true;
+        }
+        std::string_view p = ws?(secure?"wss":"ws"):(secure?"https":"http");
+        std::string_view h = get_host();
+        std::string_view u = get_path();
+        _url_cache.reserve(p.size()+h.size()+u.size()+3);
+        _url_cache.append(p);
+        _url_cache.append("://");
+        _url_cache.append(h);
+        _url_cache.append(u);
     }
-    std::string_view p = ws?(secure?"wss":"ws"):(secure?"https":"http");
-    std::string_view h = get_host();
-    std::string_view u = get_path();
-    ret.reserve(p.size()+h.size()+u.size()+3);
-    ret.append(p);
-    ret.append("://");
-    ret.append(h);
-    ret.append(u);
-    return ret;
+    return _url_cache;
 
 }
 

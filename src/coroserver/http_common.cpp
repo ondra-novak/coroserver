@@ -40,6 +40,7 @@ std::string_view hdr_origin("Origin");
 std::string_view hdr_pragma("Pragma");
 std::string_view hdr_user_agent("User-Agent");
 std::string_view hdr_x_forwarded_for("X-Forwarded-For");
+std::string_view hdr_forwarded("Forwarded");
 std::string_view hdr_x_forwarded_host("X-Forwarded-Host");
 std::string_view hdr_x_forwarded_proto("X-Forwarded-Proto");
 std::string_view hdr_front_end_https("Front-End-Https");

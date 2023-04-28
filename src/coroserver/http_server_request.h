@@ -111,12 +111,22 @@ public:
     bool allow(const std::initializer_list<Method> &methods);
     ///calculates absolute url
     /**
-     * @param secure set true if connection is considered secure, which enforces 'https'.
-     * Otherwise, function can detect, whether connection is secure.
-     * If the connection is websocket, it uses 'ws' and 'wss'
-     * @return
+     * @return whole url calculated from headers
+     *
+     * @note To real url depends on how proxy is set up. So the result
+     * could be unusable if there is some sort of url overwrite.
+     *
+     * The coroserver is written to minimalize need of overwrite
+     * on the proxy, so it is recommended to pass requests without
+     * a change.
+     *
+     * It is also required to pass properly Forwarded header to
+     * determine whether connection is secure or not. The proxy
+     * should also pass correct Host (not Forwarded: host=, which
+     * is ignored).
+     *
      */
-    std::string get_url(bool secure) const;
+    std::string_view get_url() const;
 
     ///returns true, if the headers has been already sent
     /**
@@ -149,9 +159,14 @@ public:
         return !_body_processed && !_headers_sent && _status_code == 0;
     }
 
+
     ///Determines whether headers has been already sent, so further changes to headers has no effect
     bool headers_sent() const {
         return _headers_sent;
+    }
+
+    auto get_counters() const {
+        return _cur_stream.get_counters();
     }
 
     ///clear all output headers
@@ -286,6 +301,7 @@ protected:
         std::size_t _ctlen;
     };
 
+
     Stream _cur_stream;
 
     bool parse_request(std::string_view req_header);
@@ -299,6 +315,7 @@ protected:
     int _status_code = 0;
     Method _method = Method::unknown;
     Version _version = Version::unknown;
+    mutable std::string _url_cache;
     std::string_view _path;
     std::string_view _vpath;
     std::string_view _host;

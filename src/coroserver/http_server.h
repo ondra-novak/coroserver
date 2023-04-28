@@ -491,13 +491,16 @@ public:
         _buffer.append(std::to_string(_ident));
         _buffer.push_back(']');
         _buffer.push_back(' ');
+        std::size_t counter =0;
         switch (ev) {
             case TraceEvent::open: _buffer.append("New connection");break;
-            case TraceEvent::load: _start_time = std::chrono::system_clock::now();return;
+            case TraceEvent::load: _start_time = std::chrono::system_clock::now();
+                                   _counter = req.get_counters().write;
+                                   return;
             case TraceEvent::exception:
             case TraceEvent::finish: _buffer.append(strMethod[req.get_method()]);
                                      _buffer.push_back(' ');
-                                     _buffer.append(req.get_url(false));
+                                     _buffer.append(req.get_url());
                                      _buffer.push_back(' ');
                                      _buffer.append(std::to_string(req.get_status()));
                                      _buffer.push_back(' ');
@@ -509,12 +512,25 @@ public:
                                              _buffer.push_back(' ');
                                          }
                                      }
+                                     counter = req.get_counters().write - _counter;
                                      break;
-            case TraceEvent::close: _buffer.append("closed"); _start_time = {};break;
+            case TraceEvent::close: _buffer.append("closed. Read: ");
+                                    _start_time = {};
+                                    {
+                                        auto cntr = req.get_counters();
+                                        _buffer.append(std::to_string((cntr.read+512)/1024));
+                                        _buffer.append(" KiB / Write: ");
+                                        _buffer.append(std::to_string((cntr.write+512)/1024));
+                                        _buffer.append(" KiB");
+
+                                    }
+                                    break;
         }
         if (_start_time != std::chrono::system_clock::time_point()) {
             _buffer.append(std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()- _start_time).count()));
-            _buffer.append(" ms");
+            _buffer.append(" ms, ");
+            _buffer.append(std::to_string((counter+512)/1024));
+            _buffer.append(" KiB");
         }
         _ctx->send_out(_buffer);
     }
@@ -529,7 +545,8 @@ public:
 protected:
     std::shared_ptr<Content> _ctx;
     std::string _buffer;
-    std::size_t _ident;
+    std::size_t _ident = 0;
+    std::size_t _counter = 0;
     std::chrono::system_clock::time_point _start_time;
 };
 

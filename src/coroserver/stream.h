@@ -32,6 +32,11 @@ class IStream {
 public:
 
 
+    struct Counters {
+        std::size_t read = 0;
+        std::size_t write = 0;
+    };
+
     virtual ~IStream() = default;
     virtual cocls::future<std::string_view> read() = 0;
     virtual std::string_view read_nb() = 0;
@@ -44,6 +49,7 @@ public:
     virtual void set_timeouts(const TimeoutSettings &tm) = 0;
     virtual TimeoutSettings get_timeouts() = 0;
 
+    virtual Counters get_counters() const noexcept = 0;
 
     virtual PeerName get_source() const = 0;
     virtual void shutdown() = 0;
@@ -103,6 +109,9 @@ public:
     }
     virtual bool is_read_timeout() const override {
         return _proxied->is_read_timeout();
+    }
+    virtual Counters get_counters() const noexcept override  {
+        return _proxied->get_counters();
     }
     virtual void shutdown() override {
         _proxied->shutdown();
@@ -205,6 +214,12 @@ public:
     PeerName get_source() const {return _stream->get_source();}
     void shutdown() {return _stream->shutdown();}
 
+    ///Retrieves io counters
+    /**
+     * @return object which contains total count of read and write bytes for lifetime
+     * of this stream. It allows to measure size and speed of transfer.
+     */
+    auto get_counters() const {return _stream->get_counters();}
 
     std::shared_ptr<IStream> getStreamDevice() const {
         return _stream;
@@ -310,6 +325,7 @@ public:
         cocls::default_storage stor;
         return discard_coro(stor, *_stream, count);
     }
+
 
 
 

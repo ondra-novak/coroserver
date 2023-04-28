@@ -62,10 +62,12 @@ public:
     virtual void set_timeouts(const TimeoutSettings &tm) override;
     virtual void shutdown() override;
     virtual bool is_read_timeout() const override;
+    virtual Counters get_counters() const noexcept override;
 
 
 
 protected:
+    Counters _cntr;
     std::vector<char> _input_buff;
     std::vector<char> _output_buff;
     TimeoutSettings _tms;

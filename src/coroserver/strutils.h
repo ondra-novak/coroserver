@@ -244,6 +244,38 @@ inline void encode(const std::string_view &str, Fn &&fn) {
 
 }
 
+inline auto splitSeparated(std::string_view text, std::string_view separators) {
+    std::string exsep(separators);
+    exsep.push_back('"');
+    return [=]() mutable {
+        auto pp = text.find_first_of(exsep);
+        if (pp == text.npos) {
+            auto out = trim(text);
+            text = {};
+            return  out;
+        }
+        char c = text[pp];
+        if (c == '"') {     //quotes are included
+            pp = text.find('"', pp+1);  //find end of '"');
+            if (pp == text.npos) {
+                auto out = trim(text);        //pass whole text
+                text = {};
+                return out;
+            } else {
+                auto out =  trim(text.substr(0,pp+1));
+                text = text.substr(pp+1);
+                pp = text.find_first_of(exsep)+1;
+                text = text.substr(pp);
+                return out;
+            }
+        } else {
+            auto out = trim(text.substr(0,pp));
+            text = text.substr(pp+1);
+            return out;
+        }
+    };
+}
+
 }
 
 
