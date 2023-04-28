@@ -79,8 +79,8 @@ bool ServerRequest::parse_request(std::string_view req_header) {
         return false;
     }
 
-    _version = strVer(str_vers);
-    _method = strMethod(str_method);
+    _version = strVer[str_vers];
+    _method = strMethod[str_method];
     _vpath = _path = str_path;
     if (_method == Method::unknown || _version == Version::unknown) {
         set_status(400);
@@ -172,7 +172,8 @@ bool ServerRequest::parse_headers() {
 }
 
 ServerRequest& ServerRequest::set_status(int status) {
-    set_status(status, StatusCodeMap::instance.message(status));
+    static constexpr std::string_view ukst("Unknown status");
+    set_status(status, strStatusMessages.get(status, ukst));
     return *this;
 }
 
@@ -237,7 +238,7 @@ void ServerRequest::add_header(const std::string_view &key, const std::chrono::s
 }
 
 ServerRequest& ServerRequest::content_type(ContentType ct) {
-    add_header(strtable::hdr_content_type, strContentType(ct));
+    add_header(strtable::hdr_content_type, strContentType[ct]);
     return *this;
 }
 
@@ -289,7 +290,7 @@ bool ServerRequest::allow(const std::initializer_list<Method> &methods) {
     std::string lst;
     for(auto iter = methods.begin(); iter != methods.end(); ++iter) {
         if (iter != methods.begin()) lst.append(", ");
-        lst.append(strMethod(*iter));
+        lst.append(strMethod[*iter]);
     }
     add_header(strtable::hdr_allow, lst);
     set_status(405);
@@ -344,20 +345,20 @@ void ServerRequest::content_type_from_extension(const std::string_view &path) {
     }
 }
 
-cocls::suspend_point<void> ServerRequest::send_resp_body(Stream &s, cocls::promise<void> &res) {
-    _bool2void_awt(std::move(res)) << [&]{return s.write(_send_body_data);};
+cocls::suspend_point<void> ServerRequest::send_resp_body(Stream &s, cocls::promise<bool> &res) {
+    _forward_awt(std::move(res)) << [&]{return s.write(_send_body_data);};
     return {};
 }
 
 
-cocls::future<void> ServerRequest::send(std::string_view body) {
+cocls::future<bool> ServerRequest::send(std::string_view body) {
     _send_body_data = body;
     add_header(strtable::hdr_content_length, body.size());
     return _send_resp_body_awt << [&]{return send();};
     //return send_coro(_coro_storage, body);
 }
 
-cocls::future<void> ServerRequest::send(std::ostringstream &body) {
+cocls::future<bool> ServerRequest::send(std::ostringstream &body) {
     _user_buffer = body.str();
     return send(std::string_view(_user_buffer));
 }
@@ -397,7 +398,7 @@ std::string_view ServerRequest::prepare_output_headers() {
         add_date(std::chrono::system_clock::now());
     }
     if (!_output_headers_summary._has_ctxtp) {
-        add_header(strtable::hdr_content_type, strContentType(ContentType::binary));
+        add_header(strtable::hdr_content_type, strContentType[ContentType::binary]);
     }
     //neither te, no ctxlen set
     if (!_output_headers_summary._has_te && !_output_headers_summary._has_ctlen) {
@@ -408,7 +409,7 @@ std::string_view ServerRequest::prepare_output_headers() {
     if (!_keep_alive && !_output_headers_summary._has_connection) {
         add_header(strtable::hdr_connection, strtable::val_close);
     }
-    auto ver = strVer(_version);
+    auto ver = strVer[_version];
     auto status = std::to_string(_status_code);
     auto msg=_status_message;
     std::size_t needsz = ver.size() + status.size()+_status_message.size()+4;
@@ -433,10 +434,6 @@ std::string_view ServerRequest::prepare_output_headers() {
 
 }
 
-cocls::future<void> ServerRequest::discard_body() {
-
-    return _bool2void_awt << [&]{return discard_body_intr();};
-}
 cocls::future<bool> ServerRequest::discard_body_intr() {
     if (!_has_body || _expect_100_continue) {
         _has_body = false;
@@ -459,27 +456,14 @@ cocls::suspend_point<void> ServerRequest::discard_body_coro(std::string_view &da
 
 cocls::future<bool> ServerRequest::send_file(const std::string &path, bool use_chunked) {
     std::ifstream f(path);
-    if (!f) co_return false;
+    if (!f) return cocls::future<bool>::set_value(false);
     if (!use_chunked) {
         f.seekg(0,std::ios::end);
         auto sz = f.tellg();
         f.seekg(0,std::ios::beg);
         add_header(strtable::hdr_content_length, std::size_t(sz));
     }
-    Stream s = co_await send();
-    char buff[16384];
-    while (!f.eof()) {
-        f.read(buff, sizeof(buff));
-        std::size_t sz = f.gcount();
-        if (sz) {
-            bool b = co_await s.write(std::string_view(buff,sz));
-            if (!b) break;
-        } else {
-            break;
-        }
-    }
-    co_await s.write_eof();
-    co_return true;
+    return send_stream(std::move(f));
 }
 
 
@@ -499,7 +483,7 @@ cocls::future<Stream> ServerRequest::get_body() {
     }
     if (_expect_100_continue) {
         auto iter = _output_headers.begin();
-        auto ver = strVer(_version);
+        auto ver = strVer[_version];
         std::string_view txt(" 100 Continue\r\n\r\n");
         iter = std::copy(ver.begin(), ver.end(), iter);
         iter = std::copy(txt.begin(), txt.end(), iter);

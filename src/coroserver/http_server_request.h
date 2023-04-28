@@ -158,16 +158,6 @@ public:
     void clear_headers();
 
     void content_type_from_extension(const std::string_view &path);
-
-    ///discard body (if necessery)
-    /**
-     * Ensures, that request body is discarded. If request has no body, function immediately
-     * returns. If request has body, but 100-continue is expected, the function also returns
-     * immediately, as it is possible to send response without reading the body
-     * @return
-     */
-    cocls::future<void> discard_body();
-
     ///Retrieve body stream
     /**
      * @return stream. Returns empty stream if request has no body (however it still allocates
@@ -198,7 +188,7 @@ public:
      * @endcode
      *
      */
-    cocls::future<void> send(std::string_view body);
+    cocls::future<bool> send(std::string_view body);
     ///Send response and retrieve stream to send response body
     cocls::future<Stream> send();
     ///Send response prepared in content of std::ostringstream
@@ -208,7 +198,7 @@ public:
      * until the completion
      * @return
      */
-    cocls::future<void> send(std::ostringstream &body);
+    cocls::future<bool> send(std::ostringstream &body);
 
     ///Send the string
     /**
@@ -224,7 +214,7 @@ public:
      * }
      * @endcode
      */
-    cocls::future<void> send(std::string &&body) {
+    cocls::future<bool> send(std::string &&body) {
         _user_buffer = std::move(body);
         return send(std::string_view(_user_buffer));
     }
@@ -239,7 +229,7 @@ public:
      *
      * @return
      */
-    cocls::future<void> send(const char *x) {
+    cocls::future<bool> send(const char *x) {
         return send(std::string_view(x));
     }
 
@@ -252,6 +242,25 @@ public:
      * @return a future
      */
     cocls::future<bool> send_file(const std::string &path, bool use_chunked = false);
+
+    template<typename _IOStream, std::size_t buffer = 16384>
+    cocls::future<bool> send_stream(_IOStream stream)  {
+        Stream s = co_await send();
+        char buff[buffer];
+        while (!stream.eof()) {
+            stream.read(buff, sizeof(buff));
+            std::size_t sz = stream.gcount();
+            if (sz) {
+                bool b = co_await s.write(std::string_view(buff,sz));
+                if (!b) co_return false;
+            } else {
+                break;
+            }
+        }
+        co_await s.write_eof();
+        co_return true;
+
+    }
 
     ///Contains name of server (passed to the response)
     static std::string server_name;
@@ -319,12 +328,12 @@ protected:
     cocls::suspend_point<void> send_resp(bool &, cocls::promise<Stream> &res);
     cocls::future_conv<&ServerRequest::send_resp> _send_resp_awt;
 
-    cocls::suspend_point<void> send_resp_body(Stream &s, cocls::promise<void> &res);
+    cocls::suspend_point<void> send_resp_body(Stream &s, cocls::promise<bool> &res);
     cocls::future_conv<&ServerRequest::send_resp_body> _send_resp_body_awt;
     std::string_view _send_body_data;
 
-    static void bool2void(bool &) {}
-    cocls::future_conv<bool2void> _bool2void_awt;
+    static bool future_forward(bool &b) {return b;}
+    cocls::future_conv<future_forward> _forward_awt;
 
 
 

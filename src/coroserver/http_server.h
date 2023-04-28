@@ -10,16 +10,57 @@
 #include <shared_mutex>
 #include <memory>
 
+
+
 namespace coroserver {
 
 namespace http {
 
 class IHandler {
 public:
-    virtual cocls::future<void> call(ServerRequest &req, std::string_view vpath) const noexcept= 0;
+
+    class Ret: public cocls::future<void> {
+    public:
+        using cocls::future<void>::future;
+        template<typename Fn>
+        CXX20_REQUIRES(((std::is_integral_v<typename decltype(std::declval<Fn>()())::value_type>
+                        && sizeof(typename decltype(std::declval<Fn>()())::value_type) <= sizeof(void *))
+                        || std::is_void_v<typename decltype(std::declval<Fn>()())::value_type>))
+        Ret(Fn &&fn) {
+            new(this) auto(fn());
+        }
+        template<typename Fn>
+        CXX20_REQUIRES(((std::is_integral_v<typename decltype(std::declval<Fn>()())::value_type>
+                        && sizeof(typename decltype(std::declval<Fn>()())::value_type) <= sizeof(void *))
+                        || std::is_void_v<typename decltype(std::declval<Fn>()())::value_type>))
+        void operator<<(Fn &&fn) {
+            this->~Ret();
+            try {
+                new(this) auto(fn());
+            } catch (...) {
+                new(this) auto([]()->cocls::future<void>{return cocls::future<void>::set_exception(std::current_exception());});
+            }
+        }
+    };
+
+    virtual Ret call(ServerRequest &req, std::string_view vpath) const noexcept= 0;
     virtual ~IHandler() = default;
 };
 
+///Defines of http handler
+/**
+ * The http handler can be any lambda function, which acceptes one or two arguments.
+ * It always accepts ServerRequest & as first argument and optionally can accept std::string_view
+ * vpath as second argument. In this case, vpath contains relative path of request to
+ * handler's path.
+ *
+ * The function should return one of three variants of return value. It can return void, in
+ * case, that request was handled synchronously, it can return future<void> in case
+ * that request can be processed asynchronously, or it can return future<bool> for the
+ * same reason, however the value is ignored. This allows to return directly result of
+ * req.send() operation, especially when it is last operation of the handler (so the
+ * handler don't need to be coroutine)
+ */
 class Handler {
 public:
     constexpr Handler() = default;
@@ -30,17 +71,17 @@ public:
         class Impl: public IHandler {
         public:
             Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
-            virtual cocls::future<void> call(ServerRequest &req, std::string_view vpath) const noexcept {
+            virtual Ret call(ServerRequest &req, std::string_view vpath) const noexcept {
                 using RetVal = decltype(_fn(req, vpath));
                 try {
                     if constexpr(std::is_void_v<RetVal>) {
                         _fn(req, vpath);
-                        return cocls::future<void>::set_value();
+                        return [&]{return cocls::future<void>::set_value();};
                     } else {
-                        return _fn(req, vpath);
+                        return Ret([&]{return _fn(req, vpath);});
                     }
                 } catch (...) {
-                    return cocls::future<void>::set_exception(std::current_exception());
+                    return [&]{return cocls::future<void>::set_exception(std::current_exception());};
                 }
             }
         protected:
@@ -55,17 +96,17 @@ public:
         class Impl: public IHandler {
         public:
             Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
-            virtual cocls::future<void> call(ServerRequest &req, std::string_view ) const noexcept {
+            virtual Ret call(ServerRequest &req, std::string_view ) const noexcept {
                 using RetVal = decltype(_fn(req));
                 try {
                     if constexpr(std::is_void_v<RetVal>) {
                         _fn(req);
-                        return cocls::future<void>::set_value();
+                        return [&]{return cocls::future<void>::set_value();};
                     } else {
-                        return _fn(req);
+                        return Ret([&]{return _fn(req);});
                     }
                 } catch (...) {
-                    return cocls::future<void>::set_exception(std::current_exception());
+                    return [&]{return cocls::future<void>::set_exception(std::current_exception());};
                 }
             }
         protected:
@@ -76,7 +117,7 @@ public:
 
     operator bool() const {return _ptr != nullptr;}
 
-    cocls::future<void> call(ServerRequest &req, std::string_view vpath) const {
+    IHandler::Ret call(ServerRequest &req, std::string_view vpath) const {
         return _ptr->call(req, vpath);
     }
 
@@ -99,6 +140,8 @@ enum class TraceEvent {
     ///exception reported (is current)
     exception
 };
+
+
 
 class MethodMap {
 public:
@@ -128,12 +171,12 @@ public:
         int i = 1;
         while(i < static_cast<int>(Method::unknown)) {
             if (bitvector & (1<<i)) {
-                res.append(strMethod(static_cast<Method>(i)));
+                res.append(strMethod[static_cast<Method>(i)]);
                 ++i;
                 while(i < static_cast<int>(Method::unknown)) {
                     if (bitvector & (1<<i)) {
                         res.append(", ");
-                        res.append(strMethod(static_cast<Method>(i)));
+                        res.append(strMethod[static_cast<Method>(i)]);
                     }
                     ++i;
                 }
@@ -150,33 +193,12 @@ protected:
     std::array<Handler,static_cast<int>(Method::unknown)+1> methods;
 };
 
-class Server {
+///Base routing, base class for Server
+/**
+ * You can create additional routing tables for cascade routing
+ */
+class Router {
 public:
-
-    static std::string_view error_handler_prefix;
-
-    template<typename Tracer>
-    CXX20_REQUIRES(std::invocable<Tracer, TraceEvent, ServerRequest &>)
-    cocls::future<void> serve(cocls::generator<Stream> tcp_server, Tracer tracer) {
-        return [&](cocls::promise<void> prom) {
-            _exit_promise = std::move(prom);
-            serve_gen(std::move(tcp_server), std::move(tracer)).detach();
-        };
-    }
-
-    cocls::future<void> serve(cocls::generator<Stream> tcp_server) {
-        return serve(std::move(tcp_server),[](TraceEvent, ServerRequest &) {});
-    }
-
-    template<typename ContextIO, typename Tracer>
-    cocls::future<void> run(ContextIO ctx, std::vector<PeerName> ports, Tracer tracer) {
-        return serve(ctx.accept(), tracer);
-    }
-
-    template<typename ContextIO>
-    cocls::future<void> run(ContextIO ctx, std::vector<PeerName> ports) {
-        return serve(ctx.accept(),[](TraceEvent, ServerRequest &) {});
-    }
 
     ///Register a handler to a given path
     /**
@@ -204,16 +226,126 @@ public:
      */
     void set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h);
 
+
+    ///Calls handler for given request
+    /**
+     * @param req request
+     * @param fut reference to future to resolve once the handler is finished.
+     * @retval 0 handler called and accepted the request
+     * @retval 1 handler was not found
+     * @retval >1 found handler, but for different method. The value contains bitmask of all found methods (bit 0 is always set)
+     */
+    std::size_t call_handler(ServerRequest &req, IHandler::Ret &fut);
+    ///Calls handler for given request
+    /**
+     * @param req request
+     * @param vpath  overrides path (virtual path) - this path is used for lookup
+     * @param fut reference to future to resolve once the handler is finished.
+     * @retval 0 handler called and accepted the request
+     * @retval 1 handler was not found (or handler rejected the request)
+     * @retval >1 found handler, but for different method. The value contains bitmask of all found methods (bit 0 is always set)
+     */
+    std::size_t call_handler(ServerRequest &req, std::string_view vpath, IHandler::Ret &fut);
+    ///Calls handler for given request
+    /**
+     * @param req request
+     * @param methodOverride - allows to override method and call handler for different method. This potentially useful
+     *              to call GET handler to generate response after the POST/PUT body has been processed.
+     * @param vpath  overrides path (virtual path) - this path is used for lookup
+     * @param fut reference to future to resolve once the handler is finished.
+     * @retval 0 handler called and accepted the request
+     * @retval 1 handler was not found (or handler rejected the request)
+     * @retval >1 found handler, but for different method. The value contains bitmask of all found methods (bit 0 is always set)
+     */
+    std::size_t call_handler(ServerRequest &req, Method methodOverride, std::string_view vpath, IHandler::Ret &fut);
+
+protected:
+    PrefixMap<MethodMap> _endpoints;
+
+};
+
+class Server: protected Router {
+public:
+
+    using Router::Router;
+
+    static std::string_view error_handler_prefix;
+
+
+    ///Start the server (serve requests)
+    /**
+     * @param tcp_server instance of tcp server, which is generator of
+     * connections. You probably need to pass the argument as rvalue. You
+     * can create server by calling ContextIO::accept().
+     * @param tracer Object which handles request tracing. It is callable, which
+     * is called with arguments TraceEvent and ServerRequest &. You can use this
+     * object to add HTTP log. For convenience, there is object DefaultLogger, which
+     * handles basic logging for small projects/
+     *
+     * @return Returns future which is resolved after server stops. To
+     * stop server, you need to stop the tcp_server (the generator passed as
+     * argument). The server stops serving, once the generator returns without
+     * a value. You should wait for this future to ensure, that server is
+     * clean up to be destroyed.
+     */
+    template<typename Tracer>
+    CXX20_REQUIRES(std::invocable<Tracer, TraceEvent, ServerRequest &>)
+    cocls::future<void> start(cocls::generator<Stream> tcp_server, Tracer tracer) {
+        return [&](cocls::promise<void> prom) {
+            _exit_promise = std::move(prom);
+            serve_gen(std::move(tcp_server), std::move(tracer)).detach();
+        };
+    }
+
+    ///Start the server
+    /**
+     *
+     * @param tcp_server instance of tcp server, which is generator of
+     * connections. You probably need to pass the argument as rvalue. You
+     * can create server by calling ContextIO::accept().
+     * @return Returns future which is resolved after server stops. To
+     * stop server, you need to stop the tcp_server (the generator passed as
+     * argument). The server stops serving, once the generator returns without
+     * a value. You should wait for this future to ensure, that server is
+     * clean up to be destroyed.
+     */
+    cocls::future<void> start(cocls::generator<Stream> tcp_server) {
+        return start(std::move(tcp_server),[](TraceEvent, ServerRequest &) {});
+    }
+
+    ///Manually serve on given connection
+    /**
+     * @param s stream to be handled by the server
+     * @return future which is resolved once the connection is closed
+     *
+     */
     cocls::future<void> serve_req(Stream s) {
         return serve_req_coro(std::move(s), [](TraceEvent, ServerRequest &) {});
     }
+    ///Manually serve on given connection
+    /**
+     * @param s stream to be handled by the server
+     * @param tracer see start()
+     * @return future which is resolved once the connection is closed
+     *
+     */
     template<typename Tracer>
     cocls::future<void> serve_req(Stream s, Tracer tracer) {
         return serve_req_coro(std::move(s), std::move(tracer));
     }
 
-
-
+    void set_handler(std::string_view path, Handler h) {
+        std::unique_lock lk(_mx);
+        Router::set_handler(path, std::move(h));
+    }
+    void set_handler(std::string_view path, Method m, Handler h) {
+        std::unique_lock lk(_mx);
+        Router::set_handler(path, m, std::move(h));
+    }
+    void set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h) {
+        std::unique_lock lk(_mx);
+        Router::set_handler(path, methods, std::move(h));
+    }
 
 protected:
     std::shared_mutex _mx;
@@ -253,7 +385,7 @@ protected:
         //load requests from the stream - return false if error
         while (co_await req.load()) {
             //future to await handler
-            cocls::future<void> fut;
+            IHandler::Ret fut;
             try {
                 //report that request has been loaded
                 tracer(TraceEvent::load, req);
@@ -328,33 +460,77 @@ protected:
         co_return;
     }
 
-    cocls::future<void> send_error_page(ServerRequest &req);
-    void select_handler(ServerRequest &req, cocls::future<void> &fut);
+    IHandler::Ret send_error_page(ServerRequest &req);
+    void select_handler(ServerRequest &req, IHandler::Ret &fut);
 };
 
 template<typename Output>
 class DefaultLogger {
 
+
     struct Content {
         std::mutex _mx;
+        std::size_t _counter = 0;
         Output _output;
         Content (Output &&out):_output(out) {}
         void send_out(std::string_view text) {
             std::lock_guard _(_mx);
             _output(text);
         }
+        std::size_t get_ident() {
+            std::lock_guard _(_mx);
+            return ++_counter;
+        }
     };
 
-
-
 public:
-    DefaultLogger(Output output):_ctx(std::make_shared<Content>(std::forward<Output>(output))) {}
-    DefaultLogger(const DefaultLogger &lg):_ctx(lg._ctx) {}
+
+    void operator()(TraceEvent ev, ServerRequest &req) {
+        _buffer.clear();
+        _buffer.push_back('[');
+        _buffer.append(std::to_string(_ident));
+        _buffer.push_back(']');
+        _buffer.push_back(' ');
+        switch (ev) {
+            case TraceEvent::open: _buffer.append("New connection");break;
+            case TraceEvent::load: _start_time = std::chrono::system_clock::now();return;
+            case TraceEvent::exception:
+            case TraceEvent::finish: _buffer.append(strMethod[req.get_method()]);
+                                     _buffer.push_back(' ');
+                                     _buffer.append(req.get_url(false));
+                                     _buffer.push_back(' ');
+                                     _buffer.append(std::to_string(req.get_status()));
+                                     _buffer.push_back(' ');
+                                     if (ev == TraceEvent::exception) {
+                                         try {
+                                             throw;
+                                         } catch (std::exception &e) {
+                                             _buffer.append(e.what());
+                                             _buffer.push_back(' ');
+                                         }
+                                     }
+                                     break;
+            case TraceEvent::close: _buffer.append("closed"); _start_time = {};break;
+        }
+        if (_start_time != std::chrono::system_clock::time_point()) {
+            _buffer.append(std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()- _start_time).count()));
+            _buffer.append(" ms");
+        }
+        _ctx->send_out(_buffer);
+    }
+
+
+    DefaultLogger(Output output):_ctx(std::make_shared<Content>(std::forward<Output>(output)))
+                                ,_ident(_ctx->get_ident()) {}
+    DefaultLogger(const DefaultLogger &lg):_ctx(lg._ctx)
+                                          ,_ident(_ctx->get_ident()) {}
+    DefaultLogger(DefaultLogger &&lg):_ctx(std::move(lg._ctx)),_ident(lg._ident) {}
 
 protected:
     std::shared_ptr<Content> _ctx;
     std::string _buffer;
-
+    std::size_t _ident;
+    std::chrono::system_clock::time_point _start_time;
 };
 
 

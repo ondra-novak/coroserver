@@ -176,7 +176,7 @@ void test_server() {
         req.set_status(402);
         c1 = true;
     });
-    server.set_handler("/a",coroserver::http::Method::GET, [&](coroserver::http::ServerRequest &req, std::string_view vpath) -> cocls::future<void> {
+    server.set_handler("/a",coroserver::http::Method::GET, [&](coroserver::http::ServerRequest &req, std::string_view vpath) -> cocls::future<bool> {
         CHECK_EQUAL(vpath, "/b");
         req.add_date(std::chrono::system_clock::from_time_t(1651236587));
         c2 = true;
@@ -195,8 +195,8 @@ void test_server() {
     server.serve_req(s2).join();
     server.serve_req(s3).join();
 
-    CHECK(out1 == "HTTP/1.1 402 Payment Required\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\n"
-                  "Content-Type: application/xml\r\nContent-Length: 299\r\nServer: CoroServer 1.0 (C++20)\r\n"
+    CHECK_EQUAL(out1 , "HTTP/1.1 402 Payment Required\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\n"
+                  "Content-Type: application/xhtml+xml\r\nContent-Length: 299\r\nServer: CoroServer 1.0 (C++20)\r\n"
                   "\r\n"
                   "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
                   "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
@@ -205,8 +205,8 @@ void test_server() {
     CHECK(out2 == "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 11\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nHello world");
     CHECK_EQUAL(out3.find("405 Method"),9);
     CHECK_EQUAL(out3.find("Allow: GET\r\n"),33);
-    CHECK_BETWEEN(475,out3.find("404 Not"),485);
-    CHECK_BETWEEN(900,out3.find("400 Bad"),920);
+    CHECK_BETWEEN(480,out3.find("404 Not"),490);
+    CHECK_BETWEEN(915,out3.find("400 Bad"),935);
     CHECK(c1);
     CHECK(c2);
 }

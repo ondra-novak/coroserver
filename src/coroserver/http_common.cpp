@@ -53,7 +53,9 @@ std::string_view hdr_x_accel_buffering("X-Accel-Buffering");
 
 }
 
-StatusCodeMap StatusCodeMap::instance({
+
+
+StaticLookupTable<int, std::string_view, 63> strStatusMessages({
         {100,"Continue"},
         {101,"Switching Protocols"},
         {102,"Processing"},
@@ -119,122 +121,116 @@ StatusCodeMap StatusCodeMap::instance({
         {511,"Network Authentication Required"}
 });
 
-static std::string_view methods[]={
-    "",
-    "GET",
-    "HEAD",
-    "POST",
-    "PUT",
-    "DELETE",
-    "CONNECT",
-    "OPTIONS",
-    "TRACE",
-    "PATCH",
-};
-static std::string_view versions[]={
-    "",
-    "HTTP/1.0",
-    "HTTP/1.1",
-    "unknown"
-};
 
-static std::string_view httpProxyType[] = {
-        "no_proxy",
-        "nginx",
-        "apache",
-        "generic"
-};
 
-static std::string_view contenTypeList[] = {
-        "application/octet-stream",
-        "audio/aac",
-        "audio/midi",
-        "audio/mpeg",
-        "audio/mp4",
-        "audio/ogg",
-        "audio/opus",
-        "audio/wav",
-        "text/plain",
-        "text/plain;charset=utf-8",
-        "text/html",
-        "text/html;charset=utf-8",
-        "text/css",
-        "text/csv",
-        "text/javascript",
-        "text/event-stream",
-        "image/avif",
-        "image/bmp",
-        "image/gif",
-        "image/vnd.microsoft.icon",
-        "image/png",
-        "image/svg+xml",
-        "image/tiff",
-        "image/jpeg",
-        "font/otf"
-        "font/ttf",
-        "font/woff",
-        "font/woff2",
-        "video/x-msvideo",
-        "video/mpeg",
-        "video/ogg",
-        "video/mp2t",
-        "application/gzip",
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/epub+zip",
-        "application/json",
-        "application/ld+json",
-        "application/pdf",
-        "application/x-httpd-php",
-        "application/xhtml+xml",
-        "application/xml",
-        "application/zip",
-        "application/x-7z-compressed",
-        "application/java-archive",
-        "application/atom+xml",
-        "application/rss+xml",
-        "application/octet-stream"
+StaticLookupTable<Method, std::string_view, 10> strMethod({
+    {Method::GET,"GET"},
+    {Method::HEAD,"HEAD"},
+    {Method::POST,"POST"},
+    {Method::PUT,"PUT"},
+    {Method::DELETE,"DELETE"},
+    {Method::CONNECT,"CONNECT"},
+    {Method::OPTIONS,"OPTIONS"},
+    {Method::TRACE,"TRACE"},
+    {Method::PATCH,"PATCH"},
+    {Method::unknown,"unknown"}
+});
 
-};
+StaticLookupTable<Version, std::string_view, 3> strVer({
+    {Version::http1_0, "HTTP/1.0"},
+    {Version::http1_1, "HTTP/1.1"},
+    {Version::unknown, "unknown"}
+});
 
-static std::pair<std::string_view, ContentType> ext2ctx[] = {
-        {"7z", ContentType::zip_7z},
-        {"aac", ContentType::audio_aac},
-        {"avi", ContentType::video_avi},
-        {"bmp", ContentType::image_bmp},
-        {"css", ContentType::text_css},
-        {"csv", ContentType::text_csv},
-        {"doc", ContentType::doc},
-        {"docx", ContentType::docx},
-        {"epub", ContentType::epub},
-        {"gif", ContentType::image_gif},
-        {"gz", ContentType::gz},
-        {"html", ContentType::text_html},
-        {"ico", ContentType::image_ico},
-        {"jar", ContentType::jar},
-        {"jpeg", ContentType::image_jpeg},
-        {"js", ContentType::text_javascript},
-        {"json", ContentType::json},
-        {"mid", ContentType::audio_midi},
-        {"midi", ContentType::audio_midi},
-        {"mpeg", ContentType::video_mpeg},
-        {"mp3", ContentType::audio_mpeg},
-        {"mp4", ContentType::audio_mp4},
-        {"ogg", ContentType::audio_ogg},
-        {"pdf", ContentType::pdf},
-        {"php", ContentType::php},
-        {"png", ContentType::image_png},
-        {"svg", ContentType::image_svg},
-        {"tiff", ContentType::image_tiff},
-        {"ttf", ContentType::font_ttf},
-        {"txt", ContentType::text_plain},
-        {"wav", ContentType::audio_wav},
-        {"woff", ContentType::font_woff},
-        {"woff2", ContentType::font_woff2},
-        {"xhtml", ContentType::xhtml},
-        {"xml", ContentType::xml},
-        {"zip", ContentType::zip},
-};
+StaticLookupTable<ContentType, std::string_view, 48> strContentType ({
+    {ContentType::binary,"application/octet-stream"},
+    {ContentType::audio_aac,               "audio/aac"},
+    {ContentType::audio_midi,              "audio/midi"},
+    {ContentType::audio_mpeg,              "audio/mpeg"},
+    {ContentType::audio_mp4,               "audio/mp4"},
+    {ContentType::audio_ogg,               "audio/ogg"},
+    {ContentType::audio_opus,              "audio/opus"},
+    {ContentType::audio_wav,               "audio/wav"},
+    {ContentType::text_plain,              "text/plain"},
+    {ContentType::text_plain_utf8,         "text/plain;charset=utf-8"},
+    {ContentType::text_html,               "text/html"},
+    {ContentType::text_html_utf8,          "text/html;charset=utf-8"},
+    {ContentType::text_css,                "text/css"},
+    {ContentType::text_csv,                "text/csv"},
+    {ContentType::text_javascript,         "text/javascript"},
+    {ContentType::event_stream,            "text/event-stream"},
+    {ContentType::image_avif,              "image/avif"},
+    {ContentType::image_bmp,               "image/bmp"},
+    {ContentType::image_gif,               "image/gif"},
+    {ContentType::image_ico,               "image/vnd.microsoft.icon"},
+    {ContentType::image_png,               "image/png"},
+    {ContentType::image_svg,               "image/svg+xml"},
+    {ContentType::image_tiff,              "image/tiff"},
+    {ContentType::image_jpeg,              "image/jpeg"},
+    {ContentType::font_otf,                "font/otf"},
+    {ContentType::font_ttf,                "font/ttf"},
+    {ContentType::font_woff,               "font/woff"},
+    {ContentType::font_woff2,              "font/woff2"},
+    {ContentType::video_avi,               "video/x-msvideo"},
+    {ContentType::video_mpeg,              "video/mpeg"},
+    {ContentType::video_ogg,               "video/ogg"},
+    {ContentType::video_mp2t,              "video/mp2t"},
+    {ContentType::gz,                      "application/gzip"},
+    {ContentType::doc,                     "application/msword"},
+    {ContentType::docx,                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    {ContentType::epub,                    "application/epub+zip"},
+    {ContentType::json,                    "application/json"},
+    {ContentType::json_ld,                 "application/ld+json"},
+    {ContentType::pdf,                     "application/pdf"},
+    {ContentType::php,                     "application/x-httpd-php"},
+    {ContentType::xhtml,                   "application/xhtml+xml"},
+    {ContentType::xml,                     "application/xml"},
+    {ContentType::zip,                     "application/zip"},
+    {ContentType::zip_7z,                  "application/x-7z-compressed"},
+    {ContentType::jar,                     "application/java-archive"},
+    {ContentType::atom,                    "application/atom+xml"},
+    {ContentType::rss,                     "application/rss+xml"},
+    {ContentType::custom,                  "application/octet-stream"}
+});
+
+constexpr StaticLookupTable<ContentType, std::string_view, 36> ext2ctx({
+        {ContentType::zip_7z, "7z"},
+        {ContentType::audio_aac, "aac"},
+        {ContentType::video_avi, "avi"},
+        {ContentType::image_bmp, "bmp"},
+        {ContentType::text_css, "css"},
+        {ContentType::text_csv, "csv"},
+        {ContentType::doc, "doc"},
+        {ContentType::docx, "docx"},
+        {ContentType::epub, "epub"},
+        {ContentType::image_gif,"gif"},
+        {ContentType::gz,"gz"},
+        {ContentType::text_html,"html"},
+        {ContentType::image_ico, "ico"},
+        {ContentType::jar,"jar"},
+        {ContentType::image_jpeg,"jpeg"},
+        {ContentType::text_javascript,"js"},
+        {ContentType::json,"json"},
+        {ContentType::audio_midi,"mid"},
+        {ContentType::audio_midi, "midi"},
+        {ContentType::video_mpeg, "mpeg"},
+        {ContentType::audio_mpeg, "mp3"},
+        {ContentType::audio_mp4, "mp4"},
+        {ContentType::audio_ogg, "ogg"},
+        {ContentType::pdf, "pdf"},
+        {ContentType::php, "php"},
+        {ContentType::image_png, "png"},
+        {ContentType::image_svg, "svg"},
+        {ContentType::image_tiff, "tiff"},
+        {ContentType::font_ttf, "ttf"},
+        {ContentType::text_plain, "txt"},
+        {ContentType::audio_wav, "txt"},
+        {ContentType::font_woff, "woff"},
+        {ContentType::font_woff2, "woff2"},
+        {ContentType::xhtml, "woff2"},
+        {ContentType::xml, "xml"},
+        {ContentType::zip, "zip"},
+});
 
 template<typename T, std::size_t n>
 T enumFromString(const std::string_view (&list)[n], const std::string_view &txt) {
@@ -248,52 +244,9 @@ T enumFromString(const std::string_view (&list)[n], const std::string_view &txt)
 
 }
 
-Method strMethod(const std::string_view &txt) {
-    if (txt.empty()) return Method::not_set;
-    return enumFromString<Method>(methods, txt);
-
-}
-std::string_view strMethod(Method m) {
-    if (m == Method::unknown) return "<unknown>";
-    return methods[static_cast<int>(m)];
-}
-
-Version strVer(const std::string_view &txt) {
-    if (txt.empty()) return Version::not_set;
-    return enumFromString<Version>(versions, txt);
-
-}
-std::string_view strVer(Version m) {
-    if (m == Version::unknown) return "<unknown>";
-    return versions[static_cast<int>(m)];
-}
-ProxyType strProxyType(const std::string_view &txt)  {
-    if (txt.empty()) return ProxyType::no_proxy;
-    return enumFromString<ProxyType>(httpProxyType, txt);
-
-}
-std::string_view strProxyType(ProxyType m) {
-    if (m == ProxyType::unknown) return "<unknown>";
-    return httpProxyType[static_cast<int>(m)];
-}
-
-ContentType strContentType(const std::string_view &txt) {
-    if (txt.empty()) return ContentType::binary;
-    return enumFromString<ContentType>(contenTypeList, txt);
-}
-std::string_view strContentType(ContentType m) {
-    return contenTypeList[static_cast<int>(m)];
-}
 
 ContentType extensionToContentType(const std::string_view &txt) {
-    strILess cmp;
-    strIEqual eq;
-    auto iter = std::lower_bound(std::begin(ext2ctx), std::end(ext2ctx), std::pair(txt, ContentType::binary),
-            [&](const auto &a, const auto &b) {
-        return cmp(a.first, b.first);
-    });
-    if (iter == std::end(ext2ctx) || !eq(iter->first,txt)) return ContentType::binary;
-    return iter->second;
+    return ext2ctx[txt];
 }
 
 

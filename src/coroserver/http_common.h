@@ -1,6 +1,7 @@
 #pragma once
 #ifndef SRC_USERVER_HTTP_COMMON_H_
 #define SRC_USERVER_HTTP_COMMON_H_
+#include "static_lookup.h"
 #include <cctype>
 #include <charconv>
 #include <optional>
@@ -8,47 +9,33 @@
 #include <string_view>
 #include <vector>
 
+
 namespace coroserver {
 
 namespace http {
 
-enum class Method: char {
-    not_set = 0,
-    GET,
-    HEAD,
-    POST,
-    PUT,
-    DELETE,
-    CONNECT,
-    OPTIONS,
-    TRACE,
-    PATCH,
-    unknown,
+enum class Method {
+        not_set = 0,
+        GET,
+        HEAD,
+        POST,
+        PUT,
+        DELETE,
+        CONNECT,
+        OPTIONS,
+        TRACE,
+        PATCH,
+        unknown
 };
 
-enum class Version: char {
+enum class Version {
     not_set = 0,
     http1_0,
     http1_1,
     unknown
 };
 
-///Specifies type of upstream proxy
-enum class ProxyType:char {
-    ///server is not connected through the proxy
-    no_proxy = 0,
-    ///server is connected through nginx
-    nginx,
-    ///server is connected through apache
-    apache,
-    ///server is connected through a unknown/generic proxy
-    generic,
-    ///
-    unknown
-};
-
-
-enum class ContentType:char {
+enum class ContentType {
     binary = 0,
     audio_aac,
     audio_midi,
@@ -99,19 +86,12 @@ enum class ContentType:char {
     custom
 };
 
+extern StaticLookupTable<Method, std::string_view, 10> strMethod;
+extern StaticLookupTable<Version, std::string_view, 3> strVer;
+extern StaticLookupTable<ContentType, std::string_view, 48> strContentType;
+extern StaticLookupTable<int, std::string_view, 63> strStatusMessages;
 
-Method strMethod(const std::string_view &txt);
-std::string_view strMethod(Method m);
-Version strVer(const std::string_view &txt);
-std::string_view strVer(Version m);
-ProxyType strProxyType(const std::string_view &txt);
-std::string_view strProxyType(ProxyType m);
-ContentType strContentType(const std::string_view &txt);
-std::string_view strContentType(ContentType m);
 ContentType extensionToContentType(const std::string_view &txt);
-
-
-
 
 
 struct strILess {

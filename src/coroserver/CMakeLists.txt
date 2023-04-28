@@ -13,6 +13,7 @@ add_library(coroserver
 	http_common.cpp
 	http_server_request.cpp
 	http_server.cpp
+	http_static_page.cpp
 )
 add_dependencies(coroserver coroserver_version)
 

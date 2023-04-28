@@ -38,7 +38,7 @@ public:
     };
 
     ///contains underlying enum type, for non-enum type, contains EnumType
-    using EnumUnderlyingType = std::conditional_t<std::is_enum_v<EnumType>,std::underlying_type_t<EnumType>, EnumType>;
+    using EnumUnderlyingType = typename std::conditional_t<std::is_enum_v<EnumType>,std::underlying_type<std::decay_t<EnumType> >, std::decay<EnumType> >::type;
     ///Contains true, if ValueType can be ordered. For large set of items it is better to support ordering, otherwise fullrow scan is used.
     #if defined( __cpp_concepts) and not defined (__CDT_PARSER__)
     constexpr static bool is_ordered =  requires{ std::declval<ValueType>() <  std::declval<ValueType>();};
@@ -85,7 +85,9 @@ public:
      * @param items array of items. Count of items must be exact as declared by Count variable. However
      * for convience you can use makeStaticLookupTable()
     */
-    constexpr StaticLookupTable(const Item (&items)[Count]) {
+    template<std::size_t c>
+    CXX20_REQUIRES((c == Count))
+    constexpr StaticLookupTable(const Item (&items)[c]) {
         int order[Count];
         for (int i = 0; i < Count; i++) {
             order[i] = i;
@@ -200,7 +202,7 @@ public:
             }
             return end();
         } else {
-            return lower_bound(&Item::key, evalue);
+            return Iterator(_items+lower_bound([&](int idx){return _items[idx]->key;}, evalue));
         }
     }
 
@@ -211,7 +213,9 @@ public:
     */
     constexpr Iterator find(const ValueType &v) const {
         if constexpr(is_ordered) {
-            return lower_bound(&Item::value, v);
+            int pos = lower_bound([&](int idx){return _items[_valueIndex.pos[idx]]->value;}, v);
+            if (pos == Count) return Iterator(_items+Count);
+            else return Iterator(_items+_valueIndex.pos[pos]);
         } else {
             int it = 0;
             while (it < Count && _items[it]->value != v) ++it;
@@ -259,21 +263,21 @@ protected:
     }
 
     template<typename Field, typename Value>
-    constexpr Iterator lower_bound(Field &&field, Value &&value) const {
+    constexpr int lower_bound(Field &&field, Value &&value) const {
         int first = 0;
         int count = Count;
         for (int i = 0; i < search_cycles; i++) {
             auto step = count / 2;
             auto it = first + step;
             int res[4] = {first, step, it+1, count - step-1};
-            int sel = 2 * ((_items[it].x.*field) < value);
+            int sel = 2 * (field(it) < value);
             first = res[sel];
             count = res[sel+1];
         }
         int r1 = (first >= Count);
-        int r2 = (_items[first-r1].x.*field) != value;
+        int r2 = field(first-r1) != value;
         int outs[] = {first, Count};
-        return Iterator(_items+outs[r1 | r2]);
+        return outs[r1 | r2];
 
     }
 

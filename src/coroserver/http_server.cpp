@@ -6,7 +6,7 @@ namespace http {
 
 std::string_view Server::error_handler_prefix ( "error_");
 
-cocls::future<void> Server::send_error_page(ServerRequest &req) {
+IHandler::Ret Server::send_error_page(ServerRequest &req) {
     //lock the lock
     std::shared_lock lk(_mx);
     //retrieve status
@@ -48,17 +48,16 @@ cocls::future<void> Server::send_error_page(ServerRequest &req) {
                 "</body>"
                 "</html>";
         //send the stream
-        return req.send(text);
+        return [&]{return req.send(text);};
     }
     return h.call(req, req.get_path());
 }
 
-void Server::set_handler(std::string_view path, Handler h) {
+void Router::set_handler(std::string_view path, Handler h) {
     set_handler(path, Method::not_set, h);
 }
 
-void Server::set_handler(std::string_view path, Method m, Handler h) {
-    std::unique_lock lk(_mx);
+void Router::set_handler(std::string_view path, Method m, Handler h) {
     MethodMap *mm = _endpoints.find_exact(path);
     if (mm) {
         mm->set(m, std::move(h));
@@ -69,8 +68,7 @@ void Server::set_handler(std::string_view path, Method m, Handler h) {
     }
 }
 
-void Server::set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h) {
-    std::unique_lock lk(_mx);
+void Router::set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h) {
     MethodMap *mm = _endpoints.find_exact(path);
     if (mm) {
         for (auto x: methods) {
@@ -85,19 +83,21 @@ void Server::set_handler(std::string_view path, std::initializer_list<Method> me
     }
 }
 
+std::size_t Router::call_handler(ServerRequest &req, IHandler::Ret &fut) {
+    return call_handler(req, req.get_path(), fut);
+}
 
-void Server::select_handler(ServerRequest &req, cocls::future<void> &fut) {
-    //everything under shared lock
-    std::shared_lock lk(_mx);
-    //retrieve whole path
-    auto path = req.get_path();
-    //retrieve method
-    auto method = req.get_method();
+std::size_t Router::call_handler(ServerRequest &req, std::string_view vpath, IHandler::Ret &fut) {
+    return call_handler(req, req.get_method(), vpath, fut);
+}
+
+std::size_t Router::call_handler(ServerRequest &req, Method method, std::string_view path, IHandler::Ret &fut) {
+    if (path.empty()) return 1;
     //try to find all matching endpoint
     auto hfnd = _endpoints.find(path);
     //this variable contains bitvector for all methods (each method is 1 bit)
     //this allow to collect all available methods during traversing endpoints
-    std::size_t allow_bitvector = 0;
+    int allow_bitvector = 0;
     //process results until all removed
     while  (!hfnd.empty()) {
         //get top most endpoint
@@ -127,36 +127,33 @@ void Server::select_handler(ServerRequest &req, cocls::future<void> &fut) {
         if (!fut.ready() || !req.untouched()) {
             //we assume that handler processed or being processing the request
             //future is set, return
-            return;
+            return 0;
         }
         //future is ready and request is untouched, handled rejected the request
         //continue by next handler
     }
-    //found nothing
-    //if path doesn't end with '/', maybe, there is 'a directory', try to add '/'
-    if (path.back() != '/'){
-        std::string p ( path);
-        p.push_back('/');
-        //search for handler for modified path
-        auto hfnd2 = _endpoints.find(p);
-        //we found handler, handler can handle selected method or general method
-        if (!hfnd2.empty() && (hfnd2.top().payload.get(method) || hfnd2.top().payload.get(Method::not_set))) {
-            req.location(p);
-            //Use 301 for GET, otherwise 307, as 308 is not well standardized
-            req.set_status(method==Method::GET?301:307);
-            //send empty page
-            fut << [&]{return req.send(std::move(p));};
-            return;
-        }
-    }
-    //ok, failed to find a handler
+    return allow_bitvector | 1;
+
+
+}
+
+void Server::select_handler(ServerRequest &req, IHandler::Ret &fut) {
+    //everything under shared lock
+    std::shared_lock lk(_mx);
+
+    std::size_t r = call_handler(req, fut);
+
+    if (r == 0) return;
+
     //what bitvector says - as there were handlers for different methods
-    if (allow_bitvector) {
+    if (r > 1) {
         //in this case, response is 405 Method Not Allowed with list of allowed methods
         //generate this list
-        req(strtable::hdr_allow, MethodMap::allowed_to_string(allow_bitvector));
+        req(strtable::hdr_allow, MethodMap::allowed_to_string(r));
         //set status
         req.set_status(405);
+    } else {
+        req.set_status(404);
     }
     //unlock the lock, as send_error_page is need it
     lk.unlock();
