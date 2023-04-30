@@ -8,3 +8,4 @@ link_libraries(
 
 add_executable(simple_web_server simple_web_server.cpp)
 add_executable(simple_web_server2 simple_web_server2.cpp)
+add_executable(websocket_server websocket_server.cpp)

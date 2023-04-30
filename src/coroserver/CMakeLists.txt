@@ -14,6 +14,9 @@ add_library(coroserver
 	http_server_request.cpp
 	http_server.cpp
 	http_static_page.cpp
+	websocket.cpp
+	http_ws_server.cpp
+
 )
 add_dependencies(coroserver coroserver_version)
 
