@@ -66,38 +66,26 @@ aQwTUrA+Mrf6
 -----END CERTIFICATE-----
 )pem";
 
-cocls::generator<Stream> ssl_stream_generator(cocls::generator<Stream> source, ssl::Context ctx) {
-    while (co_await source.next()) {
-        Stream &s = source.value();
-        try {
-            Stream ssls = ssl::Stream::accept(s, ctx);
-            co_yield ssls;
-        } catch (std::exception &e) {
-            std::cerr << "SSL Failed:" << e.what() << std::endl;
-        }
-    }
-}
-
 int main() {
 
     ssl::Certificate cert(localhost_certificate, localhost_privatekey);
     ssl::Context sslctx = ssl::Context::init_server();
     sslctx.set_certificate(cert);
 
-    auto addrs = PeerName::lookup(":10000","");
-    ContextIO ctx = ContextIO::create(1);
-    http::Server server(http::Server::secure);
+    auto secure_addrs = PeerName::lookup(":10000","");
+    auto addrs = PeerName::lookup(":10001","");
+    std::copy(secure_addrs.begin(), secure_addrs.end(), std::back_inserter(addrs));
+    ContextIO ioctx = ContextIO::create(4);
+    http::Server server(http::Server::secure(sslctx, secure_addrs));
     server.set_handler("/", http::Method::GET, http::StaticPage("www"));
     auto fin = server.start(
-            ssl::Stream::accept(ctx.accept(std::move(addrs)),std::move(sslctx),[]{
-                    try { throw; } catch (std::exception &e) { std::cerr << e.what() << std::endl;}
-            }),
+            ioctx.accept(std::move(addrs)),
             http::DefaultLogger([](std::string_view line){
                 std::cout << line << std::endl;
             }));
     std::cout << "Press enter to stop server:" << std::endl;
     std::cin.get();
-    ctx.stop();
+    ioctx.stop();
     fin.join();
     return 0;
 }

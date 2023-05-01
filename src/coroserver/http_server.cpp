@@ -5,9 +5,6 @@ namespace coroserver {
 namespace http {
 
 std::string_view Server::error_handler_prefix ( "error_");
-const Server::RequestFactory Server::secure = [](Stream s){
-    return ServerRequest(std::move(s),true);
-};
 
 IHandler::Ret Server::send_error_page(ServerRequest &req) {
     //lock the lock

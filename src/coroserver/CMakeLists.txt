@@ -18,6 +18,7 @@ add_library(coroserver
 	http_ws_server.cpp
 	ssl_common.cpp
 	ssl_stream.cpp
+	ssl_http_support.cpp
 
 )
 add_dependencies(coroserver coroserver_version)

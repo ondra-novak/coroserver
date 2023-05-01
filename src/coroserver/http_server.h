@@ -15,6 +15,10 @@
 
 namespace coroserver {
 
+namespace ssl {
+    class Context;
+}
+
 namespace http {
 
 class IHandler {
@@ -265,13 +269,16 @@ protected:
 
 };
 
+
 class Server: protected Router {
 public:
 
 
     using RequestFactory = std::function<ServerRequest(Stream)>;
 
-    static const RequestFactory secure;
+//    static const RequestFactory secure;
+
+    static RequestFactory secure(ssl::Context &ctx, std::vector<PeerName> secure_addresses = std::vector<PeerName>());
 
     ///Initialize the server with request factory
     /**

@@ -81,6 +81,8 @@ public:
      */
     static std::vector<PeerName> lookup(std::string_view name, std::string_view def_port = {});
 
+    static std::vector<PeerName> lookup(std::initializer_list<std::string_view> name, std::string_view def_port = {});
+
 
     ///constructs sockaddr from peer, to perform low-level network access
     /**
@@ -226,6 +228,9 @@ public:
      *
      * */
     std::string get_port();
+
+    ///Determines whether peer addr matches this address, which can be interface address
+    bool match(const PeerName &peer) const;
 
 
     bool operator==(const PeerName &x) const {

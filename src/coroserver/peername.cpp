@@ -65,6 +65,17 @@ std::string PeerName::to_string() const {
     return visit(ToStringHlp());
 }
 
+std::vector<PeerName> PeerName::lookup(std::initializer_list<std::string_view> names, std::string_view def_port) {
+    std::vector<PeerName> list;
+    for (const auto &c: names) {
+        auto r = lookup(c, def_port);
+        for (auto &x: r) {
+            list.push_back(std::move(x));
+        }
+    }
+    return list;
+}
+
 std::vector<PeerName> PeerName::lookup(std::string_view name, std::string_view def_port) {
     std::vector<PeerName> list;
     while (!name.empty()) {
@@ -269,6 +280,28 @@ std::size_t PeerName::hash() const {
 
 bool PeerName::equal_to(const PeerName &other) const {
     return _content == other._content;
+}
+
+bool PeerName::match(const PeerName &peer) const {
+    return std::visit([](const auto &a, const auto &b)->bool{
+        using A = std::decay_t<decltype(a)>;
+        using B = std::decay_t<decltype(b)>;
+        if constexpr(std::is_same_v<A,B>) {
+
+            if constexpr(std::is_same_v<A, IPv4>) {
+                return a.port == b.port &&
+                        (a.addr == 0 || a.addr == b.addr);
+            } else if constexpr(std::is_same_v<A, IPv6>) {
+                bool allzeroes = std::all_of(std::begin(a.addr), std::end(a.addr), [](auto x){return x==0;});
+                return (a.port == b.port && allzeroes) || a == b;
+
+            } else {
+                return a==b;
+            }
+        } else {
+            return false;
+        }
+    },_content, peer._content);
 }
 
 void PeerName::resolve_local(std::string_view addr, std::vector<PeerName> &list) {
