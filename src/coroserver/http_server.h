@@ -376,88 +376,95 @@ protected:
 
     template<typename Tracer>
     cocls::async<void> serve_req_coro(Stream s, Tracer tracer) {
-        //lock this object - count request - this is called in context of serve()
-        std::lock_guard _(*this);
         //prepare server request
         ServerRequest req(s);
-        //report that request has been opened
-        tracer(TraceEvent::open, req);
-        //load requests from the stream - return false if error
-        while (co_await req.load()) {
-            //future to await handler
-            IHandler::Ret fut;
-            try {
-                //report that request has been loaded
-                tracer(TraceEvent::load, req);
-                //select matching handler and call it, set future with result
-                select_handler(req, fut);
-                //await for future
-                co_await fut;
-                //handler can optionally not send the request
-                //if the request is error page
-                //if headers was sent - so request is complete
-                if (req.headers_sent()) {
-                    //report that request is complete
-                    tracer(TraceEvent::finish, req);
-                    //close request if keep alive is not active
-                    if (!req.keep_alive()) {
-                        //report closed
+
+        try {
+            //lock this object - count request - this is called in context of serve()
+            std::lock_guard _(*this);
+            //report that request has been opened
+            tracer(TraceEvent::open, req);
+            //load requests from the stream - return false if error
+            while (co_await req.load()) {
+                //future to await handler
+                IHandler::Ret fut;
+                try {
+                    //report that request has been loaded
+                    tracer(TraceEvent::load, req);
+                    //select matching handler and call it, set future with result
+                    select_handler(req, fut);
+                    //await for future
+                    co_await fut;
+                    //handler can optionally not send the request
+                    //if the request is error page
+                    //if headers was sent - so request is complete
+                    if (req.headers_sent()) {
+                        //report that request is complete
+                        tracer(TraceEvent::finish, req);
+                        //close request if keep alive is not active
+                        if (!req.keep_alive()) {
+                            //report closed
+                            tracer(TraceEvent::close, req);
+                            //exit
+                            co_return;
+                        }
+                        //keep alive is active, load next request
+                        continue;
+                    }
+                    //here if the response was not send
+                } catch (...){
+                    //in case of exception
+                    tracer(TraceEvent::exception, req);
+                    //exception has been thrown after response has been sent
+                    //we has no idea in which state this happened
+                    //so the best solution is to close the connection
+                    if (req.headers_sent()) {
+                        //report that request is being closed
                         tracer(TraceEvent::close, req);
-                        //exit
+                        //exit now - connection will be closed
                         co_return;
                     }
-                    //keep alive is active, load next request
-                    continue;
+                    //exception was thrown during processing the request
+                    //before response has been sent
+                    //so set status to 500
+                    req.set_status(500);
+                    //clear any headers
+                    req.clear_headers();
                 }
-                //here if the response was not send
-            } catch (...){
-                //in case of exception
-                tracer(TraceEvent::exception, req);
-                //exception has been thrown after response has been sent
-                //we has no idea in which state this happened
-                //so the best solution is to close the connection
-                if (req.headers_sent()) {
-                    //report that request is being closed
+                //we are here, when request is processed, but response was not sent
+                //so explore status and generate error page
+                co_await send_error_page(req);
+                //report finish request
+                tracer(TraceEvent::finish, req);
+                //if keep alive isn't active
+                if (!req.keep_alive()) {
+                    //report closed
                     tracer(TraceEvent::close, req);
-                    //exit now - connection will be closed
+                    //exit
                     co_return;
                 }
-                //exception was thrown during processing the request
-                //before response has been sent
-                //so set status to 500
-                req.set_status(500);
-                //clear any headers
-                req.clear_headers();
+                //load next request
             }
-            //we are here, when request is processed, but response was not sent
-            //so explore status and generate error page
-            co_await send_error_page(req);
-            //report finish request
-            tracer(TraceEvent::finish, req);
-            //if keep alive isn't active
-            if (!req.keep_alive()) {
-                //report closed
-                tracer(TraceEvent::close, req);
-                //exit
-                co_return;
+            //in this case, load fails
+            //but status can be set indicating that error page should be returned to the client
+            if (req.get_status()) {
+                //this is considered as load.
+                tracer(TraceEvent::load, req);
+                //send error page
+                co_await send_error_page(req);
+                //and report finish
+                tracer(TraceEvent::finish, req);
+                //keep alive is impossible here
             }
-            //load next request
+            //so report close
+            tracer(TraceEvent::close, req);
+            //and exit
+            co_return;
+        } catch (...) {
+            tracer(TraceEvent::exception, req);
+            tracer(TraceEvent::close, req);
+            co_return;
         }
-        //in this case, load fails
-        //but status can be set indicating that error page should be returned to the client
-        if (req.get_status()) {
-            //this is considered as load.
-            tracer(TraceEvent::load, req);
-            //send error page
-            co_await send_error_page(req);
-            //and report finish
-            tracer(TraceEvent::finish, req);
-            //keep alive is impossible here
-        }
-        //so report close
-        tracer(TraceEvent::close, req);
-        //and exit
-        co_return;
     }
 
     IHandler::Ret send_error_page(ServerRequest &req);

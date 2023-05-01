@@ -16,6 +16,8 @@ add_library(coroserver
 	http_static_page.cpp
 	websocket.cpp
 	http_ws_server.cpp
+	ssl_common.cpp
+	ssl_stream.cpp
 
 )
 add_dependencies(coroserver coroserver_version)
