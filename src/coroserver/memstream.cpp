@@ -6,7 +6,11 @@ TimeoutSettings MemStream::get_timeouts() {
     return _tms;
 }
 
-PeerName MemStream::get_source() const {
+PeerName MemStream::get_peer_name() const {
+    return PeerName();
+}
+
+PeerName MemStream::get_interface_name() const {
     return PeerName();
 }
 

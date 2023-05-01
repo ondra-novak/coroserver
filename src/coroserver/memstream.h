@@ -54,7 +54,8 @@ public:
     static Stream create(std::vector<char> input);
 
     virtual TimeoutSettings get_timeouts() override;
-    virtual PeerName get_source() const override;
+    virtual PeerName get_peer_name() const override;
+    virtual PeerName get_interface_name() const override;
     virtual cocls::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
     virtual cocls::future<bool> write(std::string_view buffer) override;

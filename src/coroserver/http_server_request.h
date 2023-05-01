@@ -31,7 +31,7 @@ public:
 
 class ServerRequest {
 public:
-    ServerRequest(Stream s);
+    ServerRequest(Stream s, bool secure = false);
 
     ~ServerRequest();
 
@@ -56,6 +56,17 @@ public:
     std::string_view get_path() const {return _path;}
     ///retrieve host
     std::string_view get_host() const {return _host;}
+
+    ///Modify path
+    /**
+     * Allows to change request's path. The method is intended to
+     * remove fixed prefix from the path.
+     *
+     * @param path new path. If the new path is not part of original path,
+     * you need to allocate path somewhere and keep it valid until the request
+     * is finished
+     */
+    void set_path(std::string_view path) {_path = path;}
 
     ///retrieve set status
     int get_status() const {return _status_code;}
@@ -320,6 +331,7 @@ protected:
     std::string_view _vpath;
     std::string_view _host;
     std::string_view _status_message;
+    bool _secure;
     bool _keep_alive = false;
     bool _expect_100_continue = false;
     bool _has_body = false;

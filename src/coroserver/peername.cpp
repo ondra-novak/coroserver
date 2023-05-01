@@ -333,10 +333,11 @@ bool PeerName::Unix::operator ==(const Unix &x) const {
     return path == x.path;
 }
 
-PeerName PeerName::from_socket(SocketHandle h) {
+PeerName PeerName::from_socket(SocketHandle h, bool peer_name) {
     sockaddr_storage saddr;
     socklen_t slen = sizeof(saddr);
-    if (getsockname(h,reinterpret_cast<sockaddr *>(&saddr), &slen) == -1) {
+    auto fn = peer_name?&getpeername:&getsockname;
+    if (fn(h,reinterpret_cast<sockaddr *>(&saddr), &slen) == -1) {
         int err = errno;
         throw std::system_error(err, std::system_category(), "getsockname");
     }

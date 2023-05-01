@@ -25,7 +25,10 @@ public:
     virtual coroserver::TimeoutSettings get_timeouts() override {
         return {};
     }
-    virtual coroserver::PeerName get_source() const override {
+    virtual coroserver::PeerName get_peer_name() const override {
+        return {};
+    }
+    virtual coroserver::PeerName get_interface_name() const override {
         return {};
     }
     virtual cocls::future<std::string_view> read() override {

@@ -21,8 +21,7 @@ class ContextIOImpl;
 
 class SocketStream: public AbstractStreamWithMetadata {
 public:
-    SocketStream(SocketSupport context, SocketHandle h,
-                            PeerName source, TimeoutSettings tms);
+    SocketStream(SocketSupport context, SocketHandle h, TimeoutSettings tms);
     ~SocketStream();
     virtual cocls::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
@@ -31,6 +30,8 @@ public:
     virtual cocls::future<bool> write_eof() override;
     virtual void shutdown() override;
     virtual Counters get_counters() const noexcept override;
+    virtual PeerName get_peer_name() const override;
+    virtual PeerName get_interface_name() const override;
 
 protected:
     SocketSupport _ctx;

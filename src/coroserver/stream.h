@@ -51,7 +51,10 @@ public:
 
     virtual Counters get_counters() const noexcept = 0;
 
-    virtual PeerName get_source() const = 0;
+    virtual PeerName get_peer_name() const = 0;
+
+    virtual PeerName get_interface_name() const = 0;
+
     virtual void shutdown() = 0;
 
     IStream ()= default;
@@ -79,19 +82,15 @@ protected:
 
 class AbstractStreamWithMetadata: public AbstractStream {
 public:
-    AbstractStreamWithMetadata(PeerName &&source, TimeoutSettings &&tms)
-        :_source(std::move(source)),_tms(std::move(tms)) {}
+    AbstractStreamWithMetadata(TimeoutSettings &&tms)
+        :_tms(std::move(tms)) {}
     virtual void set_timeouts(const TimeoutSettings &tm) override{
         _tms = tm;
     }
     virtual TimeoutSettings get_timeouts() override{
         return _tms;
     }
-    virtual PeerName get_source() const override{
-        return _source;
-    }
 protected:
-    PeerName _source;
     TimeoutSettings _tms;
 };
 
@@ -104,9 +103,6 @@ public:
     virtual TimeoutSettings get_timeouts() override {
         return _proxied->get_timeouts();
     }
-    virtual PeerName get_source() const override {
-        return _proxied->get_source();
-    }
     virtual bool is_read_timeout() const override {
         return _proxied->is_read_timeout();
     }
@@ -115,6 +111,12 @@ public:
     }
     virtual void shutdown() override {
         _proxied->shutdown();
+    }
+    virtual PeerName get_peer_name() const override {
+        return _proxied->get_peer_name();
+    }
+    virtual PeerName get_interface_name() const {
+        return _proxied->get_interface_name();
     }
 
 protected:
@@ -211,7 +213,8 @@ public:
 
     void set_timeouts(const TimeoutSettings &tm)  {return _stream->set_timeouts(tm);}
     TimeoutSettings get_timeouts()  {return _stream->get_timeouts();}
-    PeerName get_source() const {return _stream->get_source();}
+    PeerName get_peer_name() const {return _stream->get_peer_name();}
+    PeerName get_interface_name() const {return _stream->get_interface_name();}
     void shutdown() {return _stream->shutdown();}
 
     ///Retrieves io counters

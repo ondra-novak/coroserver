@@ -5,6 +5,9 @@ namespace coroserver {
 namespace http {
 
 std::string_view Server::error_handler_prefix ( "error_");
+const Server::RequestFactory Server::secure = [](Stream s){
+    return ServerRequest(std::move(s),true);
+};
 
 IHandler::Ret Server::send_error_page(ServerRequest &req) {
     //lock the lock
@@ -141,7 +144,20 @@ void Server::select_handler(ServerRequest &req, IHandler::Ret &fut) {
     //everything under shared lock
     std::shared_lock lk(_mx);
 
-    std::size_t r = call_handler(req, fut);
+    std::size_t r;
+
+    std::string_view prefix = req[strtable::hdr_x_forwarded_prefix];
+
+    if (prefix.empty()) {
+        r = call_handler(req, fut);
+    } else {
+        std::string_view path = req.get_path();
+        if (path.substr(0, prefix.size()) == prefix) {
+            r = call_handler(req, path, fut);
+        } else {
+            r = 1;
+        }
+    }
 
     if (r == 0) return;
 
@@ -161,6 +177,7 @@ void Server::select_handler(ServerRequest &req, IHandler::Ret &fut) {
     fut << [&]{return send_error_page(req);};
 
 }
+
 
 
 }

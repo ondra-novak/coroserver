@@ -273,6 +273,7 @@ extern std::string_view hdr_x_forwarded_for;
 extern std::string_view hdr_forwarded;
 extern std::string_view hdr_x_forwarded_host;
 extern std::string_view hdr_x_forwarded_proto;
+extern std::string_view hdr_x_forwarded_prefix;
 extern std::string_view hdr_front_end_https;
 extern std::string_view hdr_location;
 extern std::string_view hdr_upgrade;

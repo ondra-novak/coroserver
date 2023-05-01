@@ -9,6 +9,7 @@
 #include <cocls/generator.h>
 #include <shared_mutex>
 #include <memory>
+#include <functional>
 
 
 
@@ -267,7 +268,22 @@ protected:
 class Server: protected Router {
 public:
 
-    using Router::Router;
+
+    using RequestFactory = std::function<ServerRequest(Stream)>;
+
+    static const RequestFactory secure;
+
+    ///Initialize the server with request factory
+    /**
+     * @param factory function which pre-process the request. You can pass
+     * a value Server::secure to make secure server. This assumes https
+     * as protocol. However you can perform any complex preprocessing
+     * if you pass a custom function, which returns ServerRequest as result
+     *
+     */
+    Server(RequestFactory factory):_factory(std::move(factory)) {}
+    Server() = default;
+
 
     static std::string_view error_handler_prefix;
 
@@ -347,7 +363,9 @@ public:
         Router::set_handler(path, methods, std::move(h));
     }
 
+
 protected:
+    RequestFactory _factory;
     std::shared_mutex _mx;
     PrefixMap<MethodMap> _endpoints;
     cocls::promise<void> _exit_promise;
@@ -377,7 +395,7 @@ protected:
     template<typename Tracer>
     cocls::async<void> serve_req_coro(Stream s, Tracer tracer) {
         //prepare server request
-        ServerRequest req(s);
+        ServerRequest req = _factory?_factory(std::move(s)):ServerRequest(std::move(s));
 
         try {
             //lock this object - count request - this is called in context of serve()

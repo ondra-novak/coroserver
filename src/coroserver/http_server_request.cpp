@@ -15,8 +15,9 @@ static constexpr std::size_t status_response_max_len=64;
 static constexpr search_kmp<4> search_hdr_sep("\r\n\r\n");
 
 
-ServerRequest::ServerRequest(Stream s)
+ServerRequest::ServerRequest(Stream s, bool secure)
     :_cur_stream(std::move(s))
+    ,_secure(secure)
     ,_body_stream(nullptr)
     ,_load_awt(this)
     ,_get_body_awt(this)
@@ -300,8 +301,11 @@ bool ServerRequest::allow(const std::initializer_list<Method> &methods) {
 
 std::string_view ServerRequest::get_url() const {
     if (_url_cache.empty()) {
-        ForwardedHeader fwhdr(_req_headers[strtable::hdr_forwarded]);
-        bool secure = fwhdr.proto == "https";
+        bool secure = _secure;
+        if (!secure) {
+            ForwardedHeader fwhdr(_req_headers[strtable::hdr_forwarded]);
+            secure = fwhdr.proto == "https";
+        }
         bool ws =false;
         auto wshdr = operator[](strtable::hdr_upgrade);
         if (wshdr.has_value()) {

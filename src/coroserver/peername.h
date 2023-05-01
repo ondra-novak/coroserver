@@ -98,7 +98,13 @@ public:
     static PeerName from_sockaddr(const void *sockaddr);
 
     ///constructs PeerName from socket
-    static PeerName from_socket(SocketHandle h);
+    /**
+     * @param h socket handle
+     * @param peer_name set true to retrieve peer name, otherwise retrieve interface name
+     * @return
+     */
+    static PeerName from_socket(SocketHandle h, bool peer_name);
+
 
     ///Visit the content
     /**

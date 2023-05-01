@@ -43,6 +43,7 @@ std::string_view hdr_x_forwarded_for("X-Forwarded-For");
 std::string_view hdr_forwarded("Forwarded");
 std::string_view hdr_x_forwarded_host("X-Forwarded-Host");
 std::string_view hdr_x_forwarded_proto("X-Forwarded-Proto");
+std::string_view hdr_x_forwarded_prefix("X-Forwarded-Prefix");
 std::string_view hdr_front_end_https("Front-End-Https");
 std::string_view hdr_location("Location");
 std::string_view hdr_upgrade("Upgrade");

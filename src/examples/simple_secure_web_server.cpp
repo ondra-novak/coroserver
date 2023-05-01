@@ -86,7 +86,7 @@ int main() {
 
     auto addrs = PeerName::lookup(":10000","");
     ContextIO ctx = ContextIO::create(1);
-    coroserver::http::Server server;
+    http::Server server(http::Server::secure);
     server.set_handler("/", http::Method::GET, http::StaticPage("www"));
     auto fin = server.start(
             ssl::Stream::accept(ctx.accept(std::move(addrs)),std::move(sslctx),[]{

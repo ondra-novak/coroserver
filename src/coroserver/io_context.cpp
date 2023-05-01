@@ -182,14 +182,9 @@ static cocls::generator<Stream> listen_generator(SocketSupport ctx,
             default:
             case WaitResult::complete:
             case WaitResult::error: {
-                sockaddr_storage addr;
-                socklen_t slen = sizeof(addr);
-                int s = ::accept4(h, reinterpret_cast<sockaddr *>(&addr), &slen,
-                        SOCK_NONBLOCK|SOCK_CLOEXEC);
+                int s = ::accept4(h, nullptr, nullptr, SOCK_NONBLOCK|SOCK_CLOEXEC);
                 if (s>=0) {
-                    co_yield Stream ( std::make_shared<SocketStream>(ctx, s,
-                            PeerName::from_sockaddr(&addr),
-                            tmcfg));
+                    co_yield Stream ( std::make_shared<SocketStream>(ctx, s,tmcfg));
                 } else {
 
                     int e = errno;
@@ -214,7 +209,7 @@ cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> &list,
     for (PeerName &x: list) {
         try {
             SocketHandle h = ContextIO::listen_socket(x);
-            x = PeerName::from_socket(h);
+            x = PeerName::from_socket(h,false);
             gens.push_back(listen_generator(sup, tms, token, h));
             handles.push_back(h);
         } catch (...) {
@@ -327,7 +322,7 @@ cocls::future<Stream> ContextIO::connect(std::vector<PeerName> list, int timeout
             //but if we don't have stream
             if (!connected.has_value()) {
                 //create it now
-                connected = Stream(std::make_shared<SocketStream>(*this, *nfo.socket, nfo.peer, tms));
+                connected = Stream(std::make_shared<SocketStream>(*this, *nfo.socket, tms));
                 //and stop other attempts
                 stop.request_stop();
             } else {
