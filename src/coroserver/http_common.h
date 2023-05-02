@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <variant>
+#include <concepts>
 
 
 namespace coroserver {
@@ -237,6 +239,196 @@ struct ForwardedHeader{
     }
 
 };
+
+///Split path to parts separated by /
+/**
+ * @param vpath path or virtual path. Query part is automatically removed
+ * @return function which returns next part for each call. It skips any empty parts.
+ * Automatically performs URL-decode on each part. Function returns empty string if there
+ * are no more parts
+ */
+inline auto split_path(std::string_view vpath) {
+    vpath = vpath.substr(0,std::min(vpath.find('?'), vpath.length()));
+    return [vpath, buffer = std::string(), splt = splitAt(vpath, "/")]() mutable {
+        while (splt) {
+            auto part = splt();
+            if (!part.empty()) {
+                buffer.clear();
+                url::decode(part, [&](char c){buffer.push_back(c);});
+                return std::string_view(buffer);
+            }
+        }
+        return std::string_view();
+    };
+}
+
+namespace _details {
+
+    template<typename ... Args> class TypeList;
+
+    template<typename T, typename X> struct MakeQueryValuesVariant;
+
+    template<typename T, typename ... Args> struct MakeQueryValuesVariant<T, TypeList<Args...>> {
+    using Type = std::variant<std::monostate, Args T::* ..., std::optional<Args> T::* ...>;
+
+    };
+
+    template<typename X>
+    struct is_optional {
+        static constexpr bool value = false;
+        using Type = X;
+    };
+
+    template<typename X>
+    struct is_optional<std::optional<X> > {
+        static constexpr bool value = true;
+        using Type = X;
+    };
+
+
+}
+
+///Contains list of supported types fields that can appear in query
+using SupportedQueryValueTypes = _details::TypeList<std::uint16_t, std::int16_t, std::uint32_t, std::int32_t, std::uint64_t, std::int64_t, float, double, char, std::string, bool>;
+
+///Contains std::variant of all possible references to fields of given type T
+template<typename T>
+using SupportedQueryValueVariant = typename _details::MakeQueryValuesVariant<T, SupportedQueryValueTypes>::Type;
+
+
+///Contains reference to a field in object T
+/**
+ * @tparam T structure or object where values from the query will be stored
+ *
+ * The supported types are specified in SupportedQueryValueTypes. The reference to a
+ * field is specified as pointer to a member variable (T::*). The variable can
+ * have one of supported type or std::optional of supported type. The std::optional
+ * template allows to detect, whether the query contained the field associated
+ * with the variable in question
+ */
+template<typename T>
+class QueryValueRef: public SupportedQueryValueVariant<T> {
+public:
+    using SupportedQueryValueVariant<T>::SupportedQueryValueVariant;
+    bool operator<(const QueryValueRef &) = delete;
+    bool operator>(const QueryValueRef &) = delete;
+    bool operator<=(const QueryValueRef &) = delete;
+    bool operator>=(const QueryValueRef &) = delete;
+};
+
+///Declaration of type, which contains mapping table from string keys to variable names
+/**
+ *
+ * To construct this
+ * @code
+ * {"foo", &T::foo},   //"foo" -> &T::foo
+ * {"bar", &T::bar},   //"bar" -> &T::bar
+ * @endcode
+ *
+ * To construct variable if this type, use makeQueryFieldMap
+ */
+template<typename T, int N>
+using QueryFieldMap = StaticLookupTable<std::string_view, QueryValueRef<T>, N>;
+
+
+///Parse the query and store values to a target object
+/**
+ * @param vpath path or virtual path which contains the query. The query must be behind
+ * character '?'. Anything before this character is ignored
+ *
+ * @param map Mapping table from key to field. Use makeQueryFieldMap() to construct such
+ * object
+ * @param target target object, where the values will be stored
+ * @return count of successfuly stored values.
+ */
+template<typename T, int N>
+std::size_t parse_query(std::string_view vpath, const QueryFieldMap<T,N> &map, T &target) {
+    if (vpath.empty()) return 0;
+    vpath = vpath.substr(std::min(vpath.length()-1, vpath.find('?'))+1);
+    if (vpath.empty()) return 0;
+    std::string key;
+    std::string value;
+    std::size_t fld_count = 0;
+    auto spltFields = splitAt(vpath,"&");
+    while (spltFields) {
+        std::string_view item = spltFields();
+        auto eq = item.find('=');
+        if (eq == item.npos) {
+            key.clear();
+            url::decode(item,[&](char c){key.push_back(c);});
+            value = "1";
+        } else {
+            key.clear();
+            value.clear();
+            url::decode(item.substr(0,eq),[&](char c){key.push_back(c);});
+            url::decode(item.substr(eq+1),[&](char c){value.push_back(c);});
+        }
+        QueryValueRef<T> fldref = map[key];
+        if (std::holds_alternative<std::monostate>(fldref)) continue;
+        std::visit([&](auto ref){
+            using ItemT = decltype(ref);
+            if constexpr(std::is_member_object_pointer_v<ItemT>) {
+                using PtrType = std::decay_t<decltype(target.*ref)>;
+                using Type = std::decay_t<typename _details::is_optional<PtrType>::Type>;
+                if constexpr(std::is_same_v<Type,std::uint16_t>) {
+                    target.*ref =  static_cast<std::uint16_t>(std::strtoul(value.c_str(),nullptr,10));
+                } else if constexpr(std::is_same_v<Type,std::int16_t>) {
+                    target.*ref =  static_cast<std::int16_t>(std::strtol(value.c_str(),nullptr,10));
+                } else if constexpr(std::is_same_v<Type,std::uint32_t>) {
+                    target.*ref =  static_cast<std::uint32_t>(std::strtoul(value.c_str(),nullptr,10));
+                } else if constexpr(std::is_same_v<Type,std::int32_t>) {
+                    target.*ref =  static_cast<std::int32_t>(std::strtol(value.c_str(),nullptr,10));
+                } else if constexpr(std::is_same_v<Type,std::uint64_t>) {
+                    target.*ref =  static_cast<std::uint64_t>(std::strtoull(value.c_str(),nullptr,10));
+                } else if constexpr(std::is_same_v<Type,std::int64_t>) {
+                    target.*ref =  static_cast<std::int64_t>(std::strtoll(value.c_str(),nullptr,10));
+                } else if constexpr(std::is_same_v<Type,float>) {
+                    target.*ref =  static_cast<float>(std::strtod(value.c_str(),nullptr));
+                } else if constexpr(std::is_same_v<Type,double>) {
+                    target.*ref =  static_cast<double>(std::strtod(value.c_str(),nullptr));
+                } else if constexpr(std::is_same_v<Type,char>) {
+                    target.*ref =  value.c_str()[0];
+                } else if constexpr(std::is_same_v<Type,std::string>) {
+                    target.*ref =  value;
+                } else  {
+                    static_assert(std::is_same_v<Type,bool>);
+                    if (value == "true" || value == "1" || value == "yes" || value == "on") {
+                        target.*ref = true;
+                    } else if (value == "false" || value == "0" || value == "no" || value == "off") {
+                        target.*ref = false;
+                    } else return;
+                }
+                ++fld_count;
+            }
+        }, fldref);
+    }
+    return fld_count;
+}
+
+///Constructs QueryFieldMap from list of mapping items
+/**
+ *
+ * @tparam T mandatory, you need to specify target type
+ * @tparam N optional, specify count of items, if ommited, the compiler calculates
+ * @param x list of items. It is expected N items. The each item contains pair wich defines
+ *  mapping
+ *
+ * @code
+ * constexpr auto mapping = makeQueryFieldMap<T>({
+ *    {"foo", &T::foo},   //"foo" -> &T::foo
+ *    {"bar", &T::bar},   //"bar" -> &T::bar
+ * })
+ * @endcode
+ *
+ * The function is declared as constexpr. Use this for benefit, as the mapping table
+ * is generated during compile time.
+ *
+ * @return an instance of QueryFieldMap
+ */
+template<typename T, int N>
+inline constexpr auto makeQueryFieldMap(const typename QueryFieldMap<T,N>::Item (&x)[N]) {
+    return QueryFieldMap<T, N>(x);
+}
 
 
 namespace strtable {

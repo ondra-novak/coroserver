@@ -2,10 +2,10 @@ cmake_minimum_required(VERSION 3.1)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/)
 #file(GLOB testFiles "*.cpp")
-set(testFiles 
+set(testFiles
     compile_test.cpp
     peername.cpp
-    server_and_connect.cpp  
+    server_and_connect.cpp
     read_until.cpp
     chartest.cpp
     json.cpp
@@ -15,6 +15,7 @@ set(testFiles
     http_server.cpp
     prefixmap.cpp
     named_enum.cpp
+    query.cpp
 )
 
 link_libraries(

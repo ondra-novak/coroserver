@@ -9,6 +9,16 @@
 
 namespace coroserver {
 
+namespace _detail {
+    template<typename T>
+    concept Comparable = requires(T a, T b) {
+        { a < b } -> std::same_as<bool>;
+        { a <= b } -> std::same_as<bool>;
+        { a > b } -> std::same_as<bool>;
+        { a >= b } -> std::same_as<bool>;
+    };
+}
+
 ///Construct mapping table for enum to specified value type
 /**
  * @tparam EnumType type of enum to be mapped. Can be any enum, however it is also possible to use any integral type.
@@ -41,7 +51,7 @@ public:
     using EnumUnderlyingType = typename std::conditional_t<std::is_enum_v<EnumType>,std::underlying_type<std::decay_t<EnumType> >, std::decay<EnumType> >::type;
     ///Contains true, if ValueType can be ordered. For large set of items it is better to support ordering, otherwise fullrow scan is used.
     #if defined( __cpp_concepts) and not defined (__CDT_PARSER__)
-    constexpr static bool is_ordered =  requires{ std::declval<ValueType>() <  std::declval<ValueType>();};
+    constexpr static bool is_ordered =  _detail::Comparable<ValueType>;
     #else
     constexpr static bool is_ordered =  false;
     #endif
@@ -50,6 +60,8 @@ public:
         while (x) {++c; x>>=1;}
         return c;
     }
+
+    constexpr static bool can_be_sequence =std::is_integral_v<EnumType> || std::is_enum_v<EnumType>;
 
     constexpr static int search_cycles = log2(Count);
 
@@ -195,15 +207,16 @@ public:
      * @return returns iterator or end() if not found
     */
     constexpr Iterator find(const EnumType &evalue) const {
-        if (_sequence) {
-            if (evalue >= _items[0]->key && evalue <= _items[Count-1]->key) {
-                int offset = static_cast<int>(static_cast<EnumUnderlyingType>(evalue) - static_cast<EnumUnderlyingType>(_items[0]->key));
-                return Iterator(_items+offset);
+        if constexpr(can_be_sequence) {
+            if (_sequence) {
+                if (evalue >= _items[0]->key && evalue <= _items[Count-1]->key) {
+                    int offset = static_cast<int>(static_cast<EnumUnderlyingType>(evalue) - static_cast<EnumUnderlyingType>(_items[0]->key));
+                    return Iterator(_items+offset);
+                }
+                return end();
             }
-            return end();
-        } else {
-            return Iterator(_items+lower_bound([&](int idx){return _items[idx]->key;}, evalue));
         }
+        return Iterator(_items+lower_bound([&](int idx){return _items[idx]->key;}, evalue));
     }
 
     ///finds record for given  value
@@ -246,7 +259,7 @@ protected:
     }
     ///
     constexpr bool is_sequence() const {
-        if constexpr(std::is_integral_v<EnumType> || std::is_enum_v<EnumType>) {
+        if constexpr(can_be_sequence) {
             EnumType itr = _items[0]->key;
             for (int i = 1; i < Count; i++) {
                 if constexpr(std::is_enum_v<EnumType>) {
