@@ -53,8 +53,6 @@ public:
 
     virtual PeerName get_peer_name() const = 0;
 
-    virtual PeerName get_interface_name() const = 0;
-
     virtual void shutdown() = 0;
 
     IStream ()= default;
@@ -114,9 +112,6 @@ public:
     }
     virtual PeerName get_peer_name() const override {
         return _proxied->get_peer_name();
-    }
-    virtual PeerName get_interface_name() const {
-        return _proxied->get_interface_name();
     }
 
 protected:
@@ -214,7 +209,6 @@ public:
     void set_timeouts(const TimeoutSettings &tm)  {return _stream->set_timeouts(tm);}
     TimeoutSettings get_timeouts()  {return _stream->get_timeouts();}
     PeerName get_peer_name() const {return _stream->get_peer_name();}
-    PeerName get_interface_name() const {return _stream->get_interface_name();}
     void shutdown() {return _stream->shutdown();}
 
     ///Retrieves io counters

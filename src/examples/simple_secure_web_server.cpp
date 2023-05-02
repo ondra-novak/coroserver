@@ -74,9 +74,11 @@ int main() {
 
     auto secure_addrs = PeerName::lookup(":10000","");
     auto addrs = PeerName::lookup(":10001","");
-    std::copy(secure_addrs.begin(), secure_addrs.end(), std::back_inserter(addrs));
+    std::transform(secure_addrs.begin(), secure_addrs.end(), std::back_inserter(addrs), [](const PeerName &p){
+        return PeerName(p).set_group_id(1);
+    });
     ContextIO ioctx = ContextIO::create(4);
-    http::Server server(http::Server::secure(sslctx, secure_addrs));
+    http::Server server(http::Server::secure(sslctx, 1));
     server.set_handler("/", http::Method::GET, http::StaticPage("www"));
     auto fin = server.start(
             ioctx.accept(std::move(addrs)),

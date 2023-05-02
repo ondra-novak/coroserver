@@ -276,9 +276,19 @@ public:
 
     using RequestFactory = std::function<ServerRequest(Stream)>;
 
-//    static const RequestFactory secure;
 
-    static RequestFactory secure(ssl::Context &ctx, std::vector<PeerName> secure_addresses = std::vector<PeerName>());
+    ///Create secure request (implements https)
+    /**
+     * @param ctx SSL context, which should have loaded a certificate.
+     * @param group_id specifies group_id for connections which are considered as secure. Default value 0
+     * disables filtering, so all incomming connections are considered secure (https). You can define
+     * group of addesses with different group_id and mark connections to this addresses as secure.
+     * @param mask specifes, that group_id is mask. The connection is considered secure when its
+     * peer_name's group_id masked by this mask equals the mask (id & mask == mask). If this value is false,
+     * group id is compared for equality
+     * @return a function, which is passed to the constructor of the server - servers as request factory
+     */
+    static RequestFactory secure(ssl::Context &ctx, int group_id = 0, bool mask = false);
 
     ///Initialize the server with request factory
     /**

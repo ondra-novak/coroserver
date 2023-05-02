@@ -103,53 +103,6 @@ ListeningSocketHandle ContextIO::listen_socket(const PeerName &addr) {
 
 }
 
-
-#if 0
-cocls::future_with_context<Stream, ContextIO::ConnectCtx> ContextIO::connect(PeerName addr,
-                                        unsigned int connect_timeout_ms,
-                                        TimeoutSettings tms) {
-    return {*this,std::move(addr), connect_timeout_ms, std::move(tms) };
-}
-
-ContextIO::ConnectCtx::ConnectCtx(cocls::promise<Stream> &&promise,
-                                  std::shared_ptr<ContextIOImpl> ctx,
-                                  PeerName && addr,
-                                  unsigned int connect_timeout_ms,
-                                  TimeoutSettings tms)
-       :promise(std::move(promise))
-       ,ctx(ctx)
-       ,addr(std::move(addr))
-       ,tms(std::move(tms))
-       ,h(addr.connect())
-{
-    auto tp = TimeoutSettings::fromDuration(connect_timeout_ms);
-    await([&]{
-       return ctx->io_wait(h, AsyncOperation::connect, tp);
-    });
-}
-
-void ContextIO::ConnectCtx::resume() noexcept {
-    try {
-        WaitResult res = value();
-        switch (res) {
-            case WaitResult::complete:
-                promise(Stream(std::make_shared<SocketStream>(ctx, h, std::move(addr), tms)));
-                return;
-            case WaitResult::timeout:
-                throw TimeoutException();
-            default:
-            case WaitResult::closed:
-            case WaitResult::error:
-                break;
-        }
-        throw ConnectFailedException();
-    } catch (...) {
-        promise(std::current_exception());
-    }
-}
-
-#endif
-
 cocls::suspend_point<void> ContextIOImpl::mark_closing(SocketHandle s) {
     return _disp->mark_closing(s);
 }
@@ -167,7 +120,8 @@ cocls::suspend_point<void> ContextIOImpl::stop() {
 static cocls::generator<Stream> listen_generator(SocketSupport ctx,
         TimeoutSettings tmcfg,
         std::stop_token stoken,
-        ListeningSocketHandle h) {
+        ListeningSocketHandle h,
+        int group_id) {
 
     std::stop_callback stopcb(stoken, [&]{
         ctx.mark_closing(h);
@@ -182,9 +136,14 @@ static cocls::generator<Stream> listen_generator(SocketSupport ctx,
             default:
             case WaitResult::complete:
             case WaitResult::error: {
-                int s = ::accept4(h, nullptr, nullptr, SOCK_NONBLOCK|SOCK_CLOEXEC);
+                sockaddr_storage addr;
+                socklen_t slen = sizeof(addr);
+                int s = ::accept4(h, reinterpret_cast<sockaddr *>(&addr), &slen,
+                        SOCK_NONBLOCK|SOCK_CLOEXEC);
                 if (s>=0) {
-                    co_yield Stream ( std::make_shared<SocketStream>(ctx, s,tmcfg));
+                    co_yield Stream ( std::make_shared<SocketStream>(ctx, s,
+                            PeerName::from_sockaddr(&addr).set_group_id(group_id),
+                            tmcfg));
                 } else {
 
                     int e = errno;
@@ -209,8 +168,9 @@ cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> &list,
     for (PeerName &x: list) {
         try {
             SocketHandle h = ContextIO::listen_socket(x);
-            x = PeerName::from_socket(h,false);
-            gens.push_back(listen_generator(sup, tms, token, h));
+            int id =x.get_group_id();
+            x = PeerName::from_socket(h,false).set_group_id(id);
+            gens.push_back(listen_generator(sup, tms, token, h, id));
             handles.push_back(h);
         } catch (...) {
             for (SocketHandle x: handles) {
@@ -322,7 +282,7 @@ cocls::future<Stream> ContextIO::connect(std::vector<PeerName> list, int timeout
             //but if we don't have stream
             if (!connected.has_value()) {
                 //create it now
-                connected = Stream(std::make_shared<SocketStream>(*this, *nfo.socket, tms));
+                connected = Stream(std::make_shared<SocketStream>(*this, *nfo.socket, nfo.peer, tms));
                 //and stop other attempts
                 stop.request_stop();
             } else {

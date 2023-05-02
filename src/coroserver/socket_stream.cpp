@@ -5,10 +5,11 @@
 namespace coroserver {
 
 
-SocketStream::SocketStream(SocketSupport context, SocketHandle h,TimeoutSettings tms)
+SocketStream::SocketStream(SocketSupport context, SocketHandle h, PeerName peer, TimeoutSettings tms)
 :AbstractStreamWithMetadata(std::move(tms))
 ,_ctx(std::move(context))
 ,_h(h)
+,_peer(std::move(peer))
 ,_reader(start_read())
 ,_writer(start_write())
 {
@@ -148,11 +149,8 @@ SocketStream::Counters SocketStream::get_counters() const noexcept {
 }
 
 PeerName SocketStream::get_peer_name() const {
-    return PeerName::from_socket(_h,true);
+    return _peer;
 }
 
-PeerName SocketStream::get_interface_name() const {
-    return PeerName::from_socket(_h,false);
-}
 
 }

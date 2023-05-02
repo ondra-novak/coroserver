@@ -28,9 +28,6 @@ public:
     virtual coroserver::PeerName get_peer_name() const override {
         return {};
     }
-    virtual coroserver::PeerName get_interface_name() const override {
-        return {};
-    }
     virtual cocls::future<std::string_view> read() override {
         if (async_delay_ms) {
             return [&](auto promise) {

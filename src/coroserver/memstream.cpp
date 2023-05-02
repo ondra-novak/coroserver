@@ -10,9 +10,7 @@ PeerName MemStream::get_peer_name() const {
     return PeerName();
 }
 
-PeerName MemStream::get_interface_name() const {
-    return PeerName();
-}
+
 
 cocls::future<std::string_view> MemStream::read() {
     std::string_view data = read_putback_buffer();
