@@ -331,27 +331,20 @@ template<typename T, int N>
 using QueryFieldMap = StaticLookupTable<std::string_view, QueryValueRef<T>, N>;
 
 
-///Parse the query and store values to a target object
+///Parse form urlencoded content and enumerate key/value pairs
 /**
- * @param vpath path or virtual path which contains the query. The query must be behind
- * character '?'. Anything before this character is ignored
- *
- * @param map Mapping table from key to field. Use makeQueryFieldMap() to construct such
- * object
- * @param target target object, where the values will be stored
- * @return count of successfuly stored values.
+ * @param content content
+ * @param fn function which receives key/value pair
  */
-template<typename T, int N>
-std::size_t parse_query(std::string_view vpath, const QueryFieldMap<T,N> &map, T &target) {
-    if (vpath.empty()) return 0;
-    vpath = vpath.substr(std::min(vpath.length()-1, vpath.find('?'))+1);
-    if (vpath.empty()) return 0;
+template<typename Fn>
+CXX20_REQUIRES(std::invocable<Fn, std::string, std::string>)
+void parse_form_urlencoded_enum_kv(std::string_view content, Fn &&fn) {
     std::string key;
     std::string value;
-    std::size_t fld_count = 0;
-    auto spltFields = splitAt(vpath,"&");
+    auto spltFields = splitAt(content, "&");
     while (spltFields) {
         std::string_view item = spltFields();
+        if (item.empty()) continue;
         auto eq = item.find('=');
         if (eq == item.npos) {
             key.clear();
@@ -363,13 +356,32 @@ std::size_t parse_query(std::string_view vpath, const QueryFieldMap<T,N> &map, T
             url::decode(item.substr(0,eq),[&](char c){key.push_back(c);});
             url::decode(item.substr(eq+1),[&](char c){value.push_back(c);});
         }
+        fn(key, value);
+    }
+
+}
+
+///Parse content www-form-urlencoded
+/**
+ * @param content to parse
+ *
+ * @param map Mapping table from key to field. Use makeQueryFieldMap() to construct such
+ * object
+ * @param target target object, where the values will be stored
+ * @return count of successfully stored values.
+ */
+template<typename T, int N>
+std::size_t parse_form_urlencoded(std::string_view content, const QueryFieldMap<T,N> &map, T &target) {
+    if (content.empty()) return 0;
+    std::size_t fld_count = 0;
+    parse_form_urlencoded_enum_kv(content, [&](const std::string &key, const std::string &value){
         QueryValueRef<T> fldref = map[key];
-        if (std::holds_alternative<std::monostate>(fldref)) continue;
+        if (std::holds_alternative<std::monostate>(fldref)) return;
         std::visit([&](auto ref){
             using ItemT = decltype(ref);
             if constexpr(std::is_member_object_pointer_v<ItemT>) {
-                using PtrType = std::decay_t<decltype(target.*ref)>;
-                using Type = std::decay_t<typename _details::is_optional<PtrType>::Type>;
+                using PtrType = std::remove_reference_t<decltype(target.*ref)>;
+                using Type = std::remove_reference_t<typename _details::is_optional<PtrType>::Type>;
                 if constexpr(std::is_same_v<Type,std::uint16_t>) {
                     target.*ref =  static_cast<std::uint16_t>(std::strtoul(value.c_str(),nullptr,10));
                 } else if constexpr(std::is_same_v<Type,std::int16_t>) {
@@ -401,8 +413,92 @@ std::size_t parse_query(std::string_view vpath, const QueryFieldMap<T,N> &map, T
                 ++fld_count;
             }
         }, fldref);
-    }
+    });
     return fld_count;
+
+}
+
+
+///Parse the query and store values to a target object
+/**
+ * @param vpath path or virtual path which contains the query. The query must be behind
+ * character '?'. Anything before this character is ignored
+ *
+ * @param map Mapping table from key to field. Use makeQueryFieldMap() to construct such
+ * object
+ * @param target target object, where the values will be stored
+ * @return count of successfuly stored values.
+ */
+template<typename T, int N>
+std::size_t parse_query(std::string_view vpath, const QueryFieldMap<T,N> &map, T &target) {
+    if (vpath.empty()) return 0;
+    vpath = vpath.substr(std::min(vpath.length()-1, vpath.find('?'))+1);
+    return parse_form_urlencoded(vpath, map, target);
+}
+
+template<typename T, int N, typename Fn>
+void build_query(const T &source, const QueryFieldMap<T, N> &map, Fn &&output) {
+    std::string buff;
+
+    auto do_output = [&](const auto &item) {
+        using Type = std::decay_t<decltype(item)>;
+        if constexpr(std::is_same_v<T, char>) {
+            buff.clear();
+            buff.push_back(item);
+        } else if constexpr(std::is_same_v<Type , std::string>) {
+            url::encode(item, output);
+            return;
+        } else if constexpr(std::is_arithmetic_v<Type >) {
+            buff = std::to_string(item);
+        } else {
+            static_assert(std::is_same_v<Type,bool>);
+            if (item) buff = "true"; else buff="false";
+        }
+        url::encode(buff, output);
+    };
+
+    bool print_sep = false;
+    for (const auto &pair: map) {
+        if (print_sep) output('&');
+        print_sep = std::visit([&](auto ref){
+            using ItemT = decltype(ref);
+            if constexpr(std::is_member_object_pointer_v<ItemT>) {
+                using PtrType = std::decay_t<decltype(source.*ref)>;
+                constexpr bool is_optional = _details::is_optional<PtrType>::value;
+                if constexpr(is_optional) {
+                    const auto &v = source.*ref;
+                    if (v.has_value()) {
+                        url::encode(pair.key, output);
+                        output('=');
+                        do_output(*v);
+                        return true;
+                    }
+                } else {
+                    const auto &v = source.*ref;
+                    url::encode(pair.key, output);
+                    output('=');
+                    do_output(v);
+                    return true;
+                }
+            }
+            return false;
+        }, pair.value);
+    }
+}
+
+
+///Parse the query and enumerate key/values pair
+/**
+ * @param vpath path or virtual path which contains the query. The query must be behind
+ * character '?'. Anything before this character is ignored
+ * @param fn function called for each pair
+ */
+template<typename Fn>
+CXX20_REQUIRES(std::invocable<Fn, std::string, std::string>)
+std::size_t parse_query_enum_kv(std::string_view vpath, Fn &&fn) {
+    if (vpath.empty()) return 0;
+    vpath = vpath.substr(std::min(vpath.length()-1, vpath.find('?'))+1);
+    return parse_form_urlencoded_enum_kv(vpath, std::forward<Fn>(fn));
 }
 
 ///Constructs QueryFieldMap from list of mapping items
@@ -429,6 +525,7 @@ template<typename T, int N>
 inline constexpr auto makeQueryFieldMap(const typename QueryFieldMap<T,N>::Item (&x)[N]) {
     return QueryFieldMap<T, N>(x);
 }
+
 
 
 namespace strtable {

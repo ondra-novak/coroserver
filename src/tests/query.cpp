@@ -55,8 +55,16 @@ void test1() {
 
 }
 
+void test2() {
+    Data v;
+    coroserver::http::parse_query("path?a=10&unknown=value&b=20.3&c=1.23e04&d=A&e=hello%20world&f&g=42&j=B&k=TestTest&l=false", Data::fldmap, v);
+    std::string out;
+    coroserver::http::build_query(v, Data::fldmap, [&](char c){out.push_back(c);});
+    CHECK_EQUAL(out, "a=10&b=20.299999&c=12300.000000&d=65&e=hello%20world&f=1&g=42&j=66&k=TestTest&l=0");
+}
 
 int main() {
     test1();
+    test2();
     return 0;
 }

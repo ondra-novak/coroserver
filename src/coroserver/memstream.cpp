@@ -50,8 +50,8 @@ Stream MemStream::create(std::vector<char> input) {
     return Stream(std::make_shared<MemStream>(std::move(input)));
 }
 
-void MemStream::shutdown() {
-    //empty
+cocls::suspend_point<void> MemStream::shutdown() {
+    return {};
 }
 
 std::string_view MemStream::get_output(Stream s) {

@@ -16,6 +16,7 @@ set(testFiles
     prefixmap.cpp
     named_enum.cpp
     query.cpp
+    http_client.cpp
 )
 
 link_libraries(

@@ -189,9 +189,9 @@ T string2signed(Iter iter, Iter end, int base) {
     if (iter == end) return {};
     if (*iter == '-') {
         ++iter;
-        return -string2unsigned(iter, end, base);
+        return -string2unsigned<T>(iter, end, base);
     } else {
-        return string2unsigned(iter, end, base);
+        return string2unsigned<T>(iter, end, base);
     }
 }
 

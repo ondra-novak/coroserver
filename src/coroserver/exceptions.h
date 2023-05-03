@@ -79,6 +79,13 @@ public:
     }
 };
 
+class InvalidFormat: public NetworkException {
+public:
+    const char *what() const noexcept override {
+        return "Invalid format";
+    }
+};
+
 
 }
 

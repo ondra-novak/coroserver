@@ -53,7 +53,7 @@ public:
 
     virtual PeerName get_peer_name() const = 0;
 
-    virtual void shutdown() = 0;
+    virtual cocls::suspend_point<void> shutdown() = 0;
 
     IStream ()= default;
     IStream &operator=(const IStream &) = delete;
@@ -107,8 +107,8 @@ public:
     virtual Counters get_counters() const noexcept override  {
         return _proxied->get_counters();
     }
-    virtual void shutdown() override {
-        _proxied->shutdown();
+    virtual cocls::suspend_point<void> shutdown() override {
+        return _proxied->shutdown();
     }
     virtual PeerName get_peer_name() const override {
         return _proxied->get_peer_name();
@@ -209,7 +209,7 @@ public:
     void set_timeouts(const TimeoutSettings &tm)  {return _stream->set_timeouts(tm);}
     TimeoutSettings get_timeouts()  {return _stream->get_timeouts();}
     PeerName get_peer_name() const {return _stream->get_peer_name();}
-    void shutdown() {return _stream->shutdown();}
+    cocls::suspend_point<void> shutdown() {return _stream->shutdown();}
 
     ///Retrieves io counters
     /**
@@ -324,6 +324,17 @@ public:
     }
 
 
+    ///creates stream, which doesn't send or receive any data;
+    /**
+     * @return the stream has no data, and no data can be written
+     *
+     * Stream object purposely has no default constructor, so you cannot create
+     * unitialized stream, unless you specify nullptr as stream object, which
+     * visually manifests that stream is purposely uninitialized. Other way
+     * how to safely create stream where is no stream available is to use null_stream();
+     *
+     */
+    static Stream null_stream();
 
 
 

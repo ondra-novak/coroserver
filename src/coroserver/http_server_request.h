@@ -22,12 +22,6 @@ namespace coroserver {
 
 namespace http {
 
-class BodyData: public std::vector<char> {
-public:
-    using std::vector<char>::vector;
-    operator std::string_view() const {return std::string_view(data(),size());}
-};
-
 
 class ServerRequest {
 public:

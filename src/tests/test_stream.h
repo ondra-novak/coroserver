@@ -80,7 +80,7 @@ public:
     virtual void set_timeouts(const coroserver::TimeoutSettings &) override {
 
     }
-    virtual void shutdown() override {}
+    virtual cocls::suspend_point<void > shutdown() override {return {};}
 
     virtual Counters get_counters() const noexcept override  {
         return _cntr;

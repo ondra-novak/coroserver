@@ -178,9 +178,10 @@ public:
             TimeoutSettings tms = {defaultTimeout,defaultTimeout});
 
 
-    ///Connect stream to one of given addressed
+    ///Connect stream to one of given addresses
 
     cocls::future<Stream> connect(std::vector<PeerName> list, int timeout_ms = defaultTimeout, TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+
 
 
     ///Stop the running context
@@ -227,113 +228,6 @@ public:
      */
 
 
-
-#if 0
-    class ConnectCtx: cocls::abstract_listening_awaiter<future<WaitResult> > {
-    public:
-        ConnectCtx(cocls::promise<Stream> &&promise,
-                   std::shared_ptr<ContextIOImpl> ctx,
-                   PeerName && addr,
-                   unsigned int connect_timeout,
-                   TimeoutSettings tms);
-
-        virtual void resume() noexcept override;
-    protected:
-        cocls::promise<Stream> promise;
-        std::shared_ptr<ContextIOImpl> ctx;
-        PeerName addr;
-        TimeoutSettings tms;
-        SocketHandle h;
-    };
-
-    ///Create a stream by connecting single address
-    /**
-     * @param addr address to connect
-     * @param connect_timeout_ms total timeout.
-     * @param tms timeouts for newly create stream
-     * @return stream.
-     * @exception ConnectFailedException none of addresses successfully connected
-     * @exception TimeoutException timeout
-     *
-     * @note uses future_with_context. The context stores information need to complete
-     * connection, do not drop the future
-     */
-    cocls::future_with_context<Stream, ConnectCtx> connect(PeerName addr,
-                                unsigned int connect_timeout_ms = 60000,
-                                TimeoutSettings tms = {60000,60000});
-
-
-    ///Connect - try multiple addresses - they are tried in order
-    /**
-     *
-     * @param list list of addresses
-     * @param connect_timeout_ms connect timeout
-     * @param tms timeout configuration
-     * @return stream
-     */
-    future<Stream> connect(NetAddrList list,
-                                unsigned int connect_timeout_ms = 60000,
-                                TimeoutSettings tms = {60000,60000});
-
-
-
-
-    ///Create DatagramExchange object at given address
-    /**
-     * @param bind_addr address, it is always local address. Destination address is
-     * then specified on every datagram.
-     * @param tms initial timeout settings.
-     * @return DatagramExchange object.
-     */
-    DatagramExchange create_datagram_exchange(PeerName bind_addr, TimeoutSettings tms = {60000,60000});
-
-    ///Create datagram router which has ability to create virtual message streams
-    /**
-     * @param bind_addr bind address - local address
-     * @param dedup_messages set true to deduplicate messages. Can be useful when
-     *   ping-pong communication is used. If the peer sends duplicated message, it
-     *   is automatically responded with recent response. This helps to avoid
-     *   duplicated messages which can happen when response was lost.
-     * @param tms default timeouts for newly created streams
-     * @return datagram router instance
-     */
-    DatagramRouter create_datagram_router(PeerName bind_addr, bool dedup_messages, TimeoutSettings tms = {});
-
-
-    ///Create message oriented UDP stream
-    /**
-     * Works similar as DatagramRouter, but just one stream is created. You just specify
-     * remote address. The local address is selected random. The stream implementation is
-     * lightweight and doesn't allow to receive datagrams from unknown source.
-     *
-     * @param remote_addr remote address. Note that function doesn't connect actually, you
-     * need to send first hello packed manually
-     * @param dedup_messages set true to deduplicate messages. Can be useful when
-     *   ping-pong communication is used. If the peer sends duplicated message, it
-     *   is automatically responded with recent response. This helps to avoid
-     *   duplicated messages which can happen when response was lost.
-     * @param tms timeouts
-     * @return stream instance
-     */
-    Stream connect_udp(PeerName remote_addr, bool dedup_messages, TimeoutSettings tms = {60000,60000});
-//    using StopFn = std::function<void()>;
-    using CoMain = std::function<detached<>(Stream)>;
-
-    ///Create tcp server
-    cocls::task<void> tcp_server(CoMain &&co_main_fn,
-                      NetAddrList list,
-                      std::stop_token stop_token = {},
-                      TimeoutSettings tms = {60000,60000});
-    ///Create udp server
-//    StopFn udp_server(CoMain &&co_main_fn, NetAddrList list);
-
-
-    using std::shared_ptr<ContextIOImpl>::shared_ptr;
-    ContextIO(std::shared_ptr<ContextIOImpl> v)
-        :std::shared_ptr<ContextIOImpl>(std::move(v)) {}
-
-
-#endif
 public:
     template<typename Fn>
     CXX20_REQUIRES(std::invocable<Fn, Stream>)

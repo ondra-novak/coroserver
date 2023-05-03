@@ -28,7 +28,7 @@ public:
     virtual bool is_read_timeout() const override;
     virtual cocls::future<bool> write(std::string_view buffer) override;
     virtual cocls::future<bool> write_eof() override;
-    virtual void shutdown() override;
+    virtual cocls::suspend_point<void> shutdown() override;
     virtual Counters get_counters() const noexcept override;
     virtual PeerName get_peer_name() const override;
 

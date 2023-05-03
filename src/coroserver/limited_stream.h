@@ -33,6 +33,8 @@ public:
     ///Create chunked stream for both reading and writing
     static Stream read_and_write(Stream target, std::size_t limit_read, std::size_t limit_write);
 
+
+
     ~LimitedStream();
 
 protected:

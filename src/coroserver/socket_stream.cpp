@@ -104,11 +104,11 @@ cocls::future<bool> SocketStream::write_eof() {
     return cocls::future<bool>::set_value(true);
 }
 
-void SocketStream::shutdown() {
+cocls::suspend_point<void> SocketStream::shutdown() {
     _is_closed = true;
     _is_eof = true;
     _is_timeout = false;
-    _ctx.mark_closing(_h);
+    return _ctx.mark_closing(_h);
 }
 
 cocls::generator<bool, std::string_view> SocketStream::start_write() {
