@@ -11,45 +11,51 @@ namespace coroserver {
 namespace http {
 
 
+using StaticHeaders = std::shared_ptr<std::vector<std::pair<std::string, std::string> > >;
+
+///Parameters to initialize the ClientRequest
 struct ClientRequestParams {
+    ///connected stream
     Stream s;
+    ///method of request
     Method method;
+    ///host of request
     std::string_view host;
+    ///path of request
     std::string_view path;
-    std::string_view user_agent;
-    std::string auth;
-    Version ver;
+    ///user agent
+    std::string_view user_agent = {};
+    ///authorization, used if not empty, must be already in header form
+    std::string auth = {};
+    ///other static headers added to request
+    StaticHeaders headers = {};
+    ///version - default is 1.1
+    Version ver = Version::http1_1;
 };
 
+///ClientRequest handles http protocol on client side
+/**
+ * The object is not movable. You can create it using ClientRequestParams.
+ * Then you can add more headers, begin body and send the request. The response
+ * are also available on the object.
+ *
+ * Keep alive is supported, you can open a new request using method open. You
+ * can only open the request on the same host. Some headers persists, for
+ * example Authorization, Host, User-Agent.
+ *
+ */
 class ClientRequest {
 public:
-
-    ///Create empty client request
-    ClientRequest(Stream s, std::string_view user_agent = {});
-
-    ///Create client request and open it
-    /**
-     * @param method method
-     * @param host host
-     * @param path path (must start by /)
-     * @param ver version (optional)
-     *
-     * @note opening by constructor is slightly faster, than method open()
-     */
-    ClientRequest(Stream s, Method method, std::string_view host, std::string_view path, std::string_view user_agent = {}, Version ver = Version::http1_1);
-
 
     ///Construct client request indirectly;
     ClientRequest(const ClientRequestParams &params);
 
-    ///Open new request
+    ///Open new request on the same connection (when keep-alive allows it)
     /**
      * @param method method
-     * @param host host
      * @param path path (must start by /)
-     * @param ver version (optional)
      */
-    void open(Method method, std::string_view host, std::string_view path, Version ver = Version::http1_1);
+    void open(Method method, std::string_view path);
 
     ///Set header value
     /**
@@ -70,6 +76,9 @@ public:
      *
      */
     ClientRequest &&operator()(std::string_view key, std::size_t value);
+
+    ClientRequest &&operator()(std::string_view key, std::nullptr_t);
+
 
 
     ///Send body using chunked protocol
@@ -166,18 +175,22 @@ public:
 protected:
     Stream _s;
     std::string _user_agent;
+    std::string _host;
     std::string _auth;
+    StaticHeaders _static_headers;
+    Method _method;
+    Version _request_version;
+
     int _status_code = 0;
     std::string_view _status_message;
-    Method _method = Method::not_set;
     Version _response_version = Version::http1_0;
     HeaderMap _response_headers;
     std::vector<char> _response_headers_data;
+    std::basic_string<std::uint8_t> _owr_hdrs;
     std::ostringstream _req_headers;
     std::size_t _content_length = 0;
     bool _has_te = false;
     bool _is_te_chunked = false;
-    bool _has_content_len = false;
     bool _expect_100 = false;
     bool _req_sent = false;
     bool _resp_recv = false;
@@ -193,7 +206,8 @@ protected:
     };
 
 
-    void gen_first_line(Method method, std::string_view host, std::string_view path, Version ver);
+    void prepare_header(Method method, std::string_view path);
+    void owr_hdr(std::string_view hdr);
 
     cocls::suspend_point<void> after_send_headers(cocls::future<bool> &res) noexcept;
     cocls::suspend_point<void> receive_response(cocls::future<std::string_view> &res) noexcept;
@@ -210,6 +224,7 @@ protected:
     void prepare_body_stream();
     void prepare_response_stream();
     cocls::suspend_point<void> after_receive_headers();
+
 
 };
 

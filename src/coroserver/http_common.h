@@ -89,35 +89,12 @@ enum class ContentType {
     custom
 };
 
-extern StaticLookupTable<Method, std::string_view, 10> strMethod;
-extern StaticLookupTable<Version, std::string_view, 3> strVer;
-extern StaticLookupTable<ContentType, std::string_view, 48> strContentType;
-extern StaticLookupTable<int, std::string_view, 63> strStatusMessages;
+extern const StaticLookupTable<Method, std::string_view, 10> strMethod;
+extern const StaticLookupTable<Version, std::string_view, 3> strVer;
+extern const StaticLookupTable<ContentType, std::string_view, 48> strContentType;
+extern const StaticLookupTable<int, std::string_view, 63> strStatusMessages;
 
 ContentType extensionToContentType(const std::string_view &txt);
-
-
-struct strILess {
-    bool operator()(const std::string_view &a, const std::string_view &b) const {
-        auto ln = std::min(a.length(), b.length());
-        for (std::size_t i = 0; i < ln; i++) {
-            int c = std::tolower(a[i]) - std::tolower(b[i]);
-            if (c) return c<0;
-        }
-        return (static_cast<int>(a.length()) - static_cast<int>(b.length())) < 0;
-    }
-};
-struct strIEqual {
-    bool operator()(const std::string_view &a, const std::string_view &b) const {
-        if (a.length() != b.length()) return false;
-        auto ln = a.length();
-        for (std::size_t i = 0; i < ln; i++) {
-            int c = std::tolower(a[i]) - std::tolower(b[i]);
-            if (c) return false;
-        }
-        return true;
-    }
-};
 
 ///Header value, values are in most cases used in headers
 /**
@@ -530,48 +507,48 @@ inline constexpr auto makeQueryFieldMap(const typename QueryFieldMap<T,N>::Item 
 
 namespace strtable {
 
-extern std::string_view hdr_allow;
-extern std::string_view hdr_accept;
-extern std::string_view hdr_access_control_request_method;
-extern std::string_view hdr_access_control_request_headers;
-extern std::string_view hdr_authorization;
-extern std::string_view val_basic;
-extern std::string_view val_bearer;
-extern std::string_view hdr_cache_control;
-extern std::string_view hdr_host;
-extern std::string_view hdr_content_type;
-extern std::string_view hdr_content_length;
-extern std::string_view hdr_transfer_encoding;
-extern std::string_view val_chunked;
-extern std::string_view hdr_connection;
-extern std::string_view val_close;
-extern std::string_view val_upgrade;
-extern std::string_view hdr_set_cookie;
-extern std::string_view hdr_sep;
-extern std::string_view hdr_date;
-extern std::string_view hdr_server;
-extern std::string_view hdr_cookie;
-extern std::string_view hdr_expect;
-extern std::string_view val_100_continue;
-extern std::string_view hdr_etag;
-extern std::string_view hdr_if_none_match;
-extern std::string_view hdr_origin;
-extern std::string_view hdr_pragma;
-extern std::string_view hdr_user_agent;
-extern std::string_view hdr_x_forwarded_for;
-extern std::string_view hdr_forwarded;
-extern std::string_view hdr_x_forwarded_host;
-extern std::string_view hdr_x_forwarded_proto;
-extern std::string_view hdr_x_forwarded_prefix;
-extern std::string_view hdr_front_end_https;
-extern std::string_view hdr_location;
-extern std::string_view hdr_upgrade;
-extern std::string_view val_websocket;
-extern std::string_view hdr_www_authenticate;
-extern std::string_view hdr_refresh;
-extern std::string_view hdr_x_accel_buffering;
-extern std::string_view val_keep_alive;
-extern std::string_view hdr_last_modified;
+extern const std::string_view hdr_allow;
+extern const std::string_view hdr_accept;
+extern const std::string_view hdr_access_control_request_method;
+extern const std::string_view hdr_access_control_request_headers;
+extern const std::string_view hdr_authorization;
+extern const std::string_view val_basic;
+extern const std::string_view val_bearer;
+extern const std::string_view hdr_cache_control;
+extern const std::string_view hdr_host;
+extern const std::string_view hdr_content_type;
+extern const std::string_view hdr_content_length;
+extern const std::string_view hdr_transfer_encoding;
+extern const std::string_view val_chunked;
+extern const std::string_view hdr_connection;
+extern const std::string_view val_close;
+extern const std::string_view val_upgrade;
+extern const std::string_view hdr_set_cookie;
+extern const std::string_view hdr_sep;
+extern const std::string_view hdr_date;
+extern const std::string_view hdr_server;
+extern const std::string_view hdr_cookie;
+extern const std::string_view hdr_expect;
+extern const std::string_view val_100_continue;
+extern const std::string_view hdr_etag;
+extern const std::string_view hdr_if_none_match;
+extern const std::string_view hdr_origin;
+extern const std::string_view hdr_pragma;
+extern const std::string_view hdr_user_agent;
+extern const std::string_view hdr_x_forwarded_for;
+extern const std::string_view hdr_forwarded;
+extern const std::string_view hdr_x_forwarded_host;
+extern const std::string_view hdr_x_forwarded_proto;
+extern const std::string_view hdr_x_forwarded_prefix;
+extern const std::string_view hdr_front_end_https;
+extern const std::string_view hdr_location;
+extern const std::string_view hdr_upgrade;
+extern const std::string_view val_websocket;
+extern const std::string_view hdr_www_authenticate;
+extern const std::string_view hdr_refresh;
+extern const std::string_view hdr_x_accel_buffering;
+extern const std::string_view val_keep_alive;
+extern const std::string_view hdr_last_modified;
 
 
 }

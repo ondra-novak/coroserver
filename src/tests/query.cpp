@@ -4,7 +4,7 @@
 
 
 struct Data{
-    int a;
+    int a = 0;
     float b;
     double c;
     char d;

@@ -361,6 +361,44 @@ void decode(const std::string_view &text, Fn &&output, const Table &table = Tabl
 
 }
 
+
+
+struct strILess {
+    constexpr bool operator()(const std::string_view &a, const std::string_view &b) const {
+        auto ln = std::min(a.length(), b.length());
+        for (std::size_t i = 0; i < ln; i++) {
+            int c = std::tolower(a[i]) - std::tolower(b[i]);
+            if (c) return c<0;
+        }
+        return (static_cast<int>(a.length()) - static_cast<int>(b.length())) < 0;
+    }
+};
+struct strIEqual {
+    constexpr bool operator()(const std::string_view &a, const std::string_view &b) const {
+        if (a.length() != b.length()) return false;
+        auto ln = a.length();
+        for (std::size_t i = 0; i < ln; i++) {
+            int c = std::tolower(a[i]) - std::tolower(b[i]);
+            if (c) return false;
+        }
+        return true;
+    }
+};
+
+class StringICmpView: public std::string_view {
+public:
+    using std::string_view::string_view;
+    constexpr StringICmpView(const std::string_view &base):std::string_view(base) {};
+    constexpr StringICmpView(std::string_view &&base):std::string_view(std::move(base)) {};
+
+    constexpr bool operator<(const StringICmpView &other) const {return strILess()(*this, other);}
+    constexpr bool operator>(const StringICmpView &other) const {return strILess()(other, *this);}
+    constexpr bool operator<=(const StringICmpView &other) const {return !strILess()(other, *this);}
+    constexpr bool operator>=(const StringICmpView &other) const {return !strILess()(*this, other);}
+    constexpr bool operator==(const StringICmpView &other) const {return strIEqual()(*this, other);}
+    constexpr bool operator!=(const StringICmpView &other) const {return !strIEqual()(*this, other);}
+};
+
 }
 
 

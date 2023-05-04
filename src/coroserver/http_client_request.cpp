@@ -9,83 +9,138 @@ namespace coroserver {
 
 namespace http {
 
-ClientRequest::ClientRequest(Stream s, std::string_view user_agent)
-        :_s(std::move(s))
-        ,_user_agent(user_agent)
-        ,_after_send_headers_awt(*this)
-        ,_receive_response_awt(*this)
-        {}
-
-ClientRequest::ClientRequest(Stream s, Method method, std::string_view host,
-        std::string_view path, std::string_view user_agent, Version ver):ClientRequest(std::move(s), user_agent) {
-    gen_first_line(method, host, path, ver);
-}
 
 ClientRequest::ClientRequest(const ClientRequestParams &params)
-    :ClientRequest(params.s, params.user_agent) {
-    gen_first_line(params.method, params.host, params.path, params.ver);
-    _auth = params.auth;
+    :_s(params.s)
+    ,_user_agent(params.user_agent)
+    ,_host(params.host)
+    ,_auth(params.auth)
+    ,_static_headers(params.headers)
+    ,_method(params.method)
+    ,_request_version(params.ver)
+    ,_after_send_headers_awt(*this)
+    ,_receive_response_awt(*this) {
+        prepare_header(params.method, params.path);
 }
-void ClientRequest::open(Method method, std::string_view host, std::string_view path, Version ver) {
+
+void ClientRequest::prepare_header(Method method, std::string_view path) {
+     _req_headers << strMethod[method] << " " << path << " " << strVer[_request_version] << "\r\n";
+     _owr_hdrs.clear();
+     if (_static_headers) {
+         for (std::size_t i = 0; i < _static_headers->size(); ++i) {
+             _owr_hdrs.push_back(static_cast<std::uint8_t>(i));
+         }
+     }
+     if (!_auth.empty()) owr_hdr(strtable::hdr_authorization);
+     if (!_user_agent.empty()) owr_hdr(strtable::hdr_user_agent);
+
+}
+
+
+void ClientRequest::open(Method method, std::string_view path) {
+
     _status_code = 0;
+    _status_message = {};
+    _response_headers.clear();
+    _response_headers_data.clear();
     _req_headers.str(std::string());
     _content_length = 0;
-    _has_content_len = false;
     _has_te = false;
     _is_te_chunked = false;
     _expect_100 = false;
     _req_sent = false;
     _resp_recv = false;
+    _keep_alive = true;
     _body_stream = Stream(nullptr);
     _response_stream = Stream(nullptr);
-    _response_headers_data.clear();
-    _response_headers.clear();
-    gen_first_line(method, host, path, ver);
+    _body_to_write = {};
+    _command = Command::none;
+    _stream_promise(cocls::drop);
+    _rcvstatus = 0;
+
+    prepare_header(method, path);
+}
+
+static auto reservedHeaders = makeStaticLookupTable<StringICmpView, int>({
+    {strtable::hdr_content_length, 1},
+    {strtable::hdr_transfer_encoding, 2},
+    {strtable::hdr_expect, 3},
+    {strtable::hdr_host, 4},
+    {strtable::hdr_authorization, 5},
+    {strtable::hdr_user_agent, 6}
+});
+
+void ClientRequest::owr_hdr(std::string_view hdr) {
+    strIEqual eq;
+    auto iter = std::find_if(_owr_hdrs.begin(),_owr_hdrs.end(),[&](const auto &x){
+        return eq((*_static_headers)[x].first,hdr);
+    });
+    auto last = _owr_hdrs.end();
+    if (iter != last) {
+        --last;
+        if (iter != last) std::swap(*iter, *last);
+        _owr_hdrs.pop_back();
+    }
+
 }
 
 ClientRequest&& ClientRequest::operator ()(std::string_view key, std::string_view value) {
-    strIEqual eq;
-    if (eq(key, strtable::hdr_content_length)) {
-        if (_has_content_len || _has_te) return std::move(*this);
-        _content_length = string2unsigned<std::size_t>(value.begin(), value.end(),10);
-        _has_content_len = true;
-    } else if (eq(key, strtable::hdr_transfer_encoding)) {
-        if (_has_content_len || _has_te) return std::move(*this);
-        _has_te = true;
-        if (eq(value, strtable::val_chunked)) {
-            _is_te_chunked = true;
-        }
-    } else if (eq(key, strtable::hdr_expect) && eq(value, strtable::val_100_continue)) {
-        if (_expect_100) return std::move(*this);
-        _expect_100 = true;
+    owr_hdr(key);
+    int h = reservedHeaders.get(key, 0);
+    switch (h) {
+        default:break;
+        case 1: _content_length = string2unsigned<std::size_t>(value.begin(), value.end(),10);
+                return std::move(*this);
+        case 2: if (_has_te) return std::move(*this);
+                _has_te = true;
+                if (strIEqual()(value, strtable::val_chunked)) {
+                    _is_te_chunked = true;
+                }
+                break;
+        case 3: if (strIEqual()(value, strtable::val_100_continue)) {
+                    if (_expect_100) return std::move(*this);
+                    _expect_100 = true;
+                }
+                break;
+        case 4: _host = value;
+                return std::move(*this);
+        case 5: _auth = value;
+                return std::move(*this);
+        case 6: _user_agent= value;
+                return std::move(*this);
     }
     _req_headers << key << ": " << value << "\r\n";
     return std::move(*this);
 }
 
 ClientRequest&& ClientRequest::operator ()(std::string_view key, std::size_t value) {
-    strIEqual eq;
-    if (eq(key, strtable::hdr_content_length)) {
-        if (_has_content_len || _has_te) return std::move(*this);
-        _content_length = value;
-        _has_content_len  = true;
+    owr_hdr(key);
+    int h = reservedHeaders.get(key, 0);
+    switch(h) {
+        default: break;
+        case 1: _content_length = value;
+                return std::move(*this);
     }
     _req_headers << key << ": " << value << "\r\n";
     return std::move(*this);
 }
 
+ClientRequest &&ClientRequest::operator()(std::string_view key, std::nullptr_t) {
+    owr_hdr(key);
+    return std::move(*this);
+}
+
 ClientRequest &&ClientRequest::use_chunked() {
-    if (!_is_te_chunked && !_has_content_len) {
+    if (!_has_te) {
         _req_headers << strtable::hdr_transfer_encoding << ": " << strtable::val_chunked << "\r\n";
+        _has_te = true;
         _is_te_chunked = true;
     }
     return std::move(*this);
 }
 
 ClientRequest &&ClientRequest::content_length(std::size_t sz) {
-    if (!_is_te_chunked && !_has_content_len) {
-        _content_length = sz;
-    }
+    _content_length = sz;
     return std::move(*this);
 }
 
@@ -98,26 +153,25 @@ ClientRequest &&ClientRequest::expect100continue() {
 }
 
 
-void ClientRequest::gen_first_line(Method method, std::string_view host,
-        std::string_view path, Version ver) {
-
-    _method = method;
-    _req_headers << strMethod[method] << " " << path << " " << strVer[ver] << "\r\n";
-    _req_headers << strtable::hdr_host << ": "  << host << "\r\n";
-}
 
 cocls::future<bool> ClientRequest::send_headers(std::string_view body) {
+    _req_headers << strtable::hdr_host << ": " << _host << "\r\n";
+    if (!_auth.empty()) {
+        _req_headers << strtable::hdr_authorization << ": " << _host << "\r\n";
+    }
+    if (!_user_agent.empty()) {
+        _req_headers << strtable::hdr_user_agent<< ": " << _user_agent<< "\r\n";
+    }
+    for (const auto &x: _owr_hdrs) {
+        const auto &h = (*_static_headers)[x];
+        _req_headers << h.first << ": " << h.second << "\r\n";
+    }
     if (_method != Method::GET && _method != Method::HEAD) {
-        if (!_has_content_len && !_is_te_chunked) {
+        if (!_has_te) {
             _req_headers << strtable::hdr_content_length << ": " << _content_length << "\r\n";
         }
     }
-    if (!_user_agent.empty()) {
-        _req_headers << strtable::hdr_user_agent << ": " << _user_agent << "\r\n";
-    }
-    if (!_auth.empty()) {
-        _req_headers << strtable::hdr_authorization << ": " << _auth << "\r\n";
-    }
+
     _req_headers << "\r\n";
     _req_sent = true;
     _body_to_write = body;
@@ -125,7 +179,7 @@ cocls::future<bool> ClientRequest::send_headers(std::string_view body) {
 }
 
 cocls::future<Stream> ClientRequest::begin_body() {
-    if (!_has_te && !_has_content_len) use_chunked();
+    if (!_has_te && _content_length == 0) use_chunked();
 
     return [&](auto promise) {
         if (_req_sent) promise(_body_stream);

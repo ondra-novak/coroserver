@@ -11,6 +11,15 @@ HttpClient::HttpClient(Config cfg)
     :_cfg(cfg)
 {
 }
+HttpClient::HttpClient(Config cfg, Headers hdrs)
+    :_cfg(cfg),_hdrs(std::make_shared<Headers>(std::move(hdrs))) {}
+
+
+HttpClient::HttpClient(Config cfg, StaticHeaders hdrs)
+    :_cfg(cfg),_hdrs(std::move(hdrs)) {
+
+}
+
 
 cocls::future<ClientRequestParams> HttpClient::open(Method method,std::string_view url) {
     ConnectionFactory *fact = nullptr;
@@ -57,6 +66,7 @@ cocls::future<ClientRequestParams> HttpClient::open(Method method,std::string_vi
         path,
         _cfg.user_agent,
         auth,
+        _hdrs,
         _cfg.ver
     };
 }

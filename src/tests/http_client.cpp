@@ -9,7 +9,7 @@ cocls::async<void> test_create_request() {
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
 
-    http::ClientRequest request(s,http::Method::POST, "www.example.com", "/test/path");
+    http::ClientRequest request({s,http::Method::POST, "www.example.com", "/test/path"});
     request("User-Agent","Test");
     Stream body = co_await request.begin_body(3);
     co_await body.write("abc");
@@ -25,7 +25,7 @@ cocls::async<void> test_create_empty_request() {
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
 
-    http::ClientRequest request(s,http::Method::DELETE, "www.example.com", "/test/path");
+    http::ClientRequest request({s,http::Method::DELETE, "www.example.com", "/test/path"});
     request("User-Agent","Test");
     Stream response = co_await request.send();
     std::string res;
@@ -38,7 +38,7 @@ cocls::async<void> test_GET_request() {
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
 
-    http::ClientRequest request(s,http::Method::GET, "www.example.com", "/test/path");
+    http::ClientRequest request({s,http::Method::GET, "www.example.com", "/test/path"});
     request("User-Agent","Test");
     Stream response = co_await request.send();
     std::string res;
@@ -53,7 +53,7 @@ cocls::async<void> test_request_100_cont() {
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 202 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
 
-    http::ClientRequest request(s,http::Method::POST, "www.example.com", "/test/path");
+    http::ClientRequest request({s,http::Method::POST, "www.example.com", "/test/path"});
     request("User-Agent","Test");
     request.expect100continue();
     Stream body = co_await request.begin_body(3);
@@ -72,7 +72,7 @@ cocls::async<void> test_request_100_cont_error() {
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 403 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
 
-    http::ClientRequest request(s,http::Method::POST, "www.example.com", "/test/path");
+    http::ClientRequest request({s,http::Method::POST, "www.example.com", "/test/path"});
     request("User-Agent","Test");
     request.expect100continue();
     Stream body = co_await request.begin_body(3);

@@ -54,8 +54,14 @@ public:
     };
 
 
+    using Headers = StaticHeaders::element_type;
+
     ///Create http client
     HttpClient(Config cfg);
+
+    HttpClient(Config cfg, Headers hdrs);
+
+    HttpClient(Config cfg, StaticHeaders hdrs);
 
     ///Initialize ClientRequestParams which can be used to initialize ClientRequest
     /**
@@ -65,10 +71,10 @@ public:
      */
     cocls::future<ClientRequestParams> open(Method method, std::string_view url);
 
-
 protected:
 
     Config _cfg;
+    StaticHeaders _hdrs;
 };
 
 

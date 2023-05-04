@@ -9,55 +9,55 @@ namespace http {
 namespace strtable {
 
 
-std::string_view hdr_allow("Allow");
-std::string_view hdr_accept("Accept");
-std::string_view hdr_access_control_request_method("Access-Control-Request-Method");
-std::string_view hdr_access_control_request_headers("Access-Control-Request-Headers");
-std::string_view hdr_authorization("Authorization");
-std::string_view val_basic("basic");
-std::string_view val_bearer("bearer");
-std::string_view hdr_cache_control("Cache-Control");
-std::string_view hdr_host("Host");
-std::string_view hdr_content_type("Content-Type");
-std::string_view hdr_content_length("Content-Length");
-std::string_view hdr_transfer_encoding("Transfer-Encoding");
-std::string_view val_chunked("chunked");
-std::string_view hdr_connection("Connection");
-std::string_view val_close("close");
-std::string_view val_keep_alive("keep-alive");
-std::string_view val_upgrade("upgrade");
-std::string_view hdr_set_cookie("Set-Cookie");
-std::string_view hdr_sep("\r\n");
-std::string_view hdr_date("Date");
-std::string_view hdr_server("Server");
-std::string_view hdr_cookie("Cookie");
-std::string_view hdr_expect("Expect");
-std::string_view val_100_continue("100-continue");
-std::string_view hdr_etag("ETag");
-std::string_view hdr_if_none_match("If-None-Match");
-std::string_view hdr_last_modified("Last-Modified");
-std::string_view hdr_origin("Origin");
-std::string_view hdr_pragma("Pragma");
-std::string_view hdr_user_agent("User-Agent");
-std::string_view hdr_x_forwarded_for("X-Forwarded-For");
-std::string_view hdr_forwarded("Forwarded");
-std::string_view hdr_x_forwarded_host("X-Forwarded-Host");
-std::string_view hdr_x_forwarded_proto("X-Forwarded-Proto");
-std::string_view hdr_x_forwarded_prefix("X-Forwarded-Prefix");
-std::string_view hdr_front_end_https("Front-End-Https");
-std::string_view hdr_location("Location");
-std::string_view hdr_upgrade("Upgrade");
-std::string_view val_websocket("websocket");
-std::string_view hdr_www_authenticate("WWW-Authenticate");
-std::string_view hdr_refresh("Refresh");
-std::string_view hdr_x_accel_buffering("X-Accel-Buffering");
+const std::string_view hdr_allow("Allow");
+const std::string_view hdr_accept("Accept");
+const std::string_view hdr_access_control_request_method("Access-Control-Request-Method");
+const std::string_view hdr_access_control_request_headers("Access-Control-Request-Headers");
+const std::string_view hdr_authorization("Authorization");
+const std::string_view val_basic("basic");
+const std::string_view val_bearer("bearer");
+const std::string_view hdr_cache_control("Cache-Control");
+const std::string_view hdr_host("Host");
+const std::string_view hdr_content_type("Content-Type");
+const std::string_view hdr_content_length("Content-Length");
+const std::string_view hdr_transfer_encoding("Transfer-Encoding");
+const std::string_view val_chunked("chunked");
+const std::string_view hdr_connection("Connection");
+const std::string_view val_close("close");
+const std::string_view val_keep_alive("keep-alive");
+const std::string_view val_upgrade("upgrade");
+const std::string_view hdr_set_cookie("Set-Cookie");
+const std::string_view hdr_sep("\r\n");
+const std::string_view hdr_date("Date");
+const std::string_view hdr_server("Server");
+const std::string_view hdr_cookie("Cookie");
+const std::string_view hdr_expect("Expect");
+const std::string_view val_100_continue("100-continue");
+const std::string_view hdr_etag("ETag");
+const std::string_view hdr_if_none_match("If-None-Match");
+const std::string_view hdr_last_modified("Last-Modified");
+const std::string_view hdr_origin("Origin");
+const std::string_view hdr_pragma("Pragma");
+const std::string_view hdr_user_agent("User-Agent");
+const std::string_view hdr_x_forwarded_for("X-Forwarded-For");
+const std::string_view hdr_forwarded("Forwarded");
+const std::string_view hdr_x_forwarded_host("X-Forwarded-Host");
+const std::string_view hdr_x_forwarded_proto("X-Forwarded-Proto");
+const std::string_view hdr_x_forwarded_prefix("X-Forwarded-Prefix");
+const std::string_view hdr_front_end_https("Front-End-Https");
+const std::string_view hdr_location("Location");
+const std::string_view hdr_upgrade("Upgrade");
+const std::string_view val_websocket("websocket");
+const std::string_view hdr_www_authenticate("WWW-Authenticate");
+const std::string_view hdr_refresh("Refresh");
+const std::string_view hdr_x_accel_buffering("X-Accel-Buffering");
 
 
 }
 
 
 
-StaticLookupTable<int, std::string_view, 63> strStatusMessages({
+const StaticLookupTable<int, std::string_view, 63> strStatusMessages({
         {100, "Continue"},
         {101, "Switching Protocols"},
         {102, "Processing"},
@@ -125,7 +125,7 @@ StaticLookupTable<int, std::string_view, 63> strStatusMessages({
 
 
 
-StaticLookupTable<Method, std::string_view, 10> strMethod({
+const StaticLookupTable<Method, std::string_view, 10> strMethod({
     {Method::GET,"GET"},
     {Method::HEAD,"HEAD"},
     {Method::POST,"POST"},
@@ -138,13 +138,13 @@ StaticLookupTable<Method, std::string_view, 10> strMethod({
     {Method::unknown,"unknown"}
 });
 
-StaticLookupTable<Version, std::string_view, 3> strVer({
+const StaticLookupTable<Version, std::string_view, 3> strVer({
     {Version::http1_0, "HTTP/1.0"},
     {Version::http1_1, "HTTP/1.1"},
     {Version::unknown, "unknown"}
 });
 
-StaticLookupTable<ContentType, std::string_view, 48> strContentType ({
+const StaticLookupTable<ContentType, std::string_view, 48> strContentType ({
     {ContentType::binary,"application/octet-stream"},
     {ContentType::audio_aac,               "audio/aac"},
     {ContentType::audio_midi,              "audio/midi"},
@@ -253,7 +253,7 @@ ContentType extensionToContentType(const std::string_view &txt) {
 
 
 
-bool HeaderMap::headers(std::string_view hdrstr, HeaderMap &hdrmap, std::string_view &firstLine) {
+bool HeaderMap::headers(const std::string_view hdrstr, HeaderMap &hdrmap, std::string_view &firstLine) {
     hdrmap.clear();
     auto lnsplt = splitAt(hdrstr, "\r\n");
     firstLine = lnsplt();
