@@ -1,4 +1,5 @@
 #include "http_client.h"
+#include "init_by_fn.h"
 
 
 namespace coroserver {
@@ -7,21 +8,21 @@ namespace coroserver {
 
 namespace http {
 
-HttpClient::HttpClient(Config cfg)
+Client::Client(Config cfg)
     :_cfg(cfg)
 {
 }
-HttpClient::HttpClient(Config cfg, Headers hdrs)
+Client::Client(Config cfg, Headers hdrs)
     :_cfg(cfg),_hdrs(std::make_shared<Headers>(std::move(hdrs))) {}
 
 
-HttpClient::HttpClient(Config cfg, StaticHeaders hdrs)
+Client::Client(Config cfg, StaticHeaders hdrs)
     :_cfg(cfg),_hdrs(std::move(hdrs)) {
 
 }
 
 
-cocls::future<ClientRequestParams> HttpClient::open(Method method,std::string_view url) {
+cocls::future<ClientRequestParams> Client::open(Method method,std::string_view url) {
     ConnectionFactory *fact = nullptr;
     if (url.compare(0, 7, "http://") == 0) {
         fact = &_cfg.http;
@@ -59,8 +60,10 @@ cocls::future<ClientRequestParams> HttpClient::open(Method method,std::string_vi
         host = host_part;
     }
 
-    co_return ClientRequestParams {
-        co_await (*fact)(host),
+    Stream s = co_await (*fact)(host);
+
+    co_return InitByFn([&]{return ClientRequestParams {
+        std::move(s),
         method,
         host,
         path,
@@ -68,7 +71,7 @@ cocls::future<ClientRequestParams> HttpClient::open(Method method,std::string_vi
         auth,
         _hdrs,
         _cfg.ver
-    };
+    };});
 }
 
 }

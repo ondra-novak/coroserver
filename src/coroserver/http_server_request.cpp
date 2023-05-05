@@ -1,6 +1,7 @@
 #include "http_server_request.h"
 #include "limited_stream.h"
 #include "chunked_stream.h"
+#include "http_stringtables.h"
 
 #include <fstream>
 namespace coroserver {
@@ -12,7 +13,7 @@ std::string ServerRequest::server_name = "CoroServer 1.0 (C++20)";
 
 static constexpr std::size_t status_response_max_len=64;
 
-static constexpr search_kmp<4> search_hdr_sep("\r\n\r\n");
+static constexpr search_kmp search_hdr_sep("\r\n\r\n");
 
 
 ServerRequest::ServerRequest(Stream s, bool secure)

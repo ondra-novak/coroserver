@@ -3,6 +3,7 @@
 #define SRC_COROSERVER_HTTP_SERVER_H_
 
 #include "http_server_request.h"
+#include "http_stringtables.h"
 #include "prefixmap.h"
 
 #include <cocls/function.h>

@@ -1,6 +1,8 @@
 #include "check.h"
 #include "test_stream.h"
-#include <coroserver/http_client_request.h>
+
+
+#include "../coroserver/http_client.h"
 
 using namespace coroserver;
 
@@ -63,14 +65,14 @@ cocls::async<void> test_request_100_cont() {
     std::string res;
     co_await response.read_block(res, 10);
     CHECK_EQUAL(request.get_status(),202);
-    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Test\r\nExpect: 100-continue\r\nContent-Length: 3\r\n\r\nabc");
+    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nExpect: 100-continue\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 3\r\n\r\nabc");
     CHECK_EQUAL(res,"xyz");
 }
 
 cocls::async<void> test_request_100_cont_error() {
 
     std::string out;
-    Stream s = TestStream<100>::create({"HTTP/1.1 403 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
+    Stream s = TestStream<100>::create({"HTTP/1.1 403 Error\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
 
     http::ClientRequest request({s,http::Method::POST, "www.example.com", "/test/path"});
     request("User-Agent","Test");
@@ -80,10 +82,36 @@ cocls::async<void> test_request_100_cont_error() {
     Stream response = co_await request.send();
     std::string res;
     co_await response.read_block(res, 10);
-    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Test\r\nExpect: 100-continue\r\nContent-Length: 3\r\n\r\n");
+    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nExpect: 100-continue\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 3\r\n\r\n");
     CHECK_EQUAL(res,"xyz");
 }
 
+cocls::async<void> test_client_1() {
+    std::string out;
+    http::Client client({"TestClient", [&](std::string_view host){
+        CHECK_EQUAL(host, "www.example.com:123");
+        return cocls::future<Stream>::set_value(
+                TestStream<100>::create({"HTTP/1.1 403 Error\r\nContent-Length: 3\r\n\r\nxyz"}, &out)
+        );
+    },nullptr});
+
+    http::ClientRequestParams params = co_await client.open(http::Method::GET, "http://www.example.com:123/path/file?query=value");
+    CHECK_EQUAL(params.auth, "");
+    CHECK_EQUAL(params.host, "www.example.com:123");
+    CHECK(params.method == http::Method::GET);
+    CHECK_EQUAL(params.path, "/path/file?query=value");
+    CHECK_EQUAL(params.user_agent, "TestClient");
+    CHECK(params.ver == http::Version::http1_1);
+
+    http::ClientRequest req(std::move(params));
+    auto response = co_await req.send();
+
+    CHECK_EQUAL(req.get_status(), 403);
+
+    std::cout << out << std::endl;
+
+
+}
 
 
 int main() {
@@ -92,4 +120,5 @@ int main() {
     test_GET_request().join();
     test_request_100_cont().join();
     test_request_100_cont_error().join();
+    test_client_1().join();
 }

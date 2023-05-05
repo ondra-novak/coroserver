@@ -1,4 +1,5 @@
 #include "http_client_request.h"
+#include "http_stringtables.h"
 
 #include "strutils.h"
 #include "chunked_stream.h"
@@ -10,12 +11,12 @@ namespace coroserver {
 namespace http {
 
 
-ClientRequest::ClientRequest(const ClientRequestParams &params)
-    :_s(params.s)
+ClientRequest::ClientRequest(ClientRequestParams &&params)
+    :_s(std::move(params.s))
     ,_user_agent(params.user_agent)
     ,_host(params.host)
     ,_auth(params.auth)
-    ,_static_headers(params.headers)
+    ,_static_headers(std::move(params.headers))
     ,_method(params.method)
     ,_request_version(params.ver)
     ,_after_send_headers_awt(*this)
@@ -61,7 +62,7 @@ void ClientRequest::open(Method method, std::string_view path) {
     prepare_header(method, path);
 }
 
-static auto reservedHeaders = makeStaticLookupTable<StringICmpView, int>({
+constexpr auto reservedHeaders = makeStaticLookupTable<StringICmpView, int>({
     {strtable::hdr_content_length, 1},
     {strtable::hdr_transfer_encoding, 2},
     {strtable::hdr_expect, 3},

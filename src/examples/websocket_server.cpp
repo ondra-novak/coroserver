@@ -116,7 +116,7 @@ cocls::async<void> writer(ws::Stream s, MyPublisher &publisher) {
 
 cocls::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) {
     ws::Server server({});
-    auto fut = server.accept(req);
+    auto fut = server(req);
     if (co_await fut.has_value()) {
         writer(*fut, publisher).detach();
     } else {

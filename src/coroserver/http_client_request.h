@@ -48,7 +48,7 @@ class ClientRequest {
 public:
 
     ///Construct client request indirectly;
-    ClientRequest(const ClientRequestParams &params);
+    ClientRequest(ClientRequestParams &&params);
 
     ///Open new request on the same connection (when keep-alive allows it)
     /**
@@ -211,7 +211,7 @@ protected:
 
     cocls::suspend_point<void> after_send_headers(cocls::future<bool> &res) noexcept;
     cocls::suspend_point<void> receive_response(cocls::future<std::string_view> &res) noexcept;
-    std::size_t _rcvstatus = 0;
+    unsigned int _rcvstatus = 0;
     cocls::call_fn_future_awaiter<&ClientRequest::after_send_headers> _after_send_headers_awt;
     cocls::call_fn_future_awaiter<&ClientRequest::receive_response> _receive_response_awt;
     cocls::promise<Stream> _stream_promise;

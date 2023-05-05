@@ -239,10 +239,10 @@ public:
 protected:
     //storage for all items
     ItemStorage _items[Count] = {};
-    //contains true, if registered enum values are sequence of numbers 1,2,3,4,5,6 so index lookup can be used
-    bool _sequence = false;
     //contains index for search items by value.
     ValueIndex _valueIndex;
+    //contains true, if registered enum values are sequence of numbers 1,2,3,4,5,6 so index lookup can be used
+    bool _sequence = false;
 
     StaticLookupTable() = default;
 

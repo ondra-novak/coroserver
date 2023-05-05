@@ -28,6 +28,8 @@ struct TimeoutSettings {
     }
 };
 
+class Stream;
+
 class IStream {
 public:
 
@@ -222,45 +224,105 @@ public:
         return _stream;
     }
 
-    ///read until separator reached
+    template<typename Container, typename _SearchKMP>
+    class ReadUntil {
+    public:
+        ReadUntil(std::shared_ptr<IStream> &s, Container &container, _SearchKMP kmp, std::size_t limit)
+            :_s(s)
+            ,_container(container)
+            ,_kmp(kmp)
+            ,_limit(limit)
+            ,_awt(*this) {}
+
+        cocls::future<bool> operator()() {
+            return [&](auto promise) {
+                _state = 0;
+                _promise = std::move(promise);
+                _awt << [&]{return _s->read();};
+            };
+        }
+
+    protected:
+        cocls::suspend_point<void> data_read(cocls::future<std::string_view> &f) noexcept {
+            try {
+                std::string_view data = *f;
+                if (data.empty()) return _promise(false);
+                for (std::size_t i = 0; i < data.size(); i++) {
+                    _container.push_back(data[i]);
+                    if (_kmp(_state, data[i])) {
+                        _s->put_back(data.substr(i+1));
+                        return _promise(true);
+                    }
+                }
+                if (_container.size() >= _limit) return _promise(false);
+                _awt << [&]{return _s->read();};
+                return {};
+            } catch (...) {
+                return _promise(std::current_exception());
+            }
+        }
+
+        std::shared_ptr<IStream> &_s;
+        Container &_container;
+        _SearchKMP _kmp;
+        std::size_t _limit;
+        cocls::call_fn_future_awaiter<&ReadUntil::data_read> _awt;
+        cocls::promise<bool> _promise;
+        unsigned int _state = 0;
+    };
+
+    ///Creates generator-like object, which reads data until a separator is found
     /**
-     * The separator is also extracted and stored.
-     * @param a allocator (storage) to allocate coroutine frame
-     * @param container container where to put result
-     * @param sep separator to find
-     * @param limit specified limit when read is stopped with error. This limit
-     * is not hard limit, the container can still receive more items than limit. The
-     * primary purpose of this limit is to stop reading when unexpectedly long
-     * sentence without separator is read, which can be result of some kind of
-     * DoS attack.
-     * @retval true success
-     * @retval false error or eof or timeout
+     * @param container reference to container, where data will be stored. You need to
+     * keep container valid during generation
+     * @param pattern pattern to search, it is declared as search_kmp object. It
+     * is expected, that separators constaints
+     * @param limit bytes to read until error is reported. This is soft limit for
+     * size of container. If the container reaches the size, the reading stops and
+     * error is reported
+     *
+     * @return generator object. It is callable object, which can be called without
+     * arguments. Result of the call is future<bool>. The value of call is true -
+     * successfully read until separator, or false - reached end of stream
+     *
+     * @note separator is included to container
+     *
+     * @note it is generator-like object, it doesn't allocate memory.
+     *
+     * @code
+     *
      */
-    template<typename Alloc, typename Container>
-    cocls::future<bool> read_until(Alloc &a, Container &container, std::string_view sep, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        container.clear();
-        return read_until_coro(a, *_stream,container, sep, limit);
+    template<typename Container, unsigned int N>
+    auto read_until(Container &container, const search_kmp<N> &pattern, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        return ReadUntil<Container, const search_kmp<N> &>(_stream, container, pattern, limit);
     }
 
-    ///read until separator reached
+    ///Creates generator-like object, which reads data until a separator is found
     /**
-     * The separator is also extracted and stored.
-     * @param container container where to put result
-     * @param sep separator to find
-     * @param limit specified limit when read is stopped with error. This limit
-     * is not hard limit, the container can still receive more items than limit. The
-     * primary purpose of this limit is to stop reading when unexpectedly long
-     * sentence without separator is read, which can be result of some kind of
-     * DoS attack.
-     * @retval true success
-     * @retval false error or eof or timeout
+     * @param container reference to container, where data will be stored. You need to
+     * keep container valid during generation
+     * @param pattern pattern to search, it is declared as std::string_view object. If the
+     * string is constant, consider to use search_kmp<> type instead
+     * @param limit bytes to read until error is reported. This is soft limit for
+     * size of container. If the container reaches the size, the reading stops and
+     * error is reported
+     *
+     * @return generator object. It is callable object, which can be called without
+     * arguments. Result of the call is future<bool>. The value of call is true -
+     * successfully read until separator, or false - reached end of stream
+     *
+     * @note separator is included to container
+     *
+     * @note it is generator-like object, it doesn't allocate memory.
+     *
+     * @code
+     *
      */
-    template<typename Container>
-    cocls::future<bool> read_until(Container &container, std::string_view sep, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        container.clear();
-        cocls::default_storage stor;
-        return read_until_coro(stor, *_stream,container, sep, limit);
+    template<typename Container, unsigned int N>
+    auto read_until(Container &container, std::string_view pattern, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        return ReadUntil<Container, search_kmp<0> >(_stream, container, pattern, limit);
     }
+
 
 
     ///Read specified count of bytes
@@ -340,42 +402,6 @@ public:
 
 protected:
 
-    template<typename Alloc, typename Container>
-    static cocls::with_allocator<Alloc, cocls::async<bool> > read_until_coro(Alloc &, IStream &stream, Container &container, std::string_view sep, std::size_t limit) {
-        //separator must be non-empty, otherwise empty container is result
-        if (sep.empty()) co_return true;
-        //initialize KMP
-        auto srch = search_pattern(sep);
-        //read first fragment
-        std::string_view buff = co_await stream.read();
-        //while buffer is not empty
-        std::size_t cnt = 0;
-        while (!buff.empty()) {
-            cnt+=buff.size();
-            //add extra section to define variables used outside of co_await section
-            {
-                //offset counter
-                std::size_t ofs = 0;
-                //process each character
-                for (auto c: buff) {
-                    ++ofs;
-                    //put to bufer
-                    container.push_back(c);
-                    //use KMP to match pattern, if true returns, c completed the pattern
-                    if (srch(c)) {
-                        //putback rest of buffer
-                        stream.put_back(buff.substr(ofs));
-                        //return success
-                        co_return true;
-                    }
-                }
-            }
-            //processed all characters, read next
-            buff = co_await stream.read();
-            if (limit < cnt) co_return false;
-        }
-        co_return false;
-    }
 
     template<typename Alloc, typename Container>
     static cocls::with_allocator<Alloc, cocls::async<bool> > read_block_coro(Alloc &, IStream &stream, Container &container, std::size_t size) {
@@ -415,7 +441,6 @@ protected:
 
     std::shared_ptr<IStream> _stream;
 };
-
 
 }
 

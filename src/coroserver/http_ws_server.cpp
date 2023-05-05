@@ -6,14 +6,14 @@
  */
 
 #include "http_ws_server.h"
-
+#include "http_stringtables.h"
 #include "sha1.h"
 #include "strutils.h"
 namespace coroserver {
 
 namespace ws {
 
-cocls::future<Stream> Server::accept(http::ServerRequest &req) {
+cocls::future<Stream> Server::operator()(http::ServerRequest &req) {
     return [&](auto result) {
         if (!req.allow({http::Method::GET})
           || req[http::strtable::hdr_upgrade] != http::HeaderValue(http::strtable::val_websocket)

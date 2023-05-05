@@ -337,7 +337,7 @@ protected:
 
     cocls::suspend_point<void> load_coro(std::string_view &data, cocls::promise<bool> &res);
     cocls::future_conv<&ServerRequest::load_coro> _load_awt;
-    std::size_t _search_hdr_state = 0;
+    unsigned int _search_hdr_state = 0;
 
     Stream get_body_coro(bool &res);
     cocls::future_conv<&ServerRequest::get_body_coro> _get_body_awt;

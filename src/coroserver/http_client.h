@@ -5,8 +5,8 @@
  *      Author: ondra
  */
 
-#ifndef SRC_COROSERVER_HTTP_CLIENT_H_
-#define SRC_COROSERVER_HTTP_CLIENT_H_
+#ifndef SRC_COROSERVER_CLIENT_H_
+#define SRC_COROSERVER_CLIENT_H_
 #include "http_client_request.h"
 
 #include <cocls/function.h>
@@ -18,7 +18,7 @@ namespace http {
 
 using ConnectionFactory = std::function<cocls::future<Stream>(std::string_view)>;
 
-ConnectionFactory connectionFactory(ContextIO ctx, int timeout_ms, TimeoutSettings tms) {
+inline ConnectionFactory connectionFactory(ContextIO ctx, int timeout_ms, TimeoutSettings tms) {
     return [ctx  = std::move(ctx), timeout_ms, tms](std::string_view host) mutable ->cocls::future<Stream> {
         auto list = PeerName::lookup(host, "80");
         return ctx.connect(std::move(list), timeout_ms, tms);
@@ -38,7 +38,7 @@ ConnectionFactory connectionFactory(ContextIO ctx, int timeout_ms, TimeoutSettin
  * retrieved asynchronously
  *
  */
-class HttpClient {
+class Client {
 public:
 
     ///Configuration of the client
@@ -57,11 +57,11 @@ public:
     using Headers = StaticHeaders::element_type;
 
     ///Create http client
-    HttpClient(Config cfg);
+    Client(Config cfg);
 
-    HttpClient(Config cfg, Headers hdrs);
+    Client(Config cfg, Headers hdrs);
 
-    HttpClient(Config cfg, StaticHeaders hdrs);
+    Client(Config cfg, StaticHeaders hdrs);
 
     ///Initialize ClientRequestParams which can be used to initialize ClientRequest
     /**
@@ -85,4 +85,4 @@ protected:
 
 
 
-#endif /* SRC_COROSERVER_HTTP_CLIENT_H_ */
+#endif /* SRC_COROSERVER_CLIENT_H_ */

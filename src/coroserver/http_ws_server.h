@@ -18,15 +18,26 @@ namespace ws {
 
 ///Implements websocket server, implementing server side of websocket handshake
 /**
- * To use this class, you need to create an instance in a http handler. It
- * is expected, that handler is coroutine otherwise it is required to
- * keep instance on live until the handshake is finished
+ * This object is generator-like object. Everytime it is called, it performs
+ * handshake on http connection and initializes websocket connection as server.
+ * Result of the call is ws::Stream in case that connection is established.
  *
- * The single instance can handle the handshake for a single connection. The object
- * is not MT Safe.
+ * As this object is generator-like object, it cannot handle multiple requests at same
+ * time. Each thread must own its instance.
  *
- * (Instance works similar as generator, it is called with request and returns
- * stream - during this period, no other connection can be accepted)
+ * Because it is not true generator, the making new instance doesn't allocate any extra
+ * memory
+ *
+ * @code
+ * Server server({});
+ * auto fut = server(request);
+ * if (co_await fut.has_value()) {
+ *       ws::Stream stream = *fut;
+ *       handle_stream(stream);
+ * }
+ * @endcode
+ *
+
  */
 class Server {
 public:
@@ -68,7 +79,7 @@ public:
      * }
      * @endcode
      */
-    cocls::future<Stream> accept(http::ServerRequest &req);
+    cocls::future<Stream> operator()(http::ServerRequest &req);
 
 protected:
     Config _cfg;

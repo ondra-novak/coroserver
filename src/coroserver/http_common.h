@@ -89,10 +89,6 @@ enum class ContentType {
     custom
 };
 
-extern const StaticLookupTable<Method, std::string_view, 10> strMethod;
-extern const StaticLookupTable<Version, std::string_view, 3> strVer;
-extern const StaticLookupTable<ContentType, std::string_view, 48> strContentType;
-extern const StaticLookupTable<int, std::string_view, 63> strStatusMessages;
 
 ContentType extensionToContentType(const std::string_view &txt);
 
@@ -505,53 +501,6 @@ inline constexpr auto makeQueryFieldMap(const typename QueryFieldMap<T,N>::Item 
 
 
 
-namespace strtable {
-
-extern const std::string_view hdr_allow;
-extern const std::string_view hdr_accept;
-extern const std::string_view hdr_access_control_request_method;
-extern const std::string_view hdr_access_control_request_headers;
-extern const std::string_view hdr_authorization;
-extern const std::string_view val_basic;
-extern const std::string_view val_bearer;
-extern const std::string_view hdr_cache_control;
-extern const std::string_view hdr_host;
-extern const std::string_view hdr_content_type;
-extern const std::string_view hdr_content_length;
-extern const std::string_view hdr_transfer_encoding;
-extern const std::string_view val_chunked;
-extern const std::string_view hdr_connection;
-extern const std::string_view val_close;
-extern const std::string_view val_upgrade;
-extern const std::string_view hdr_set_cookie;
-extern const std::string_view hdr_sep;
-extern const std::string_view hdr_date;
-extern const std::string_view hdr_server;
-extern const std::string_view hdr_cookie;
-extern const std::string_view hdr_expect;
-extern const std::string_view val_100_continue;
-extern const std::string_view hdr_etag;
-extern const std::string_view hdr_if_none_match;
-extern const std::string_view hdr_origin;
-extern const std::string_view hdr_pragma;
-extern const std::string_view hdr_user_agent;
-extern const std::string_view hdr_x_forwarded_for;
-extern const std::string_view hdr_forwarded;
-extern const std::string_view hdr_x_forwarded_host;
-extern const std::string_view hdr_x_forwarded_proto;
-extern const std::string_view hdr_x_forwarded_prefix;
-extern const std::string_view hdr_front_end_https;
-extern const std::string_view hdr_location;
-extern const std::string_view hdr_upgrade;
-extern const std::string_view val_websocket;
-extern const std::string_view hdr_www_authenticate;
-extern const std::string_view hdr_refresh;
-extern const std::string_view hdr_x_accel_buffering;
-extern const std::string_view val_keep_alive;
-extern const std::string_view hdr_last_modified;
-
-
-}
 
 }
 

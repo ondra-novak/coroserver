@@ -3,10 +3,12 @@
 #include <queue>
 #include "test_stream.h"
 
-void test(std::vector<std::string> zadani, std::string_view sep, std::size_t limit, bool r1, std::string_view r2) {
+template<unsigned int N>
+void test(std::vector<std::string> zadani, const coroserver::search_kmp<N> &sep, std::size_t limit, bool r1, std::string_view r2) {
     coroserver::Stream s (std::make_shared<TestStream<100>>(std::move(zadani)));
     std::string buff;
-    bool r = s.read_until(buff, sep, limit).join();
+    auto ru = s.read_until(buff, sep, limit);
+    bool r = ru().wait();
     CHECK_EQUAL(r,r1);
     if (r) {
         CHECK_EQUAL(buff, r2);
@@ -15,7 +17,8 @@ void test(std::vector<std::string> zadani, std::string_view sep, std::size_t lim
     }
 }
 
-constexpr coroserver::search_kmp<10> srch("ahoj");
+constexpr coroserver::search_kmp nlnl("\r\n\r\n");
+constexpr coroserver::search_kmp srch("ahoj");
 
 
 int main() {
@@ -27,11 +30,12 @@ int main() {
     }
 
 
-    test({"Test line1\n\rTest line2\r\n\r\nExtra data"},"\r\n\r\n",9999,true,"Test line1\n\rTest line2\r\n\r\n");
-    test({"Test line1\n\rTest line2\r\n","\r\nExtra data"},"\r\n\r\n",9999,true,"Test line1\n\rTest line2\r\n\r\n");
-    test({"Test line1\n\rTest line2\r\n","\r","\nExtra data"},"\r\n\r\n",9999,true,"Test line1\n\rTest line2\r\n\r\n");
-    test({"Test line1\n\rTest line2\r\n"},"\r\n\r\n",9999,false,{});
-    test({"Test line1\n\r","Test line2\r\n\r\n","Extra data"},"\r\n\r\n",15,true,"Test line1\n\rTest line2\r\n\r\n");
-    test({"Test line1\n\r","Test line2\r\n\r\n","Extra data"},"\r\n\r\n",5,false,{});
+
+    test({"Test line1\n\rTest line2\r\n\r\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2\r\n\r\n");
+    test({"Test line1\n\rTest line2\r\n","\r\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2\r\n\r\n");
+    test({"Test line1\n\rTest line2\r\n","\r","\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2\r\n\r\n");
+    test({"Test line1\n\rTest line2\r\n"},nlnl,9999,false,{});
+    test({"Test line1\n\r","Test line2\r\n\r\n","Extra data"},nlnl,15,true,"Test line1\n\rTest line2\r\n\r\n");
+    test({"Test line1\n\r","Test line2\r\n\r\n","Extra data"},nlnl,5,false,{});
 }
 

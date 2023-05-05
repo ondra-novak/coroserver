@@ -15,11 +15,11 @@
 
 namespace coroserver {
 
-template<std::size_t N>
+template<unsigned int N>
 class search_kmp {
 public:
 
-    constexpr search_kmp(std::string_view pattern):_len(std::min(N,pattern.length())) {
+    constexpr search_kmp(std::string_view pattern):_len(std::min<unsigned int>(N,pattern.length())) {
         auto p = pattern.substr(0,_len);
         std::copy(p.begin(), p.end(), _pattern);
         unsigned char i = 1;
@@ -38,9 +38,9 @@ public:
             }
         }
     }
-    using State = std::size_t;
+    using State = unsigned int;
 
-    constexpr std::size_t length() const {
+    constexpr unsigned int length() const {
         return _len;
     }
 
@@ -59,56 +59,62 @@ public:
 
 protected:
     char _pattern[N] = {};
-    int _lps[N] = {};
-    std::size_t _len;
+    unsigned int _lps[N] = {};
+    unsigned int _len;
 };
 
-class search_pattern {
+template<int N>
+search_kmp(const char (&x)[N]) -> search_kmp<N-1>;
+
+template<>
+class search_kmp<0> {
 public:
-    search_pattern(std::string_view pattern):_pattern(pattern),_j(0) {
-        lps.resize(pattern.length());
+
+    search_kmp(std::string_view pattern)
+        :_pattern(pattern),_lps(pattern.size(),0) {
         unsigned char i = 1;
         unsigned char len = 0;
-        lps[0]=0;
-        while (i < pattern.length()) {
-            if (pattern[i] == pattern[len]) {
+        _lps[0]=0;
+        while (i < _pattern.size()) {
+            if (_pattern[i] == _pattern[len]) {
                 len++;
-                lps[i] = len;
+                _lps[i] = len;
                 i++;
             } else if (len != 0) {
-                 len = lps[len - 1];
+                 len = _lps[len - 1];
             } else {
-                 lps[i] = 0;
+                 _lps[i] = 0;
                  i++;
             }
         }
     }
-    bool operator()(char c) {
-        while (_j > 0 && _pattern[_j] != c)
-            _j = lps[_j - 1];
-        if (_pattern[_j] == c) _j++;
+    using State = unsigned int;
 
-        if (_j == _pattern.length()) {
-            _j = 0;
+    unsigned int length() const {
+        return _pattern.size();
+    }
+
+    bool operator()(State &st, char c) const {
+        while (st > 0 && _pattern[st] != c)
+            st = _lps[st - 1];
+        if (_pattern[st] == c) st++;
+
+        if (st == _pattern.size()) {
+            st = 0;
             return true;
         }
         return false;
     }
-    std::size_t length() {
-        return _pattern.length();
-    }
-    void reset() {
-        _j = 0;
-    }
+
+
 protected:
     std::string _pattern;
-    std::size_t _j;
-    std::basic_string<unsigned char> lps;
+    std::basic_string<unsigned char> _lps;
 };
 
 
 inline auto splitAt(std::string_view src, std::string_view pattern) {
-    auto srch = search_pattern(pattern);
+    auto srch = search_kmp<0>(pattern);
     using Srch = decltype(srch);
     auto len = pattern.length();
 
@@ -121,7 +127,8 @@ inline auto splitAt(std::string_view src, std::string_view pattern) {
         std::string_view operator()() {
             std::size_t cnt = _src.length();
             for (std::size_t i = 0; i < cnt; i++) {
-                if (_srch(_src[i])) {
+                if (_srch(_state, _src[i])) {
+                    _state = 0;
                     std::string_view out = _src.substr(0, i - _len+1);
                     _src = _src.substr(i+1);
                     return out;
@@ -134,6 +141,7 @@ inline auto splitAt(std::string_view src, std::string_view pattern) {
         Srch _srch;
         std::size_t _len;
         std::string_view _src;
+        unsigned int _state = 0;
     };
     return Impl(srch, len, src);
 }
@@ -361,13 +369,16 @@ void decode(const std::string_view &text, Fn &&output, const Table &table = Tabl
 
 }
 
+constexpr char to_lower(char c) {
+    return  (c >= 'A' && c<='Z')?(c-'A'+'a'):c;
+}
 
 
 struct strILess {
     constexpr bool operator()(const std::string_view &a, const std::string_view &b) const {
         auto ln = std::min(a.length(), b.length());
         for (std::size_t i = 0; i < ln; i++) {
-            int c = std::tolower(a[i]) - std::tolower(b[i]);
+            int c = to_lower(a[i]) - to_lower(b[i]);
             if (c) return c<0;
         }
         return (static_cast<int>(a.length()) - static_cast<int>(b.length())) < 0;
@@ -378,7 +389,7 @@ struct strIEqual {
         if (a.length() != b.length()) return false;
         auto ln = a.length();
         for (std::size_t i = 0; i < ln; i++) {
-            int c = std::tolower(a[i]) - std::tolower(b[i]);
+            int c = to_lower(a[i]) - to_lower(b[i]);
             if (c) return false;
         }
         return true;
