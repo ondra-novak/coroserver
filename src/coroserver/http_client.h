@@ -16,7 +16,6 @@ namespace coroserver{
 
 namespace http {
 
-using ConnectionFactory = std::function<cocls::future<Stream>(std::string_view)>;
 
 inline ConnectionFactory connectionFactory(ContextIO ctx, int timeout_ms, TimeoutSettings tms) {
     return [ctx  = std::move(ctx), timeout_ms, tms](std::string_view host) mutable ->cocls::future<Stream> {
@@ -58,6 +57,12 @@ public:
 
     ///Create http client
     Client(Config cfg);
+
+    Client(ContextIO ioctx, std::string user_agent, int timeout_ms=ContextIO::defaultTimeout , TimeoutSettings tms={ContextIO::defaultTimeout,ContextIO::defaultTimeout})
+        :Client({
+        user_agent, connectionFactory(std::move(ioctx), timeout_ms, tms),
+        nullptr
+    }) {}
 
     Client(Config cfg, Headers hdrs);
 

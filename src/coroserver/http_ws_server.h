@@ -83,7 +83,6 @@ public:
 
 protected:
     Config _cfg;
-    std::atomic_flag _busy;
     cocls::suspend_point<void> on_response_sent(cocls::future<_Stream> &s) noexcept;
 
     cocls::promise<Stream> _result;

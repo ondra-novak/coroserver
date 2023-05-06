@@ -11,7 +11,7 @@ namespace coroserver {
 namespace http {
 
 
-ClientRequest::ClientRequest(ClientRequestParams &&params)
+ClientRequest::ClientRequest(ClientRequestParams &params)
     :_s(std::move(params.s))
     ,_user_agent(params.user_agent)
     ,_host(params.host)
@@ -23,6 +23,8 @@ ClientRequest::ClientRequest(ClientRequestParams &&params)
     ,_receive_response_awt(*this) {
         prepare_header(params.method, params.path);
 }
+
+ClientRequest::ClientRequest(ClientRequestParams &&params):ClientRequest(params) {}
 
 void ClientRequest::prepare_header(Method method, std::string_view path) {
      _req_headers << strMethod[method] << " " << path << " " << strVer[_request_version] << "\r\n";
@@ -52,6 +54,7 @@ void ClientRequest::open(Method method, std::string_view path) {
     _req_sent = false;
     _resp_recv = false;
     _keep_alive = true;
+    _custom_te= false;
     _body_stream = Stream(nullptr);
     _response_stream = Stream(nullptr);
     _body_to_write = {};
@@ -96,11 +99,13 @@ ClientRequest&& ClientRequest::operator ()(std::string_view key, std::string_vie
                 _has_te = true;
                 if (strIEqual()(value, strtable::val_chunked)) {
                     _is_te_chunked = true;
+                } else {
+                    _custom_te = true;
                 }
                 break;
         case 3: if (strIEqual()(value, strtable::val_100_continue)) {
-                    if (_expect_100) return std::move(*this);
                     _expect_100 = true;
+                    return std::move(*this);
                 }
                 break;
         case 4: _host = value;
@@ -146,16 +151,13 @@ ClientRequest &&ClientRequest::content_length(std::size_t sz) {
 }
 
 ClientRequest &&ClientRequest::expect100continue() {
-    if (!_expect_100) {
-        _req_headers << strtable::hdr_expect << ": " << strtable::val_100_continue << "\r\n";
-        _expect_100 = true;
-    }
+    _expect_100 = true;
     return std::move(*this);
 }
 
 
 
-cocls::future<bool> ClientRequest::send_headers(std::string_view body) {
+cocls::future<bool> ClientRequest::send_headers() {
     _req_headers << strtable::hdr_host << ": " << _host << "\r\n";
     if (!_auth.empty()) {
         _req_headers << strtable::hdr_authorization << ": " << _host << "\r\n";
@@ -169,13 +171,18 @@ cocls::future<bool> ClientRequest::send_headers(std::string_view body) {
     }
     if (_method != Method::GET && _method != Method::HEAD) {
         if (!_has_te) {
+            if (_content_length == 0) {
+                _expect_100 = false;
+            }
             _req_headers << strtable::hdr_content_length << ": " << _content_length << "\r\n";
         }
+    }
+    if (_expect_100) {
+        _req_headers << strtable::hdr_expect << ": " << strtable::val_100_continue << "\r\n";
     }
 
     _req_headers << "\r\n";
     _req_sent = true;
-    _body_to_write = body;
     return _s.write(_req_headers.view());
 }
 
@@ -237,6 +244,10 @@ cocls::suspend_point<void> ClientRequest::after_receive_headers() {
             }
             return _stream_promise(_body_stream);
         case Command::sendRequest:
+            if (_status_code == 100) {
+                cocls::future<bool> fakeres = cocls::future<bool>::set_value(true);
+                return after_send_headers(fakeres);
+            }
             prepare_response_stream();
             return _stream_promise(_response_stream);
     }
@@ -245,6 +256,7 @@ cocls::suspend_point<void> ClientRequest::after_receive_headers() {
 void ClientRequest::prepare_body_stream() {
     if (_is_te_chunked) _body_stream = ChunkedStream::write(_s);
     else if (_content_length) _body_stream = LimitedStream::write(_s, _content_length);
+    else if (_custom_te) _body_stream = _s;
     else _body_stream = Stream::null_stream();
     _is_te_chunked = false;
     _content_length = 0;
@@ -263,7 +275,11 @@ cocls::future<Stream> ClientRequest::send() {
         if (_resp_recv) {
             _stream_promise(_response_stream);
         } else if (_req_sent) {
-            _after_send_headers_awt << [&]{return _body_stream.write_eof();};
+            if (_custom_te) {
+                _receive_response_awt << [&]{return _s.read();};
+            } else {
+                _after_send_headers_awt << [&]{return _body_stream.write_eof();};
+            }
         } else {
             _after_send_headers_awt << [&]{return send_headers();};
         }
@@ -274,9 +290,11 @@ cocls::future<Stream> ClientRequest::send() {
 
 cocls::future<Stream> ClientRequest::send(std::string_view body) {
     if (!_req_sent) {
+        if (_has_te) throw std::logic_error("Invalid request state: Transfer Encoding cannot be used when send(<body>) is called");
         return [&](auto promise) {
             content_length(body.size());
-            _command = Command::beginBody;
+            _body_to_write = body;
+            _command = Command::sendRequest;
             _stream_promise = std::move(promise);
             _after_send_headers_awt << [&]{return send_headers();};
         };
@@ -318,6 +336,7 @@ cocls::suspend_point<void> ClientRequest::after_send_headers(cocls::future<bool>
         if (!_body_to_write.empty()) {
             auto s = _body_to_write;
             _body_to_write = {};
+            _content_length = 0;
             _after_send_headers_awt << [&]{return _s.write(s);};
             return {};
         }

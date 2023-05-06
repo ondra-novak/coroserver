@@ -24,7 +24,6 @@ cocls::future<Stream> Server::operator()(http::ServerRequest &req) {
         std::string_view key = req["Sec-WebSocket-Key"];
         if (key.empty()) return;
 
-        if (_busy.test_and_set(std::memory_order_relaxed)) return;
 
         SHA1 sha1;
         sha1.update(key);
@@ -49,11 +48,9 @@ cocls::suspend_point<void> Server::on_response_sent(cocls::future<_Stream> &sfut
         auto s = *sfut;
         s.set_timeouts(_cfg.io_timeout);
         auto r = _result(Stream(s,{false, _cfg.need_fragmented}));
-        _busy.clear(std::memory_order_relaxed);
         return r;
     } catch (...) {
         auto r = _result(std::current_exception());
-        _busy.clear(std::memory_order_relaxed);
         return r;
     }
 }

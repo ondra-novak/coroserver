@@ -48,6 +48,8 @@ class ClientRequest {
 public:
 
     ///Construct client request indirectly;
+    ClientRequest(ClientRequestParams &params);
+
     ClientRequest(ClientRequestParams &&params);
 
     ///Open new request on the same connection (when keep-alive allows it)
@@ -85,6 +87,10 @@ public:
     /**
      * Chunked protocol allows to send infinite stream.
      *
+     * This mode is default when begin_body() is called without setting
+     * content length. If you need to use different transfer encoding, set
+     * apropriate header.
+     *
      * @return this
      */
     ClientRequest &&use_chunked();
@@ -95,13 +101,22 @@ public:
 
     ///Request 100 continue to send body
     /**
-     * Note in this case, you need to check status after you call begin_body(). If
-     * the status is 100, continue to send body. If the status is different, you
-     * already has response. In this case, just call send() to retrieve the response stream
+     * When this mode is enabled, a response from the server is expected before
+     * the body is sent. If the response has status code 100 Continue, the
+     * body can be sent, then final response is expected. If the status code
+     * is other then 100, no body is sent, and response can be immediately read.
+     *
+     * This mode cannot be used, if body is empty.
+     *
+     * When used along with begin_body() and the request is rejected, the function
+     * throws the exception await_canceled_exception() as it cannot return
+     * body stream, because send operation was canceled. You need call send() to
+     * retrieve response.
      *
      * @return
      */
     ClientRequest &&expect100continue();
+
 
     ///Sends headers and begin sending of the body
     /**
@@ -109,6 +124,12 @@ public:
      * or Transfer Encoding
      *
      * @return stream to be used to send the body.
+     * @exception await_canceled_exception This exception may appear, when body was
+     * started while expect100continue() was enabled. When the other side rejected
+     * the request, the body cannot be sent. The request is already in state with
+     * response, so you can check status code. To retrieve response body, you need
+     * to call send() which will not send anything, but immediately returns response
+     * body stream
      *
      * @note to finish body, call send() and receive response
      *
@@ -126,11 +147,15 @@ public:
      *
      * @param content_length content length.
      * @return stream to be used to send the body.
+     * @exception await_canceled_exception This exception may appear, when body was
+     * started while expect100continue() was enabled. When the other side rejected
+     * the request, the body cannot be sent. The request is already in state with
+     * response, so you can check status code. To retrieve response body, you need
+     * to call send() which will not send anything, but immediately returns response
+     * body stream
      *
      * @note to finish body, call send() and receive response
      *
-     * @note if expect100continue is active, you need to check status after return.
-     * To continue sending body, there should be status 100
      *
      */
     cocls::future<Stream> begin_body(std::size_t content_length);
@@ -195,6 +220,7 @@ protected:
     bool _req_sent = false;
     bool _resp_recv = false;
     bool _keep_alive = true;
+    bool _custom_te = false;
     Stream _body_stream = {nullptr};
     Stream _response_stream = {nullptr};
 
@@ -220,7 +246,7 @@ protected:
 
 
 
-    cocls::future<bool> send_headers(std::string_view body = {});
+    cocls::future<bool> send_headers();
     void prepare_body_stream();
     void prepare_response_stream();
     cocls::suspend_point<void> after_receive_headers();

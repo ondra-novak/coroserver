@@ -244,6 +244,11 @@ public:
     }
 };
 
+
+///Declaration of factor, which is able to create connection to given host:port
+using ConnectionFactory = std::function<cocls::future<Stream>(std::string_view)>;
+
+
 }
 
 

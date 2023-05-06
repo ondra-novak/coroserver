@@ -235,6 +235,7 @@ static cocls::async<void> wait_connect(ContextIO ctx,
         //exit
         co_return;
     }
+
     //section where we can work with socket
     {
         //in this state, we can use socket handle to mark it closing when stop is requested
@@ -243,15 +244,16 @@ static cocls::async<void> wait_connect(ContextIO ctx,
         if (!stop.stop_requested()) {
             //wait for connect
             res = co_await supp.io_wait(socket,AsyncOperation::connect, TimeoutSettings::from_duration(timeout));
-            //if connection is complete,
-            if (res == WaitResult::complete) {
-                //signal success
-                co_await result.push(ConnectInfo{peer, socket});
-                //and exit
-                co_return;
-            }
         }
     }
+    //if connection is complete,
+    if (res == WaitResult::complete) {
+        //signal success
+        co_await result.push(ConnectInfo{peer, socket});
+        //and exit
+        co_return;
+    }
+
     //in all failures
     //close socket
     supp.close(socket);
