@@ -169,6 +169,7 @@ protected:
         masking2,
         masking3,
         masking4,
+        payload_begin,
         payload,
         complete
     };

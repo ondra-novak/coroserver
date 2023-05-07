@@ -49,6 +49,10 @@ bool Parser::push_data(std::string_view data) {
                 _masking[static_cast<int>(_state) - static_cast<int>(State::masking1)] = c;
                 _state = static_cast<State>(static_cast<std::underlying_type_t<State> >(_state)+1);
                 break;
+            case State::payload_begin:
+                _state = _payload_len?State::payload:State::complete;
+                --i;
+                break;
             case State::payload:
                 _cur_message.push_back(c ^ _masking[_cur_message.size() & 0x3]);
                 _state = _cur_message.size() == _payload_len?State::complete:State::payload;
@@ -58,7 +62,9 @@ bool Parser::push_data(std::string_view data) {
                 return finalize();
         }
     }
-    if (_state == State::complete) return finalize();
+    if (_state >= State::payload_begin &&  _cur_message.size() == _payload_len) {
+        return finalize();
+    }
     return false;
 }
 

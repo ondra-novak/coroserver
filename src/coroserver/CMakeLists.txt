@@ -22,6 +22,8 @@ add_library(coroserver
 	ssl_http_support.cpp
     http_client_request.cpp
     http_client.cpp
+    pipe.cpp
+    signal.cpp
     
 )
 add_dependencies(coroserver coroserver_version)
