@@ -3,7 +3,9 @@
 #include <coroserver/signal.h>
 #include <coroserver/pipe.h>
 #include <cocls/queue.h>
+#include <cocls/callback_awaiter.h>
 #include <iostream>
+#include <csignal>
 
 using namespace coroserver;
 
@@ -65,21 +67,32 @@ cocls::async<void> input(ContextIO ctx, cocls::queue<QueueMessage> &data) {
     }
 }
 
+cocls::async<void> signal_stop(ContextIO ctx) {
+    try {
+        SignalHandler sighandler(ctx);
+        auto f =  sighandler({SIGINT, SIGTERM});
+        co_await f;
+        co_await ctx.stop(); //here all blocking operations are canceled
+    } catch (...) {
+    }
+}
 int main(int, char **) {
+
 
     ContextIO ctx = ContextIO::create(1);
     try {
         cocls::queue<QueueMessage> q;
         cocls::future<void> f = client(ctx,q).start();
         cocls::future<void> g = input(ctx,q).start();
+        cocls::future<void> h = signal_stop(ctx);
         g.wait();
         std::cout << "Exiting..." << std::endl;
         ctx.stop();
         f.wait();
+        h.wait();
     } catch (std::exception &e) {
         std::cerr << e.what() << std::endl;
     }
-
 
     return 0;
 }

@@ -42,7 +42,7 @@ static void signal_handler(int s) {
 
 
 SignalHandler::SignalHandler(ContextIO ioctx)
-    :_signal_stream(PipeStream::create(ioctx, StaticSignalState::get_instance().signal_read, -1))
+    :_signal_stream(PipeStream::create(ioctx, dup(StaticSignalState::get_instance().signal_read), -1))
     ,_awt(*this){
 
     _awt << [&]{return _signal_stream.read();};
@@ -52,39 +52,51 @@ SignalHandler::~SignalHandler() {
     _signal_stream.shutdown();
 }
 
-cocls::future<void> SignalHandler::operator()(int signal) {
-    return [this,signal](auto promise) {
+cocls::future<void> SignalHandler::operator()(std::initializer_list<int > signals) {
+    return [this,signals](auto promise) {
         std::lock_guard _(_mx);
-        Promises &p = _listeners[signal];
-        bool create_signal = p.empty();
-        p.push_back(std::move(promise));
-        if (create_signal) ::signal(signal, &signal_handler);
+        auto shp = std::make_shared<cocls::promise<void> >(std::move(promise));
+        for (auto sig: signals) {
+            Promises &p = _listeners[sig];
+            p.erase(std::remove_if(p.begin(), p.end(), [](const auto &x){return !(*x);}),p.end());
+            bool create_signal = p.empty();
+            p.push_back(shp);
+            if (create_signal) ::signal(sig, &signal_handler);
+        }
     };
+
+}
+
+cocls::future<void> SignalHandler::operator()(int signal) {
+    return operator()({signal});
 }
 
 cocls::suspend_point<void> SignalHandler::on_signal(cocls::future<std::string_view> &f) noexcept {
-    cocls::suspend_point<void> out;
+    std::lock_guard _(_mx);
     try {
-        std::lock_guard _(_mx);
         std::string_view data = *f;
         if (!data.empty()) {
+            cocls::suspend_point<void> out;
             for (auto sig: data) {
                 auto iter = _listeners.find(sig);
                 if (iter != _listeners.end()) {
                     for (auto &promise: iter->second) {
-                        out << promise();
+                        out << (*promise)();
                     }
                     _listeners.erase(iter);
                 }
                 signal(sig, SIG_DFL);
             }
             _awt << [&]{return _signal_stream.read();};
+            return out;
         }
 
     } catch (...) {
-        //ignore exceptions
+        //
     }
-    return out;
+    return cocls::coro_queue::create_suspend_point([&]{
+        _listeners.clear();
+    });
 }
 
 }

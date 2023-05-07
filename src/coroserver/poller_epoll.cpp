@@ -62,17 +62,21 @@ Poller_epoll::Poller_epoll(cocls::thread_pool &pool)
 
 Poller_epoll::~Poller_epoll() {
 
-    {
-        std::lock_guard _(_mx);
-        _exit = true;
-        notify();
-    }
-    _running.wait();
+    cocls::coro_queue::disable_queue([&]{
 
-    Poller_epoll::mark_closing_all();
+        {
+            std::lock_guard _(_mx);
+            _exit = true;
+            notify();
+        }
 
-	::close(event_fd);
-	::close(epoll_fd);
+        _running.wait();
+
+        Poller_epoll::mark_closing_all();
+
+        ::close(event_fd);
+        ::close(epoll_fd);
+    });
 }
 
 

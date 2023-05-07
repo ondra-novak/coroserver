@@ -24,11 +24,12 @@ public:
     ~SignalHandler();
 
     cocls::future<void> operator()(int signal);
+    cocls::future<void> operator()(std::initializer_list<int > signals);
 
 
 protected:
     Stream _signal_stream;
-    using Promises = std::vector<cocls::promise<void> >;
+    using Promises = std::vector<std::shared_ptr<cocls::promise<void> >  >;
     std::unordered_map<int, Promises> _listeners;
     std::mutex _mx;
 

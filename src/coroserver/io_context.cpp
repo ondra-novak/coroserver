@@ -309,10 +309,13 @@ ContextIO ContextIO::create(std::size_t iothreads){
     return ContextIO(std::make_shared<ContextIOImpl>(iothreads));
 }
 
-void ContextIO::stop() {
+cocls::suspend_point<void> ContextIO::stop() {
    if (_ptr) {
-       _ptr->stop();
+       cocls::suspend_point<void> r = _ptr->stop();
        _ptr.reset();
+       return r;
+   } else {
+       return {};
    }
 }
 

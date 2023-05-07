@@ -195,7 +195,7 @@ public:
      * to finish their work. You need to join all pending coroutines to ensure, that
      * everything is stopped. The context itself is destroyed once all references are removed
      */
-    void stop();
+    cocls::suspend_point<void> stop();
 
 
     ///Retrieve stop function
