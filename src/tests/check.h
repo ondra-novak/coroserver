@@ -16,7 +16,7 @@
 
 #define CHECK_BINARY_OP(a,op,b) do { \
     if((a) op (b)) {  \
-        std::cout << "Passed: " << #a << #op << #b << ": " << (a) << #op << (b) << std::endl;\
+        std::cout << "Passed: " << #a << #op << #b  << std::endl;\
     } else {\
         std::cerr << "FAILED: " << #a << #op << #b << ": "<< (a) << #op << (b) << REPORT_LOCATION << std::endl; \
         exit(1);\

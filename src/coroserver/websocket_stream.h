@@ -42,31 +42,12 @@ public:
 
 
 
-    Stream(_Stream s, Cfg cfg):_ptr(create(s, cfg)) {}
+    Stream(_Stream s, Cfg cfg);
 
-    ///Write to websocket
-    /**
-     * @param msg message to send
-     * @param finish optional promise, which is set once the write operation finishes.
-     *   This is the way how to prevent to bloating internal buffer if the
-     *   data generation is too fast. (because write don't need to be co_awaited)
-     * @return suspend point. If you ignore result, the write coroutine is started
-     * immediately. Otherwise you can co_await the suspend point to make write
-     * faster.
-     *
-     * @note To close the connection, send message type Type::connClose with filled
-     * code and reason. By sending this message, the stream is considered half closed
-     *
-     * @note Function IS MT SAFE. Multiple threads can write, writing has internal
-     * lock.
-     */
-    cocls::suspend_point<bool> write(const Message &msg, cocls::promise<void> finish) {
-        return _ptr->write(msg, finish);
-    }
+    Stream();
 
-    cocls::suspend_point<bool> write(const Message &msg) {
-        return _ptr->write(msg);
-    }
+
+    cocls::suspend_point<bool> write(const Message &msg);
 
     ///Read from websocket
     /**
@@ -87,13 +68,9 @@ public:
      *
      * @note Function IS NOT MT SAFE.
      */
-    cocls::future<Message> read() {
-        return _ptr->read();
-    }
+    cocls::future<Message> read();
 
-    std::size_t get_buffered_size() const {
-        return _ptr->get_buffered_size();
-    }
+    std::size_t get_buffered_size() const;
 
     enum State {
         ///Stream is opened
@@ -104,9 +81,7 @@ public:
         closed
     };
 
-    State get_state() const {
-        return _ptr->get_state();
-    }
+    State get_state() const;
 
     ///close the stream explicitly
     cocls::suspend_point<bool> close() {
@@ -118,131 +93,19 @@ public:
         return write(Message{{},Type::connClose,code});
     }
 
+    cocls::future<void> wait_for_flush();
+
+    cocls::future<void> wait_for_idle();
 
 protected:
 
-    class InternalState {
-    public:
-
-        InternalState(_Stream &s, Cfg &cfg)
-            :_s(s)
-            ,_reader(cfg.need_fragmented)
-            ,_writer(s, cfg.client)
-            ,_awt(*this)
-            ,_awt_destroy(*this) {}
-
-        cocls::suspend_point<bool> write(const Message &msg) {
-            return _writer(msg);
-        }
-        cocls::suspend_point<bool> write(const Message &msg, cocls::promise<void> &p) {
-            return _writer(msg, std::move(p));
-        }
-
-        cocls::future<Message> read() {
-            if (_closed) return cocls::future<Message>::set_value(Message{{},Type::connClose, Base::closeNoStatus});
-            return [&](auto p) {
-                if (_reader.is_complete()) {
-                    _reader.reset();
-                }
-                _read_promise = std::move(p);
-                _awt << [&]{return _s.read();};
-            };
-        }
-
-        std::size_t get_buffered_size() const {
-            return _writer.get_buffered();
-        }
-
-        State get_state() const {
-            bool wr_open = _writer;
-            bool rd_open = !_closed;
-            if (wr_open && rd_open) return State::open;
-            if (!wr_open && !rd_open) return State::closed;
-            return State::closing;
-        }
-
-        void destroy() {
-            //write close message
-            _writer({{},Type::connClose,Base::closeNormal});
-            //sync to idle, then destroy
-            _awt_destroy << [&]{return _writer.sync_for_idle();};
-        }
-
-    protected:
-
-        cocls::suspend_point<void> on_read(cocls::future<std::string_view> &fut) noexcept { // @suppress("No return")
-            try {
-                std::string_view data = *fut;
-                if (data.empty()) {
-                    if (_ping_sent) {
-                        Message m{"Ping timeout", Type::connClose, Base::closeAbnormal};
-                        write(m);
-                        return _read_promise(m);
-                    } else {
-                        _ping_sent = true;
-                        write({{}, Type::ping});
-                        _awt << [&]{return _s.read();};
-                        return {};
-                    }
-                }
-                _ping_sent = false;
-                while (_reader.push_data(data)) {
-                    _s.put_back(_reader.get_unused_data());
-                    Message m = _reader.get_message();
-                    switch (m.type) {
-                        case Type::pong: break;
-                        case Type::connClose:
-                            _closed = true;
-                            write({{}, Type::connClose, Base::closeNormal});
-                            return _read_promise(m);
-                        case Type::ping:
-                            write({m.payload, Type::pong});
-                            break;
-                        default:
-                            return _read_promise(m);
-                    }
-                    _reader.reset();
-                    data = _s.read_nb();
-                }
-                _awt << [&]{return _s.read();};
-                return {};
-            } catch (...) {
-                return _read_promise(std::current_exception());
-            }
-        }
-
-        cocls::suspend_point<void> destroy_self(cocls::future<void> &) noexcept {
-            //now we know, that writer is idle
-            //we can destroy object
-            delete this;
-            //no suspend point
-            return {};
-        }
-
-        _Stream _s;
-        Parser _reader;
-        Writer _writer;
-        cocls::promise<Message> _read_promise;
-        cocls::call_fn_future_awaiter<&InternalState::on_read> _awt;
-        cocls::call_fn_future_awaiter<&InternalState::destroy_self> _awt_destroy;
-        bool _ping_sent = false;
-        bool _closed = false;
-    };
+    class InternalState;
+    struct Deleter;
 
     std::shared_ptr<InternalState> _ptr;
 
-    struct Deleter {
-        void operator()(InternalState *st) const {
-            st->destroy();
-        };
-    };
 
-    static std::shared_ptr<InternalState> create(_Stream &s, Cfg &cfg) {
-        return std::shared_ptr<InternalState>(new InternalState(s, cfg), Deleter());
-    }
-
-
-
+    std::shared_ptr<Stream::InternalState> create(_Stream &s, Cfg &cfg);
 
 
 };

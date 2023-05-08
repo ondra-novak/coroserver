@@ -131,92 +131,6 @@ bool Parser::finalize() {
     return true;
 }
 
-Builder::Builder(bool client):_client(client) {
-    if (_client) {
-        std::random_device dev;
-        _rnd.seed(dev());
-    }
-}
-
-bool Builder::operator()(const Message &message, std::vector<char> &data) {
-    std::string tmp;
-    std::string_view payload = message.payload;
-
-    if (message.type == Type::connClose) {
-        tmp.push_back(static_cast<char>(message.code>>8));
-        tmp.push_back(static_cast<char>(message.code && 0xFF));
-        if (!message.payload.empty()) {
-            std::copy(message.payload.begin(), message.payload.end(), std::back_inserter(tmp));
-        }
-        payload = {tmp.c_str(), tmp.length()+1};
-    }
-
-    // opcode and FIN bit
-    char opcode = opcodeContFrame;
-    bool fin = message.fin;
-    if (!_fragmented) {
-        switch (message.type) {
-            default:
-            case Type::unknown: return false;
-            case Type::text: opcode = opcodeTextFrame;break;
-            case Type::binary: opcode = opcodeBinaryFrame;break;
-            case Type::ping: opcode = opcodePing;break;
-            case Type::pong: opcode = opcodePong;break;
-            case Type::connClose: opcode = opcodeConnClose;break;
-        }
-    }
-    _fragmented = !fin;
-    data.push_back((fin << 7) | opcode);
-    // payload length
-    std::uint64_t len = payload.size();
-
-    char mm = _client?0x80:0;
-    if (len < 126) {
-        data.push_back(mm| static_cast<char>(len));
-    } else if (len < 65536) {
-        data.push_back(mm | 126);
-        data.push_back(static_cast<char>((len >> 8) & 0xFF));
-        data.push_back(static_cast<char>(len & 0xFF));
-    } else {
-        data.push_back(mm | 127);
-        data.push_back(static_cast<char>((len >> 56) & 0xFF));
-        data.push_back(static_cast<char>((len >> 48) & 0xFF));
-        data.push_back(static_cast<char>((len >> 40) & 0xFF));
-        data.push_back(static_cast<char>((len >> 32) & 0xFF));
-        data.push_back(static_cast<char>((len >> 24) & 0xFF));
-        data.push_back(static_cast<char>((len >> 16) & 0xFF));
-        data.push_back(static_cast<char>((len >> 8) & 0xFF));
-        data.push_back(static_cast<char>(len & 0xFF));
-    }
-    char masking_key[4];
-
-    if (_client) {
-        std::uniform_int_distribution<> dist(0, 255);
-
-        for (int i = 0; i < 4; ++i) {
-            masking_key[i] = dist(_rnd);
-            data.push_back(masking_key[i]);
-        }
-    } else {
-        for (int i = 0; i < 4; ++i) {
-            masking_key[i] = 0;
-        }
-    }
-
-    std::transform(payload.begin(), payload.end(), std::back_inserter(data),
-      [&, idx = 0](char c) mutable {
-        c ^= masking_key[idx];
-        idx = (idx + 1) & 0x3;
-        return c;
-    });
-    return true;
-}
-
-std::string_view Builder::operator()(const Message &message) {
-    _data.clear();
-    (*this)(message, _data);
-    return {_data.data(), _data.size()};
-}
 
 Reader::Reader(Stream s, bool need_fragmented):_s(s), _parser(need_fragmented),_awt(this) {
 }
@@ -272,7 +186,7 @@ cocls::suspend_point<void> Writer::flush(std::unique_lock<std::mutex> &lk) {
 }
 
 cocls::suspend_point<bool> Writer::do_write(const Message &msg, std::unique_lock<std::mutex> &lk) {
-    if (!_builder(msg, _prepared)) return false;
+    if (!_builder(msg, [&](char c){_prepared.push_back(c);})) return false;
     if (msg.type == Type::connClose) _closed = true;
     return {_pending?cocls::suspend_point<void>():flush(lk), true};
 }

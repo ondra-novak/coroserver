@@ -15,6 +15,7 @@ add_library(coroserver
 	http_server.cpp
 	http_static_page.cpp
 	websocket.cpp
+	websocket_stream.cpp
 	http_ws_server.cpp
 	http_ws_client.cpp
 	ssl_common.cpp

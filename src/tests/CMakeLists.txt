@@ -17,6 +17,8 @@ set(testFiles
     named_enum.cpp
     query.cpp
     http_client.cpp
+    mt_stream.cpp
+    shared_lockable_ptr.cpp
 )
 
 link_libraries(

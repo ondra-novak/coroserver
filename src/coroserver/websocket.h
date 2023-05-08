@@ -211,14 +211,19 @@ public:
      * @param client set true if the builder generates client frames. Otherwise
      * set false (for server)
      */
-    explicit Builder(bool client);
+    Builder(bool client)
+        :_client(client) {
+        if (_client) {
+            std::random_device dev;
+            _rnd.seed(dev());
+        }
+    }
 
     ///Build frame
     /**
      * @param message message to build.
-     * @return data to send to connected stream. Note that content of the
-     * string is stored inside of Builder's state and remains valid until
-     * a next message is builded.
+     * @retval true success
+     * @retval false invalid message
      *
      * @note To send fragmented message, you need correctly use _fin flag on
      * the message. Fragmented message must have _fin = false for all
@@ -226,21 +231,83 @@ public:
      * of the message is retrieved from the first fragment and it is ignored on
      * other fragments.
      */
-    std::string_view operator()(const Message &message);
+    template<typename Fn>
+    bool operator()(const Message &message, Fn &&output) {
+        std::string tmp;
+        std::string_view payload = message.payload;
 
-    ///Build frame into array
-    /**
-     * @param message message
-     * @param data array of bytes, where result is stored.
-     * @retval true success
-     * @retval false failure, invalid message
-     *
-     * @note the array is not cleared! You need to clear it manually before the call
-     */
-    bool operator()(const Message &message, std::vector<char> &data);
+        if (message.type == Type::connClose) {
+            tmp.push_back(static_cast<char>(message.code>>8));
+            tmp.push_back(static_cast<char>(message.code && 0xFF));
+            if (!message.payload.empty()) {
+                std::copy(message.payload.begin(), message.payload.end(), std::back_inserter(tmp));
+            }
+            payload = {tmp.c_str(), tmp.length()+1};
+        }
+
+        // opcode and FIN bit
+        char opcode = opcodeContFrame;
+        bool fin = message.fin;
+        if (!_fragmented) {
+            switch (message.type) {
+                default:
+                case Type::unknown: return false;
+                case Type::text: opcode = opcodeTextFrame;break;
+                case Type::binary: opcode = opcodeBinaryFrame;break;
+                case Type::ping: opcode = opcodePing;break;
+                case Type::pong: opcode = opcodePong;break;
+                case Type::connClose: opcode = opcodeConnClose;break;
+            }
+        }
+        _fragmented = !fin;
+        output((fin << 7) | opcode);
+        // payload length
+        std::uint64_t len = payload.size();
+
+        char mm = _client?0x80:0;
+        if (len < 126) {
+            output(mm| static_cast<char>(len));
+        } else if (len < 65536) {
+            output(mm | 126);
+            output(static_cast<char>((len >> 8) & 0xFF));
+            output(static_cast<char>(len & 0xFF));
+        } else {
+            output(mm | 127);
+            output(static_cast<char>((len >> 56) & 0xFF));
+            output(static_cast<char>((len >> 48) & 0xFF));
+            output(static_cast<char>((len >> 40) & 0xFF));
+            output(static_cast<char>((len >> 32) & 0xFF));
+            output(static_cast<char>((len >> 24) & 0xFF));
+            output(static_cast<char>((len >> 16) & 0xFF));
+            output(static_cast<char>((len >> 8) & 0xFF));
+            output(static_cast<char>(len & 0xFF));
+        }
+        char masking_key[4];
+
+        if (_client) {
+            std::uniform_int_distribution<> dist(0, 255);
+
+            for (int i = 0; i < 4; ++i) {
+                masking_key[i] = dist(_rnd);
+                output(masking_key[i]);
+            }
+        } else {
+            for (int i = 0; i < 4; ++i) {
+                masking_key[i] = 0;
+            }
+        }
+
+        int idx =0;
+        for (char c: payload) {
+            c ^= masking_key[idx];
+            idx = (idx + 1) & 0x3;
+            output(c);
+        }
+        return true;
+
+    }
 
 protected:
-    std::vector<char> _data;
     bool _client = false;
     bool _fragmented = false;
     std::default_random_engine _rnd;
@@ -373,6 +440,7 @@ public:
 
 protected:
     cocls::suspend_point<void> finish_write(cocls::future<bool> &val) noexcept;
+
 
     Stream _s;
     std::vector<char> _prepared;
