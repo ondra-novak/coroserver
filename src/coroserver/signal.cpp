@@ -41,7 +41,7 @@ static void signal_handler(int s) {
 }
 
 
-SignalHandler::SignalHandler(ContextIO ioctx)
+SignalHandler::SignalHandler(AsyncSupport ioctx)
     :_signal_stream(PipeStream::create(ioctx, dup(StaticSignalState::get_instance().signal_read), -1))
     ,_awt(*this){
 

@@ -11,19 +11,51 @@
 
 
 #include "stream.h"
-#include "io_context.h"
+#include "async_support.h"
 
 #include <cocls/future.h>
 #include <vector>
 
 namespace coroserver {
 
+///Creates asynchronous signal handler
+/**This object is attached to global signal handler provided by
+ * coroserver library. You can use it to co_await on signal through
+ * the operator(). You can co_await on multiple signals at once
+ *
+ * The implementation install the signal handler to the awaited signals
+ * only (other signals are not touched).
+ *
+ */
 class SignalHandler {
 public:
-    SignalHandler(ContextIO ioctx);
+    ///Constructs the object
+    /**
+     * @param ioctx io context or asynchronou support object
+     */
+    SignalHandler(AsyncSupport ioctx);
+    ///Destroy object
+    /**
+     * Destruction of object causes that awaiting is canceled. Awaiting
+     * coroutines receives exception await_canceled_exception
+     */
     ~SignalHandler();
 
+    ///Await on signal
+    /**
+     * @param signal signal to await
+     * @return future which can be co_awaited
+     * @exception cocls::await_canceled_exception - object has been destroyed
+     * without catching a signal
+     */
     cocls::future<void> operator()(int signal);
+    ///Await on many signals
+    /**
+     * @param signals signals to await
+     * @return future which can be co_awaited
+     * @exception cocls::await_canceled_exception - object has been destroyed
+     * without catching a signal
+     */
     cocls::future<void> operator()(std::initializer_list<int > signals);
 
 
@@ -40,9 +72,6 @@ protected:
 
 };
 
-
-cocls::future<void> wait_for_signal(std::initializer_list<int> list_of_signals);
-cocls::future<void> wait_for_signal(int list_of_signals);
 
 
 }

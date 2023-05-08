@@ -9,10 +9,10 @@
 #define SRC_COROSERVER_PIPE_H_
 
 
+#include "async_support.h"
 #include "defs.h"
 #include "stream.h"
 #include <cocls/generator.h>
-#include "socket_support.h"
 
 namespace coroserver {
 
@@ -20,7 +20,7 @@ class ContextIOImpl;
 
 class PipeStream: public AbstractStreamWithMetadata {
 public:
-    PipeStream(SocketSupport context, int fdread, int fdwrite,TimeoutSettings tms);
+    PipeStream(AsyncSupport context, int fdread, int fdwrite,TimeoutSettings tms);
     ~PipeStream();
     virtual cocls::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
@@ -39,7 +39,7 @@ public:
      * safely separate both ends in different threads.
      *
      */
-    static Stream create(SocketSupport context, TimeoutSettings tms = {});
+    static Stream create(AsyncSupport context, TimeoutSettings tms = {});
 
     ///duplicate read descriptor (to be used with POSIX interface)
     /**
@@ -68,7 +68,7 @@ public:
      * @note The descriptor is duplicated. you need to create own descriptor if you
      * no longer needed.
      */
-    static Stream create(SocketSupport context, int fd, TimeoutSettings tms = {});
+    static Stream create(AsyncSupport context, int fd, TimeoutSettings tms = {});
 
     ///Create stream from file descriptor
     /**
@@ -79,7 +79,7 @@ public:
      * @note The descriptor is duplicated. you need to create own descriptor if you
      * no longer needed.
      */
-    static Stream create(SocketSupport context, int fdread, int fdwrite, TimeoutSettings tms = {});
+    static Stream create(AsyncSupport context, int fdread, int fdwrite, TimeoutSettings tms = {});
 
     ///Create stream which is connected to stdin and stdout
     /**
@@ -88,10 +88,10 @@ public:
      * @param duplicate set true to duplicate descriptors, false to use standard descriptors
      * @return stream
      */
-    static Stream stdio(SocketSupport context, TimeoutSettings tms = {}, bool duplicate = true);
+    static Stream stdio(AsyncSupport context, TimeoutSettings tms = {}, bool duplicate = true);
 
 protected:
-    SocketSupport _ctx;
+    AsyncSupport _ctx;
     int _fdread;
     int _fdwrite;
     Counters _cntr;

@@ -37,10 +37,10 @@ _count};  //contains count of states
 
 
 
-class ISocketSupport {
+class IAsyncSupport {
 public:
 
-    virtual ~ISocketSupport() = default;
+    virtual ~IAsyncSupport() = default;
     virtual cocls::future<WaitResult> io_wait(SocketHandle handle,
                                              AsyncOperation op,
                                              std::chrono::system_clock::time_point timeout) = 0;
@@ -55,7 +55,7 @@ public:
  *  Objects working with raw sockets should hold this object, which is count-ref pointer to support object. It
  *  allows to handle asynchronous operations
  */
-class SocketSupport {
+class AsyncSupport {
 public:
     ///initialize object
     /**
@@ -64,7 +64,7 @@ public:
      * It is unlikely that you will need to construct object directly. In most cases, it is available as result
      * of function or method
      */
-    SocketSupport(std::shared_ptr<ISocketSupport> ptr):_ptr(std::move(ptr)) {}
+    AsyncSupport(std::shared_ptr<IAsyncSupport> ptr):_ptr(std::move(ptr)) {}
 
     ///Perform asynchronous waiting
     /**
@@ -150,7 +150,7 @@ public:
     }
 
 protected:
-    std::shared_ptr<ISocketSupport> _ptr;
+    std::shared_ptr<IAsyncSupport> _ptr;
 
 };
 

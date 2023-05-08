@@ -7,10 +7,10 @@
 
 #ifndef SRC_USERVER_IO_CONTEXT_H_
 #define SRC_USERVER_IO_CONTEXT_H_
+#include "async_support.h"
 #include "defs.h"
 #include "ipoller.h"
 #include "stream.h"
-#include "socket_support.h"
 #include "peername.h"
 
 #include <cocls/thread_pool.h>
@@ -27,7 +27,7 @@ using coroserver::PeerName;
 namespace coroserver {
 
 
-class ContextIOImpl: public ISocketSupport {
+class ContextIOImpl: public IAsyncSupport {
 public:
 
 
@@ -124,8 +124,8 @@ public:
     ///Create connected socket. Connection is asynchronous, you need to check status of socket
     SocketHandle create_connected_socket(const PeerName &addr);
 
-    operator SocketSupport() const {
-        return SocketSupport(_ptr);
+    operator AsyncSupport() const {
+        return AsyncSupport(_ptr);
     }
 
     ///Create accept generator

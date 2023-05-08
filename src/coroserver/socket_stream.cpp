@@ -5,7 +5,7 @@
 namespace coroserver {
 
 
-SocketStream::SocketStream(SocketSupport context, SocketHandle h, PeerName peer, TimeoutSettings tms)
+SocketStream::SocketStream(AsyncSupport context, SocketHandle h, PeerName peer, TimeoutSettings tms)
 :AbstractStreamWithMetadata(std::move(tms))
 ,_ctx(std::move(context))
 ,_h(h)

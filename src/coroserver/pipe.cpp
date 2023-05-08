@@ -12,7 +12,7 @@ static int set_nonblocking(int fd) {
 }
 
 
-PipeStream::PipeStream(SocketSupport context, int fdread, int fdwrite,TimeoutSettings tms)
+PipeStream::PipeStream(AsyncSupport context, int fdread, int fdwrite,TimeoutSettings tms)
 :AbstractStreamWithMetadata(std::move(tms))
 ,_ctx(std::move(context))
 ,_fdread(fdread)
@@ -127,7 +127,7 @@ cocls::suspend_point<void> PipeStream::shutdown() {
     return out;
 }
 
-Stream PipeStream::create(SocketSupport context, TimeoutSettings tms) {
+Stream PipeStream::create(AsyncSupport context, TimeoutSettings tms) {
     int p[2];
     int e = pipe2(p, O_CLOEXEC| O_NONBLOCK);
     if (e) throw std::system_error(errno, std::system_category(), "PipeStream::create/pipe2");
@@ -178,15 +178,15 @@ int PipeStream::dupWrite(Stream stream, bool share, bool close, int dup_to) {
     return dup_to;
 }
 
-Stream PipeStream::create(SocketSupport context, int fdread, int fdwrite, TimeoutSettings tms) {
+Stream PipeStream::create(AsyncSupport context, int fdread, int fdwrite, TimeoutSettings tms) {
     return Stream(std::make_shared<PipeStream>(context, fdread, fdwrite, tms));
 }
 
-Stream PipeStream::create(SocketSupport context, int fd, TimeoutSettings tms) {
+Stream PipeStream::create(AsyncSupport context, int fd, TimeoutSettings tms) {
     return Stream(std::make_shared<PipeStream>(context, fd, fd, tms));
 }
 
-Stream PipeStream::stdio(SocketSupport context, TimeoutSettings tms, bool duplicate) {
+Stream PipeStream::stdio(AsyncSupport context, TimeoutSettings tms, bool duplicate) {
     int rd = duplicate?dup_desc(0, false, -1):0;
     int wr = duplicate?dup_desc(1, false, -1):1;
     return Stream(std::make_shared<PipeStream>(context, rd, wr, tms));

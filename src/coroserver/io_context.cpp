@@ -117,7 +117,7 @@ cocls::suspend_point<void> ContextIOImpl::stop() {
 }
 
 
-static cocls::generator<Stream> listen_generator(SocketSupport ctx,
+static cocls::generator<Stream> listen_generator(AsyncSupport ctx,
         TimeoutSettings tmcfg,
         std::stop_token stoken,
         ListeningSocketHandle h,
@@ -164,7 +164,7 @@ cocls::generator<Stream> ContextIO::accept(std::vector<PeerName> &list,
 
     std::vector<cocls::generator<Stream> > gens;
     std::vector<SocketHandle> handles;
-    SocketSupport sup = *this;
+    AsyncSupport sup = *this;
     for (PeerName &x: list) {
         try {
             SocketHandle h = ContextIO::listen_socket(x);
@@ -202,7 +202,7 @@ static cocls::async<void> wait_connect(ContextIO ctx,
             std::stop_token stop,
             cocls::queue<ConnectInfo> &result) {
 
-    SocketSupport supp = ctx;
+    AsyncSupport supp = ctx;
     SocketHandle socket = -1;
 
     WaitResult res;

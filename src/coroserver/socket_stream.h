@@ -8,10 +8,10 @@
 #ifndef SRC_COROSERVER_SOCKET_STREAM_H_
 #define SRC_COROSERVER_SOCKET_STREAM_H_
 
+#include "async_support.h"
 #include "defs.h"
 #include "stream.h"
 #include <cocls/generator.h>
-#include "socket_support.h"
 
 namespace coroserver {
 
@@ -21,7 +21,7 @@ class ContextIOImpl;
 
 class SocketStream: public AbstractStreamWithMetadata {
 public:
-    SocketStream(SocketSupport context, SocketHandle h, PeerName peer, TimeoutSettings tms);
+    SocketStream(AsyncSupport context, SocketHandle h, PeerName peer, TimeoutSettings tms);
     ~SocketStream();
     virtual cocls::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
@@ -33,7 +33,7 @@ public:
     virtual PeerName get_peer_name() const override;
 
 protected:
-    SocketSupport _ctx;
+    AsyncSupport _ctx;
     SocketHandle _h;
     Counters _cntr;
     PeerName _peer;
