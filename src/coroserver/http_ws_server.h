@@ -16,6 +16,7 @@ namespace coroserver {
 
 namespace ws {
 
+#if 0
 ///Implements websocket server, implementing server side of websocket handshake
 /**
  * This object is generator-like object. Everytime it is called, it performs
@@ -83,6 +84,55 @@ public:
 
 protected:
     Config _cfg;
+    cocls::suspend_point<void> on_response_sent(cocls::future<_Stream> &s) noexcept;
+
+    cocls::promise<Stream> _result;
+    cocls::call_fn_future_awaiter<&Server::on_response_sent> _awt;
+};
+
+#endif
+
+
+class Server {
+public:
+
+    ///Accept server connection, returns awaitable object
+    /**
+     *
+     * @param req http request
+     * @param tm timeouts
+     * @param need_fragmented set true, if you need fragmented messages
+     * @return awaitable object (you can co_await on it)
+     */
+    static Server accept(http::ServerRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false) {
+        return Server(req, tm, need_fragmented);
+    }
+
+    cocls::future<Stream> operator()();
+
+    cocls::future_awaiter<Stream> operator co_await() {
+        return [&]{return (*this)();};
+    }
+
+    std::optional<Stream> wait() {
+        cocls::future<Stream> f = (*this);
+        if (f.has_value()) return std::move(*f);
+        else return {};
+    }
+
+protected:
+
+    Server(http::ServerRequest &req,
+           TimeoutSettings tm = {60000,60000},
+           bool need_fragmented = false)
+        :_need_fragmented(need_fragmented)
+        ,_tm(tm)
+        ,_req(req)
+        ,_awt(*this){}
+
+    bool _need_fragmented;
+    TimeoutSettings _tm;
+    http::ServerRequest &_req;
     cocls::suspend_point<void> on_response_sent(cocls::future<_Stream> &s) noexcept;
 
     cocls::promise<Stream> _result;

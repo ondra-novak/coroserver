@@ -85,7 +85,7 @@ std::string to_id(const void *ptr) {
 
 cocls::async<void> reader(ws::Stream stream, MyPublisher &publisher, const MySubscriber *instance) {
     do {
-        ws::Message &msg = co_await stream.read();
+        const ws::Message &msg = co_await stream.read();
         switch (msg.type) {
             case ws::Type::text: {
                 std::string txt(msg.payload);
@@ -115,11 +115,10 @@ cocls::async<void> writer(ws::Stream s, MyPublisher &publisher) {
 }
 
 cocls::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) {
-    ws::Server server({});
-    auto fut = server(req);
-    if (co_await fut.has_value()) {
-        writer(*fut, publisher).detach();
-    } else {
+    try {
+        ws::Stream s = co_await ws::Server::accept(req);
+        writer(std::move(s), publisher).detach();
+    } catch (cocls::await_canceled_exception &) {
         req.set_status(400);
     }
 }

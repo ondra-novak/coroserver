@@ -66,7 +66,7 @@ public:
         //if no character ready - we need to fetch from foture
         if (_ptr == _end) {
             //fetch from future
-            std::string_view &text = _fut.value();
+            const std::string_view &text = _fut.value();
             //if text is empty, this is eof
             if (text.empty()) return -1;
             //update pointers

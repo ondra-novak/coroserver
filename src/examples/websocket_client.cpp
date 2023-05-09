@@ -14,7 +14,7 @@ using QueueMessage = std::variant<std::monostate, std::string>;
 cocls::async<void> reader(ws::Stream stream, cocls::queue<QueueMessage> &q) {
     auto f = stream.read();
     while (co_await f.has_value()) {
-        auto &msg = *f;
+        const auto &msg = *f;
         if (msg.type == ws::Type::text) {
             std::cout << msg.payload << std::endl;
         }
