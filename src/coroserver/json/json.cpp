@@ -17,12 +17,7 @@ struct StrWrite {
 
 
 std::string json::Value::to_string() const {
-    std::string out;
-    static std::size_t allocsz = 0;
-    cocls::stack_storage stor(allocsz);
-    stor=alloca(stor);
-    serialize_coro<cocls::stack_storage, StrWrite>(stor, {out}, *this).join();
-    return out;
+    return Serializer(*this).to_string();
 }
 
 struct StrRead {

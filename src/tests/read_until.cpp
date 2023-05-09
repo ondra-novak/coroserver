@@ -7,8 +7,7 @@ template<unsigned int N>
 void test(std::vector<std::string> zadani, const coroserver::search_kmp<N> &sep, std::size_t limit, bool r1, std::string_view r2) {
     coroserver::Stream s (std::make_shared<TestStream<100>>(std::move(zadani)));
     std::string buff;
-    auto ru = s.read_until(buff, sep, limit);
-    bool r = ru().wait();
+    auto r = s.read_until(buff, sep, limit)().wait();
     CHECK_EQUAL(r,r1);
     if (r) {
         CHECK_EQUAL(buff, r2);

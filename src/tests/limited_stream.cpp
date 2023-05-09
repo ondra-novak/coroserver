@@ -38,10 +38,10 @@ void test3() {
     auto ls = coroserver::LimitedStream::read(s, 11);
 
     std::string buff;
-    bool r = ls.read_block(buff, 15).wait();
+    bool r = ls.read_block(buff, 15)().wait();
     CHECK(!r);
     CHECK_EQUAL(buff,"Hello World");
-    r = s.read_block(buff, 100).wait();
+    r = s.read_block(buff, 100)().wait();
     CHECK(!r);
     CHECK_EQUAL(buff," Extra data");
 }
@@ -51,13 +51,13 @@ void test4() {
     auto ls = coroserver::LimitedStream::read(s, 11);
 
     std::string buff;
-    bool r = ls.read_block(buff, 5).wait();
+    bool r = ls.read_block(buff, 5)().wait();
     CHECK(r);
     CHECK_EQUAL(buff,"Hello");
-    r = ls.read_block(buff, 15).wait();
+    r = ls.read_block(buff, 15)().wait();
     CHECK(!r);
     CHECK_EQUAL(buff," World");
-    r = s.read_block(buff, 100).wait();
+    r = s.read_block(buff, 100)().wait();
     CHECK(!r);
     CHECK_EQUAL(buff," Extra data");
 }

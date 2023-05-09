@@ -268,6 +268,7 @@ protected:
     cocls::suspend_point<void> on_destroy(cocls::future<void> &) noexcept {
         _destroy_awt.~call_fn_future_awaiter();
         delete this;
+        return {};
     }
     union {
         cocls::call_fn_future_awaiter<&MTStreamWriter::on_destroy> _destroy_awt;

@@ -54,6 +54,8 @@ using ValueVariant = std::variant<
                 PObject,
                 PArray>;
 
+
+
 enum class Type {
     undefined,
     null,
@@ -62,7 +64,23 @@ enum class Type {
     string,
     object,
     array
+};
 
+constexpr Type valueVariantIndexToType[] = {
+       Type::undefined,       //Undefined,
+       Type::null,            //std::nullptr_t,
+       Type::boolean,         //bool,
+       Type::number,          //std::int32_t,
+       Type::number,          //std::uint32_t,
+       Type::number,          //std::int64_t,
+       Type::number,          //std::uint64_t,
+       Type::number,          //double,
+       Type::number,          //TextNumber,
+       Type::string,          //std::string,
+       Type::object,          //Object,
+       Type::array,           //Array,
+       Type::object,          //PObject,
+       Type::array            //PArray>;
 };
 
 inline constexpr std::string_view str_true="true";
@@ -87,23 +105,7 @@ public:
 
 
     constexpr Type type() const {
-        constexpr Type types[] = {
-                Type::undefined,
-                Type::null,
-                Type::boolean,
-                Type::number,
-                Type::number,
-                Type::number,
-                Type::number,
-                Type::number,
-                Type::number,
-                Type::string,
-                Type::object,
-                Type::array,
-                Type::object,
-                Type::array
-        };
-        return types[this->index()];
+        return valueVariantIndexToType[this->index()];
     }
 
     constexpr bool defined() const {return this->index() != 0;}
@@ -178,18 +180,18 @@ public:
     auto get_string() const {
         return std::visit([](const auto &val)->std::string{
             using T = decltype(val);
-            if constexpr(std::is_convertible_v<T, std::string_view>) {
-                return std::string(val);
-            }else if constexpr(std::is_convertible_v<T, Undefined>){
-                return std::string(str_undefined);
-            } else if constexpr(std::is_convertible_v<T,std::nullptr_t>) {
+            if constexpr(std::is_convertible_v<T,std::nullptr_t>) {
                 return std::string(str_null);
+            } else if constexpr(std::is_convertible_v<T, Undefined>){
+                return std::string(str_undefined);
             } else if constexpr(std::is_convertible_v<T,bool>) {
                 return std::string(val?str_true:str_false);
             } else if constexpr(std::is_convertible_v<T,double>) {
                 std::ostringstream out;
                 out << val;
                 return out.str();
+            } else if constexpr(std::is_convertible_v<T, std::string_view>) {
+                return std::string(val);
             } else {
                 return std::string();
             }

@@ -26,7 +26,7 @@ cocls::async<void> test1() {
 
 
     std::string chk = R"json([1,2,3,{"a":10,"b":"ahoj \u010dau"},true,false,null,{"z":{"x":[[1],2]}}])json";
-    co_await coroserver::json::serialize(s, v);
+    co_await s.generate_and_write(coroserver::json::Serializer::generator<10>(std::move(v)));
     CHECK_EQUAL(chk,out);
 
 }

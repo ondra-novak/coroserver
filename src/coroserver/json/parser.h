@@ -13,7 +13,307 @@ namespace coroserver{
 
 namespace json {
 
+#if 0
+struct Parser {
 
+    class Stack;
+
+
+    struct StateCompare {
+        static constexpr bool repeat_last_char = false;
+        std::string_view _text;
+        Value _result;
+        std::size_t _pos = 0;
+        void operator()(Value &) {}
+        bool operator()(char c, Stack &, Value &result) {
+            if (c == _text[_pos]) {
+                ++_pos;
+                if (_pos != _text.length()) return false;
+                result = std::move(_result);
+                return true;
+            } else {
+                throw std::runtime_error("Parse error");
+            }
+        }
+    };
+
+    static int hexNumber(char c) {
+        int out = (c >= 0 && c<='9')?c-'0':
+                              (c >= 'A' && c <= 'F')?c-'A'+10:
+                              (c >= 'a' && c <= 'f')?c-'a'+10: -1;
+        if (out < 0) [[unlikely]] throw std::runtime_error("Invalid unicode escape sequence");
+        return out;
+    }
+
+    static bool utf8_encode(unsigned int code_point, std::string &result) {
+        if (code_point <= 0x7F) {
+            result.push_back(static_cast<char>(code_point));
+        } else if (code_point <= 0x7FF) {
+            result.push_back(static_cast<char>(0xC0 | (code_point >> 6)));
+            result.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+        } else if (code_point <= 0xFFFF) {
+            result.push_back(static_cast<char>(0xE0 | (code_point >> 12)));
+            result.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+        } else if (code_point <= 0x10FFFF) {
+            result.push_back(static_cast<char>(0xF0 | (code_point >> 18)));
+            result.push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+        } else {
+            return false;
+        }
+        return true;
+    };
+
+    struct StateString {
+        static constexpr bool repeat_last_char = false;
+        std::string _s;
+        int _state = 0;
+        unsigned int _unicode = 0;
+        unsigned int _unicode2 = 0;
+        void operator()(Value &) {}
+        bool operator()(char c, Stack &, Value &result) {
+            int h;
+            switch (_state) {
+                default:
+                case 0: if (c == '"') {
+                            result = std::move(_s);
+                            return true;
+                        } else if (c != '\\'){
+                            _s.push_back(c);
+                            return false;
+                        } else {
+                            _state = 1;
+                            return false;
+                        }
+                case 1: _state = 0;
+                         switch (c)  {
+                            default: break;
+                            case 'n':c = '\n';break;
+                            case 'r':c = '\r';break;
+                            case 't':c = '\r';break;
+                            case 'f':c = '\t';break;
+                            case 'b':c = '\b';break;
+                            case 'u':{
+                                _state = 2;
+                                return false;
+                            }
+                        }
+                        _s.push_back(c);
+                        return false;
+                case 2:
+                case 3:
+                case 4: _unicode = _unicode * 16 + hexNumber(c);
+                        ++_state;
+                        return false;
+                case 5: _unicode = _unicode * 16 + hexNumber(c);
+                        if ((_unicode & 0x7FF) == 0xD800) {
+                            ++_state;
+                        } else {
+                            utf8_encode(_unicode, _s);
+                            _unicode = 0;
+                        }
+                        return false;
+                case 6: if (c != '\\') throw std::runtime_error("Expected '\\'");
+                        ++_state;
+                        return false;
+                case 7: if (c != 'u') throw std::runtime_error("Expected 'u'");
+                        ++_state;
+                        return false;
+                case 8:
+                case 9:
+                case 10:_unicode2 = _unicode2 * 16 + hexNumber(c);
+                        ++_state;
+                        return false;
+                case 11:_unicode2 = _unicode2 * 16 + hexNumber(c);
+                        if ((_unicode2 & 0x7FF) == 0xD800) {
+                            //first is high surrogate, other is low surrogate
+                            if (_unicode2 < _unicode) std::swap(_unicode2, _unicode);
+                            int u  = ((_unicode & ~0x3FF) << 10) | (_unicode2 & ~0x3FF);
+                            utf8_encode(u, _s);
+                            _unicode = _unicode2 = 0;
+                        } else {
+
+                            throw std::runtime_error("Expected surrogate pair");
+                        }
+                        _state = 0;
+                        return false;
+            }
+        }
+    };
+
+    struct StateNumber {
+        static constexpr bool repeat_last_char = true;
+        std::string _s;
+        int _state = 0;
+
+        static void error() {
+            throw std::runtime_error("Invalid number format");
+        }
+        void operator()(Value &) {}
+        bool operator()(char c, Stack &, Value &result) {
+            _s.push_back(c);
+            while (true)
+
+                //0 READSIGN
+                //1 EXPECT 1 NUMBER
+                //2 READNUMBERS
+                //3 READ DOT OR E OR EOF -> exit
+                //4 EXPECT 1 NUMBER
+                //5 READNUMBERS
+                //6 READ E OR EOF
+                //7 READSIGN
+                //8 EXPECT 1 NUMBER
+                //9 READNUMBERS
+                //10 FINALIZE
+
+                switch (_state) {
+                            // FINALIZE
+                    default: result = TextNumber(_s)    ;
+                             return true;
+
+
+
+                            //READSIGN
+                    case 7:
+                    case 0: _state++;
+                            if (c == '+' || c == '-') return false;
+                            if (c < '0' || c > '9') error();
+                            break;
+
+                            //READNUMBERS
+                    case 2:
+                    case 5:
+                    case 9: if (c >= '0' && c <='9') return false;
+                            _state++;
+                            break;
+
+
+                            //READ DOT OR E OR EOF
+                    case 3: if (c == '.') {
+                                _state++;
+                                return false;
+                            } else if (c == 'e' || c == 'E') {
+                                _state=7;
+                                return false;
+                            }
+                            _state = 10;
+                            break;
+                            //EXPECT 1 NUMBER
+                    case 1:
+                    case 4:
+                    case 8: if (c >= '0' && c <='9') {
+                                _state++;
+                                return false;
+                            }
+                            error();
+                            break;
+                            //READ E OR EOF
+                    case 6: if (c == 'e' || c == 'E') {
+                                _state++;
+                                return false;
+                            }
+                            _state = 10;
+                            break;
+
+                }
+        }
+    };
+
+    struct StateArray {
+        static constexpr bool repeat_last_char = false;
+        Array _arr;
+        int _state = 0;
+        void operator()(Value &return_value) {
+            _arr.push_back(std::move(return_value));
+            ++_state;
+        }
+        bool operator()(char c, Stack &st, Value &result) {
+            switch (_state) {
+                case 0: if (c != '[') throw std::runtime_error("Expected '['");
+                        ++_state;
+                        return false;
+                case 1: if (std::isspace(c)) return false;
+                        st.push(State(c), c, result);
+                        return false;
+            }
+        }
+
+    };
+    struct StateObject {
+        static constexpr bool repeat_last_char = false;
+        Object _arr;
+        int _state = 0;
+        bool operator()(char c, Stack &, Value &result) {
+
+        }
+    };
+
+
+    using StateVariant = std::variant<StateCompare, StateString, StateNumber>;
+
+    class State: public StateVariant {
+    public:
+        using StateVariant::StateVariant;
+        State(char c): StateVariant(initState(c)){}
+
+        static StateVariant initState(char c) {
+            switch (c) {
+                case '{': return StateObject{};
+                case '[': return StateArray{};
+                case '"': return StateString{};
+                case '+':
+                case '-': return StateNumber{};
+                case 'n': return StateCompare{"null",nullptr};
+                case 't': return StateCompare{"true",true};
+                case 'f': return StateCompare{"false",false};
+            }
+        }
+    };
+
+    class Stack : public std::stack<State> {
+    public:
+
+        return push(State &&state, char c, Value &result) {
+            std::stack<State>::push(std::move(state));;
+            return execute(c, result);
+        }
+        bool execute(char c, Value &result) {
+            bool v  = std::visit([&](auto &x){
+                return x(c, *this, result);
+            },top());
+            if (v) {
+                pop();
+                if (empty()) return true;
+                else {
+                    bool rep =std::visit([&](auto &x){
+                        x(result);
+                        return x.repeat_last_char;
+                    }, top());
+                    if (rep) return execute(c, result);
+                }
+            } else {
+                return false;
+            }
+        }
+    };
+
+public:
+
+    bool operator()(char c);
+
+
+    operator Value &&() const {
+
+    }
+
+
+protected:
+};
+
+
+#endif
 
 
 template<typename Alloc, typename Stream>

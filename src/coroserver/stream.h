@@ -12,6 +12,7 @@
 #include "strutils.h"
 
 #include <cocls/future.h>
+#include <cocls/generator.h>
 #include <cocls/async.h>
 #include <cocls/with_allocator.h>
 #include <chrono>
@@ -224,6 +225,7 @@ public:
         return _stream;
     }
 
+    ///Helper class of function read_until()
     template<typename Container, typename _SearchKMP>
     class ReadUntil {
     public:
@@ -233,6 +235,8 @@ public:
             ,_kmp(kmp)
             ,_limit(limit)
             ,_awt(*this) {}
+        ReadUntil(const ReadUntil &) = delete;
+        ReadUntil &operator=(const ReadUntil &) = delete;
 
         cocls::future<bool> operator()() {
             return [&](auto promise) {
@@ -240,6 +244,9 @@ public:
                 _promise = std::move(promise);
                 _awt << [&]{return _s->read();};
             };
+        }
+        cocls::future_awaiter<bool> operator co_await() {
+            return [&]{return (*this)();};
         }
 
     protected:
@@ -271,6 +278,153 @@ public:
         unsigned int _state = 0;
     };
 
+    class GenerateAndWrite {
+    public:
+        GenerateAndWrite(std::shared_ptr<IStream> &s, cocls::generator<std::string_view> &&gen)
+            :_s(s)
+            ,_gen(std::move(gen))
+            ,_awt_write(*this)
+            ,_awt_gen(*this) {}
+
+        GenerateAndWrite(const GenerateAndWrite &) = delete;
+        GenerateAndWrite &operator=(const GenerateAndWrite &) = delete;
+
+        cocls::future<bool> operator()() {
+            return [&](auto promise) {
+                _result = std::move(promise);
+                _awt_gen << _gen;
+            };
+        }
+        ///Object can be directly awaited
+        cocls::future_awaiter<bool> operator co_await() {
+            return [&]{return (*this)();};
+        }
+
+    protected:
+        cocls::suspend_point<void> on_data(cocls::future<std::string_view> &f) noexcept {
+            try {
+                if (f.has_value()) {
+                    std::string_view data = *f;
+                    _awt_write << [&]{return _s->write(data);};
+                    return {};
+                } else {
+                    return _result(true);
+                }
+            } catch (...) {
+                return _result(std::current_exception());
+            }
+        }
+        cocls::suspend_point<void> on_next(cocls::future<bool> &f) noexcept {
+            try {
+                bool ret = *f;
+                if (!ret) return _result(false);
+                _awt_gen << _gen;
+                return {};
+            } catch (...) {
+                return _result(std::current_exception());
+            }
+        }
+
+        std::shared_ptr<IStream> &_s;
+        cocls::generator<std::string_view> _gen;
+        cocls::promise<bool> _result;
+        cocls::call_fn_future_awaiter<&GenerateAndWrite::on_next> _awt_write;
+        cocls::call_fn_future_awaiter<&GenerateAndWrite::on_data> _awt_gen;
+
+    };
+
+    template<typename Container>
+    class ReadBlock {
+    public:
+        ReadBlock(std::shared_ptr<IStream> &s, Container &container, std::size_t limit)
+            :_s(s)
+            ,_container(container)
+            ,_limit(limit)
+            ,_awt(*this) {}
+        ReadBlock(const ReadBlock &) = delete;
+        ReadBlock &operator=(const ReadBlock &) = delete;
+
+        cocls::future<bool> operator()() {
+            return [&](auto promise) {
+                _promise = std::move(promise);
+                _awt << [&]{return _s->read();};
+            };
+        }
+        cocls::future_awaiter<bool> operator co_await() {
+            return [&]{return (*this)();};
+        }
+
+    protected:
+        cocls::suspend_point<void> data_read(cocls::future<std::string_view> &f) noexcept {
+            try {
+                std::string_view data = *f;
+                if (data.empty()) return _promise(false);
+                for (std::size_t i = 0; i < data.size(); i++) {
+                    _container.push_back(data[i]);
+                    if (_container.size() == _limit) {
+                        _s->put_back(data.substr(i+1));
+                        return _promise(true);
+                    }
+                }
+                _awt << [&]{return _s->read();};
+                return {};
+            } catch (...) {
+                return _promise(std::current_exception());
+            }
+        }
+
+        std::shared_ptr<IStream> &_s;
+        Container &_container;
+        std::size_t _limit;
+        cocls::call_fn_future_awaiter<&ReadBlock::data_read> _awt;
+        cocls::promise<bool> _promise;
+    };
+
+    class DiscardBlock {
+    public:
+        DiscardBlock(std::shared_ptr<IStream> &s, std::size_t limit)
+            :_s(s)
+            ,_limit(limit)
+            ,_awt(*this) {}
+        DiscardBlock(const DiscardBlock &) = delete;
+        DiscardBlock &operator=(const DiscardBlock &) = delete;
+
+        cocls::future<bool> operator()() {
+            return [&](auto promise) {
+                _promise = std::move(promise);
+                _awt << [&]{return _s->read();};
+            };
+        }
+        cocls::future_awaiter<bool> operator co_await() {
+            return [&]{return (*this)();};
+        }
+
+    protected:
+        cocls::suspend_point<void> data_read(cocls::future<std::string_view> &f) noexcept {
+            try {
+                std::string_view data = *f;
+                if (data.empty()) return _promise(false);
+                if (data.size() < _limit) {
+                    _s->put_back(data.substr(_limit));
+                    return _promise(true);
+                } else {
+                    _limit -= data.size();
+                }
+                _awt << [&]{return _s->read();};
+                return {};
+            } catch (...) {
+                return _promise(std::current_exception());
+            }
+        }
+
+        std::shared_ptr<IStream> &_s;
+        std::size_t _limit;
+        cocls::call_fn_future_awaiter<&DiscardBlock::data_read> _awt;
+        cocls::promise<bool> _promise;
+    };
+
+
+
     ///Creates generator-like object, which reads data until a separator is found
     /**
      * @param container reference to container, where data will be stored. You need to
@@ -281,11 +435,10 @@ public:
      * size of container. If the container reaches the size, the reading stops and
      * error is reported
      *
-     * @return generator object. It is callable object, which can be called without
-     * arguments. Result of the call is future<bool>. The value of call is true -
-     * successfully read until separator, or false - reached end of stream
+     * @return ReadUntil object which can be directly co_awaited or called to
+     * retrieve a future with result
      *
-     * @note separator is included to container
+     * @note separator is included and stored to the container
      *
      * @note it is generator-like object, it doesn't allocate memory.
      *
@@ -294,6 +447,7 @@ public:
      */
     template<typename Container, unsigned int N>
     auto read_until(Container &container, const search_kmp<N> &pattern, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        container.clear();
         return ReadUntil<Container, const search_kmp<N> &>(_stream, container, pattern, limit);
     }
 
@@ -310,6 +464,8 @@ public:
      * @return generator object. It is callable object, which can be called without
      * arguments. Result of the call is future<bool>. The value of call is true -
      * successfully read until separator, or false - reached end of stream
+     * @retval true read success
+     * @retval false failure - eof, timeout or limit
      *
      * @note separator is included to container
      *
@@ -323,66 +479,49 @@ public:
         return ReadUntil<Container, search_kmp<0> >(_stream, container, pattern, limit);
     }
 
-
-
-    ///Read specified count of bytes
-    /**
-     * @param a allocator for coroutine frame
-     * @param container container object where result will be stored
-     * @param size count of bytes
-     * @retval true read successfully
-     * @retval false eof or timeout reached
-     */
-    template<typename Alloc, typename Container>
-    cocls::future<bool> read_block(Alloc &a, Container &container, std::size_t size) {
-        container.clear();
-        return read_block_coro(a, *_stream, container, size);
-    }
-
-
     ///Read specified count of bytes
     /**
      * @param container container object where result will be stored
      * @param size count of bytes
+     * @return Object which controls whole operation and which can be directly
+     * co_awaited for the result
      * @retval true read successfully
      * @retval false eof or timeout reached
      */
     template<typename Container>
-    cocls::future<bool> read_block(Container &container, std::size_t size) {
+    ReadBlock<Container> read_block(Container &container, std::size_t size) {
         container.clear();
-        cocls::default_storage stor;
-        return read_block_coro(stor, *_stream, container, size);
+        return ReadBlock<Container>(_stream, container, size);
     }
 
-    ///Discard any input up to specified count of bytes
-    /**
-     * @param Alloc coroutine allocator (cocls)
-     * @param count count of bytes to discard. Default value discards all bytes
-     * until EOF. If you specify 0, no bytes will be discarded, however an empty
-     * read is still performed and return value is set apropriately
-     * @retval true all bytes has been discarded, EOF not reached. In case that count
-     * is zero, it manifests, that there are still data in the stream
-     * @retval false not all bytes has been discarded, EOF has been reached. If case
-     * that count is zero, this means no more data are available.
-     */
-    template<typename Alloc>
-    cocls::future<bool> discard(Alloc &a, std::size_t count = -1) {
-        return discard_coro(a, *_stream, count);
-    }
 
     ///Discard any input up to specified count of bytes
     /**
      * @param count count of bytes to discard. Default value discards all bytes
      * until EOF. If you specify 0, no bytes will be discarded, however an empty
-     * read is still performed and return value is set apropriately
+     * read is still performed and return value is set appropriately
      * @retval true all bytes has been discarded, EOF not reached. In case that count
      * is zero, it manifests, that there are still data in the stream
      * @retval false not all bytes has been discarded, EOF has been reached. If case
      * that count is zero, this means no more data are available.
      */
-    cocls::future<bool> discard(std::size_t count = -1) {
-        cocls::default_storage stor;
-        return discard_coro(stor, *_stream, count);
+    DiscardBlock dicard(std::size_t count = -1) {
+        return DiscardBlock(_stream, count);
+    }
+
+    ///Write generated data
+    /**
+     * @param gen generator which generates strings. This must be finite generator
+     * as the writing stops when generator is done
+     * @return Object which handles state of the writing and generating. This
+     * object is directly awaitable (so you can co_await it). To use
+     * outside of coroutine or if you want to obtain the future, you need to
+     * use operator() of this object.
+     * @retval true success
+     * @retval false connection reset during write
+     */
+    GenerateAndWrite generate_and_write(cocls::generator<std::string_view> &&gen) {
+        return GenerateAndWrite(_stream, std::move(gen));
     }
 
 
