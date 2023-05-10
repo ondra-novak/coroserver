@@ -21,7 +21,7 @@ std::string_view page = R"html(<!DOCTYPE html>
 <div id="area">
 </div>
 <div>
-Name <input type="text" id="name" size="10"> Type text (Enter): <input type="text" id="text" size="50"> 
+Name <input type="text" id="name" size="10"> Type text (Enter): <input type="text" id="text" size="50">
 </div>
 <script type="text/javascript">
 var loc = window.location, new_uri;
@@ -43,8 +43,8 @@ document.getElementById("text").addEventListener("keypress",ev=>{
    if (ev.key == "Enter") {
         var n = document.getElementById("name").value;
         ws.send(n+": "+ev.target.value);
-        ev.target.value = "";        
-    } 
+        ev.target.value = "";
+    }
 });
 
 function forge_nick() {
@@ -115,10 +115,13 @@ cocls::async<void> writer(ws::Stream s, MyPublisher &publisher) {
 }
 
 cocls::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) {
-    try {
-        ws::Stream s = co_await ws::Server::accept(req);
-        writer(std::move(s), publisher).detach();
-    } catch (cocls::await_canceled_exception &) {
+    ws::Stream s;
+    bool b = co_await ws::Server::accept(s, req);
+    if (b) {
+        req.log_message("Opened websocket connection");
+        co_await writer(std::move(s), publisher);
+        req.log_message("Closed websocket connection");
+    } else {
         req.set_status(400);
     }
 }

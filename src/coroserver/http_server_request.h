@@ -8,16 +8,14 @@
 #ifndef SRC_COROSERVER_HTTP_SERVER_REQUEST_H_
 #define SRC_COROSERVER_HTTP_SERVER_REQUEST_H_
 
+#include "stream.h"
+#include "http_common.h"
+
 #include <cocls/common.h>
 #include <cocls/future_conv.h>
 #include <cocls/coro_storage.h>
 
-#include "stream.h"
 
-#include "http_common.h"
-
-
-#include "coro_alloc.h"
 namespace coroserver {
 
 namespace http {
@@ -285,6 +283,57 @@ public:
     ///Contains name of server (passed to the response)
     static std::string server_name;
 
+    struct Logger {
+        void (*log_fn)(ServerRequest &req, void *user_ctx) = nullptr;
+        void *user_ctx = nullptr;
+        std::string_view message;
+        int min_serverity = std::numeric_limits<int>::min();
+        int serverity = 0;
+    };
+
+
+    Logger &get_logger_info() {
+        return _logger;
+    }
+
+    ///Allows to log to server's log container
+    /**
+     * @param message message to log
+     * @param serverity serverity adjustment. Default value means
+     * default serverity, while other number adjusts servererity
+     * for one level up or down.
+     * If the logger is not defined, nothing happens
+     */
+    void log_message(std::string_view message, int serverity = 0) {
+        if (_logger.log_fn && _logger.min_serverity < serverity) {
+            _logger.message = message;
+            _logger.serverity = serverity;
+            _logger.log_fn(*this, _logger.user_ctx);
+        }
+    }
+
+    ///Allows to log to server's log container
+    /**
+     * @param fn function which accepts one argument (possible auto) which
+     * is function which accepts message to log. Use this to send messages
+     * @param serverity serverity adjustment. Default value means
+     * default serverity, while other number adjusts servererity
+     * for one level up or down.
+     * If the logger is not defined, function is not called
+     */
+    template<typename Fn>
+    CXX20_REQUIRES(std::invocable<Fn, decltype([](std::string_view){})>)
+    void log_message(Fn &&fn, int serverity = 0) {
+        if (_logger.log_fn && _logger.min_serverity < serverity) {
+            _logger.serverity = serverity;
+            fn([&](std::string_view msg) {
+                _logger.message = msg;
+                _logger.log_fn(*this, _logger.user_ctx);
+
+            });
+        }
+    }
+
 
     ///a user bufer
     /** You can store anything there, however, some function
@@ -333,6 +382,7 @@ protected:
     bool _headers_sent = false;
 
     Stream _body_stream;
+    Logger _logger;
 
 
     cocls::suspend_point<void> load_coro(std::string_view &data, cocls::promise<bool> &res);

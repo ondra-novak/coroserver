@@ -17,65 +17,123 @@ namespace coroserver {
 namespace ws {
 
 
-    ///Generator-like object which implements websocket handshake on the client side
+    ///The class performs websocket client's handshake.
     /**
-     * As generator-like object, it only handles one request at time, so avoid
-     * to use this object shared between threads. It is easier to construct this
-     * object in each handler instance. Object doesn't allocate any memory.
+     * To perform the handshake, the class requires an open
+     * http::ClientRequest object to the target server and
+     * allows for additional headers to be added as needed.
+     * The class modifies the request, sends it to the server,
+     * and parses the response headers. If the headers meet
+     * the requirements for a valid WebSocket handshake,
+     * the class creates a WebSocket stream as ws::Stream.
+     * If the headers are invalid, the class reports an error.
      *
-     * You must keep it valid until the handshake is done
+     * The class is designed to be used asynchronously within a coroutine,
+     * and it automatically persists the its instance (state) during
+     * the handshake process. The only thing you need to do is
+     * to co_await the result of the Client::connect method.
+     *
+     * However, if you're not using coroutines, you will need to
+     * manually create and maintain the state during the handshake
+     * process. You need to "call" the state (as function) to
+     * initiate the handshake and keepi the state
+     * alive until the handshake is complete.
+     *
+     * Alternatively, you can use the wait() function to perform
+     * synchronous waiting.
+     *
+     * It's important to note that this object is not reusable
+     * and should be destroyed after the handshake is complete.
+     *
      */
     class Client {
     public:
 
-       ///Configuration values
-       struct Config {
-           ///Setup stream timeouts, it is recommended to have this values
-           /**
-            * Read timeout also specifies ping interval. If the read timeouts,
-            * the ping is send, and next interval is measured. So after two timeouts
-            * without response, the connection is closed
-            *
-            * Write timeout works as expected. If timeout happen during the write,
-            * the connection is closed
-            */
-           TimeoutSettings io_timeout = {60000,60000};
-           ///Set true, if you need fragmented messages, set false to join all fragments to one message
-           bool need_fragmented = false;
-       };
-
-       ///Construct the object
+        ///Create state object to begin websocket's handshake
        /**
-        * @param cfg configuration
+        * Creates a new object for initiating the WebSocket handshake with a server.
+        * The constructor takes several parameters:
+        *
+        * @param out A reference to a variable of type `ws::Stream`
+        *        that receives the opened WebSocket stream
+        *        if the handshake is successful.
+        * @param req The request object to be used for the handshake.
+        *         The request must be opened with a `GET` method to
+        *         a specific URL. After the handshake is complete,
+        *         this object can be dropped as it is no longer needed.
+        * @param tm The WebSocket stream timeouts, where the read timeout
+        *          defines the ping interval and the write timeout defines
+        *          the period after which the WebSocket stream is considered
+        *          disconnected if it is stuck on writing.
+        * @param need_fragmented A boolean flag indicating whether
+        *         you need to receive fragmented messages
+        *         (e.g., in streaming scenarios) or if you want
+        *         to combine all fragments into one message.
+        *
+        * The constructor returns a new object that can be used
+        * to continue the handshake process by calling other
+        * methods defined on the interface.
+        *
+        * @note The state object created by this constructor should
+        * be kept alive during the entire handshake process. After
+        * the handshake is complete, the object should be destroyed.
         */
-        Client(Config cfg):_cfg(cfg), _awt(*this) {}
+        static Client connect(Stream &out,
+                              http::ClientRequest &req,
+                              TimeoutSettings tm = {60000,60000},
+                              bool need_fragmented = false) {
+            return Client(out, req, tm, need_fragmented);
+        }
 
-
-        ///Perform websocket handshake on given client request
+        ///"Call" the state, which initiates the handshake
         /**
-         * @param client client request. You can pass additional headers as you need. However
-         * avoid to pass websocket specifics headers need for minimal hanshake (connection,
-         * upgrade, Sec-Websocket-Key and Sec-Websocket-Version)
-         *
-         * @return the future is resolved by new websocket connection. Once you have
-         * such connection, you can drop the original request. If the connection
-         * is not established - for example it was rejected - return value
-         * is future without a value. Direct access to the result throws
-         * an exception await_canceled_exception(). In this case
-         * check the request, status code, etc
-         *
-         * @exception cocls::await_canceled_exception - handshake failed
+         * @return a future object. which eventually resolves with result
+         * of the handshake operation
+         * @retval true handshake successful, you can start to use websocket stream
+         * @retval false handshake failed, stream is not defined, you need to
+         * check request
          */
-        cocls::future<ws::Stream> operator()(http::ClientRequest &client);
+        cocls::future<bool> operator()();
+
+
+        ///Allows to co_await on the state.
+        /**
+         * The current coroutine is suspended and it is eventually resumed
+         * when handshake is finished.
+         *
+         * @retval true handshake successful, you can start to use websocket stream
+         * @retval false handshake failed, stream is not defined, you need to
+         * check server's response stored in the http::ClientRequest object passed
+         * as argument in the constructor
+         */
+        cocls::future_awaiter<bool> operator co_await() {
+            return [&]{return (*this)();};
+        }
+
+        ///Perform synchronous handshake and wait (blocking call) on result
+        /**
+         * @retval true handshake successful, you can start to use websocket stream
+         * @retval false handshake failed, stream is not defined, you need to
+         */
+        bool wait() {
+            return operator()().wait();
+        }
+
 
     protected:
-        Config _cfg;
-        cocls::suspend_point<void> after_send(cocls::future<_Stream> &f) noexcept;
 
-        http::ClientRequest *_req = nullptr;
-        cocls::promise<ws::Stream> _result;
+        Client(Stream &out, http::ClientRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false)
+            :_out(out), _req(req), _tm(tm), _need_fragmented(need_fragmented), _awt(*this) {}
+
+        Stream &_out;
+        cocls::suspend_point<void> after_send(cocls::future<_Stream> &f) noexcept;
+        http::ClientRequest &_req;
+        TimeoutSettings _tm;
+        bool _need_fragmented;
+        cocls::promise<bool> _result;
         cocls::call_fn_future_awaiter<&Client::after_send> _awt;
         std::string _digest;
+
 
     };
 

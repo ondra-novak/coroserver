@@ -41,33 +41,34 @@ static void generate_key_and_digest(std::string &key, std::string &digest) {
 
 }
 
-cocls::future<ws::Stream> Client::operator()(http::ClientRequest &client) {
+cocls::future<bool> Client::operator()() {
     return [&](auto promise) {
         _result= std::move(promise);
-        _req = &client;
         std::string key;
         generate_key_and_digest(key, _digest);
-        client(http::strtable::hdr_upgrade,http::strtable::val_websocket);
-        client(http::strtable::hdr_connection,http::strtable::val_upgrade);
-        client("Sec-WebSocket-Key", key);
-        client("Sec-WebSocket-Version", 13);
-        _awt << [&]{return client.send();};
+        _req(http::strtable::hdr_upgrade,http::strtable::val_websocket);
+        _req(http::strtable::hdr_connection,http::strtable::val_upgrade);
+        _req("Sec-WebSocket-Key", key);
+        _req("Sec-WebSocket-Version", 13);
+        _awt << [&]{return _req.send();};
     };
 }
 
 cocls::suspend_point<void> Client::after_send(cocls::future<_Stream> &f) noexcept {
     try {
         _Stream s(std::move(*f));
-        if (_req->get_status() == 101 && (*_req)["Sec-WebSocket-Accept"] == std::string_view(_digest)) {
-            s.set_timeouts(_cfg.io_timeout);
-            return _result(Stream(std::move(s),{true, _cfg.need_fragmented}));
+        if (_req.get_status() == 101 && _req["Sec-WebSocket-Accept"] == std::string_view(_digest)) {
+            s.set_timeouts(_tm);
+            _out = Stream(std::move(s),{true, _need_fragmented});
+            return _result(true);
         } else {
-            return _result(cocls::drop);
+            return _result(false);
         }
     } catch (...) {
         return _result(std::current_exception());
     }
 }
+
 
 
 }

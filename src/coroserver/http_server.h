@@ -144,7 +144,9 @@ enum class TraceEvent {
     ///connection closed, request closed
     close,
     ///exception reported (is current)
-    exception
+    exception,
+    ///request's logger function (custom log message)
+    logger
 };
 
 
@@ -409,6 +411,15 @@ protected:
         co_return;
     }
 
+    template<typename Tracer>
+    static void setup_logger(ServerRequest &req, Tracer &tracer) {
+        auto &logger = req.get_logger_info();
+        logger.log_fn = [](ServerRequest &req, void *user_ctx) {
+            Tracer &trc = *reinterpret_cast<Tracer *>(user_ctx);
+            trc(TraceEvent::logger, req);
+        };
+        logger.user_ctx = &tracer;
+    }
 
     template<typename Tracer>
     cocls::async<void> serve_req_coro(Stream s, Tracer tracer) {
@@ -420,6 +431,9 @@ protected:
             std::lock_guard _(*this);
             //report that request has been opened
             tracer(TraceEvent::open, req);
+            //enable and setup request's logger to the tracer
+            setup_logger(req, tracer);
+
             //load requests from the stream - return false if error
             while (co_await req.load()) {
                 //future to await handler
@@ -556,9 +570,12 @@ public:
                                          }
                                      }
                                      counter = req.get_counters().write - _counter;
+                                     _buffer.append(std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()- _start_time).count()));
+                                     _buffer.append(" ms, ");
+                                     _buffer.append(std::to_string((counter+512)/1024));
+                                     _buffer.append(" KiB");
                                      break;
             case TraceEvent::close: _buffer.append("closed. Read: ");
-                                    _start_time = {};
                                     {
                                         auto cntr = req.get_counters();
                                         _buffer.append(std::to_string((cntr.read+512)/1024));
@@ -568,12 +585,16 @@ public:
 
                                     }
                                     break;
-        }
-        if (_start_time != std::chrono::system_clock::time_point()) {
-            _buffer.append(std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()- _start_time).count()));
-            _buffer.append(" ms, ");
-            _buffer.append(std::to_string((counter+512)/1024));
-            _buffer.append(" KiB");
+            case TraceEvent::logger: {
+                auto &logger = req.get_logger_info();
+                _buffer.append("LOG: <");
+                _buffer.append(std::to_string(logger.serverity));
+                _buffer.append("> ");
+                _buffer.append(logger.message);
+                _buffer.append(" - ");
+                break;
+            }
+
         }
         _ctx->send_out(_buffer);
     }

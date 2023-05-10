@@ -44,7 +44,7 @@ public:
 
     Stream(_Stream s, Cfg cfg);
 
-    Stream();
+    Stream() = default;
 
 
     cocls::suspend_point<bool> write(const Message &msg);

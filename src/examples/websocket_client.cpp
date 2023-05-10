@@ -32,16 +32,15 @@ cocls::async<void> client(ContextIO ctx, cocls::queue<QueueMessage> &data) {
     http::Client httpc(ctx, "userver/20");
     http::ClientRequest req (co_await httpc.open(http::Method::GET, "http://127.0.0.1:10000/ws"));
 
-        ws::Client wsclient({});
-        cocls::future<ws::Stream> f = wsclient(req);
-        if (co_await f.has_value()) {
-            auto s = *f;
+        ws::Stream s;
+        if (co_await ws::Client::connect(s, req)) {
             auto t = reader(s,data).start();
             for(;;) {
                 QueueMessage msg= std::move(co_await data.pop());
                 if (std::holds_alternative<std::monostate>(msg)) break;
                 co_await s.write(ws::Message{std::get<std::string>(msg), ws::Type::text});
             }
+
         } else {
             std::cerr << "Error to connect localhost:10000 /" << req.get_status() << std::endl;
         }
