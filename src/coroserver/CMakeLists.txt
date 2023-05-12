@@ -25,6 +25,8 @@ add_library(coroserver
     http_client.cpp
     pipe.cpp
     signal.cpp
+    message_stream.cpp
+    umq_peer.cpp
     
 )
 add_dependencies(coroserver coroserver_version)

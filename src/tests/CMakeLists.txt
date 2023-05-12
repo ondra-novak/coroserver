@@ -19,6 +19,7 @@ set(testFiles
     http_client.cpp
     mt_stream.cpp
     shared_lockable_ptr.cpp
+    message_stream.cpp
 )
 
 link_libraries(

@@ -157,11 +157,5 @@ int main(int, char **) {
     ctx.stop();
     task.join();
 
-#ifdef COCLS_DEFINE_SET_CORO_NAME
-    mon_exit.store(true);
-    cocls::coro_monitor_event();
-    mon_thread.join();
-#endif
-
     return 0;
 }
