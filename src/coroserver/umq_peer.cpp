@@ -99,7 +99,7 @@ bool Peer::recvTextMessage(std::string_view message) {
                 case Type::attachment_count: allocate_attachments(id, attachments);
                                              message = payload;
                                              break;
-                case Type::attechment_error: on_attachment_error(UMQException(payload));
+                case Type::attachment_error: on_attachment_error(UMQException(payload));
                                              return true;
                 case Type::hello: on_hello_message(id, {message, std::move(attachments)});
                                   return true;
@@ -170,17 +170,17 @@ cocls::suspend_point<void> Peer::on_attachment_ready(cocls::awaiter *awt) noexce
                     break;
                 }
             } catch (UMQException &e) {
-                if (!send(Type::attechment_error, {}, e.get_serialized())) {
+                if (!send(Type::attachment_error, {}, e.get_serialized())) {
                     break;
                 }
             } catch (const std::exception &e) {
                 UMQException err(static_cast<int>(ErrorCode::internal_error), e.what());
-                if (!send(Type::attechment_error, {}, err.get_serialized())) {
+                if (!send(Type::attachment_error, {}, err.get_serialized())) {
                     break;
                 }
             } catch (...) {
                 UMQException err(makeError(ErrorCode::internal_error));
-                if (!send(Type::attechment_error, {}, err.get_serialized())) {
+                if (!send(Type::attachment_error, {}, err.get_serialized())) {
                     break;
                 }
             }
