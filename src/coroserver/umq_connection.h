@@ -20,7 +20,7 @@ enum class MessageType {
 
 struct Message {
     MessageType _type;
-    std::string_view _payload;
+    std::string_view _payload = {};
 
 };
 
