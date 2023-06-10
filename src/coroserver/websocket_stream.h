@@ -84,14 +84,10 @@ public:
     State get_state() const;
 
     ///close the stream explicitly
-    cocls::suspend_point<bool> close() {
-        return write(Message{{},Type::connClose,Base::closeNormal});
-    }
+    cocls::suspend_point<bool> close();
 
     ///close the stream explicitly
-    cocls::suspend_point<bool> close(std::uint16_t code) {
-        return write(Message{{},Type::connClose,code});
-    }
+    cocls::suspend_point<bool> close(std::uint16_t code);
 
     cocls::future<void> wait_for_flush();
 

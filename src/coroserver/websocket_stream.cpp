@@ -44,9 +44,16 @@ public:
         return State::closing;
     }
 
+    cocls::suspend_point<bool> close(std::uint16_t code) {
+        return _writer([&](auto fn){
+            _builder({{}, Type::connClose, code}, std::forward<decltype(fn)>(fn));
+            _writer.close();
+        });
+    }
+
     void destroy() {
         //write close message
-        write({{},Type::connClose,Base::closeNormal});
+        close(Base::closeNormal);
         //sync to idle, then destroy
         _awt_destroy << [&]{return _writer.wait_for_idle();};
     }
@@ -59,16 +66,17 @@ public:
         return _writer.wait_for_idle();
     }
 
+
 protected:
 
     cocls::suspend_point<void> on_read(cocls::future<std::string_view> &fut) noexcept { // @suppress("No return")
         try {
             std::string_view data = *fut;
             if (data.empty()) {
-                if (_ping_sent) {
-                    Message m{"Ping timeout", Type::connClose, Base::closeAbnormal};
-                    write(m);
-                    return _read_promise(m);
+                if (_ping_sent || !_s.is_read_timeout()) {
+                    close(Base::closeAbnormal);
+                    _closed = true;
+                    return _read_promise(Message{{},Type::connClose, Base::closeAbnormal});
                 } else {
                     _ping_sent = true;
                     write({{}, Type::ping});
@@ -83,8 +91,7 @@ protected:
                 switch (m.type) {
                     case Type::pong: break;
                     case Type::connClose:
-                        _closed = true;
-                        write({{}, Type::connClose, Base::closeNormal});
+                        close(Base::closeNormal);
                         return _read_promise(m);
                     case Type::ping:
                         write({m.payload, Type::pong});
@@ -133,6 +140,13 @@ cocls::suspend_point<bool> Stream::write(const Message &msg) {
     return _ptr->write(msg);
 }
 
+cocls::suspend_point<bool> Stream::close(std::uint16_t code) {
+    return _ptr->close(code);
+}
+
+cocls::suspend_point<bool> Stream::close() {
+    return _ptr->close(Base::closeNormal);
+}
 
 cocls::future<Message> Stream::read() {
     return _ptr->read();

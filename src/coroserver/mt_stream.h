@@ -127,7 +127,11 @@ public:
     cocls::future<void> wait_for_idle() {
         return [&](auto promise) {
             std::lock_guard _(_mx);
-            _waiting.push_back({true, std::move(promise)});
+            if (_pending) {
+                _waiting.push_back({true, std::move(promise)});
+            } else {
+                promise();
+            }
         };
     }
 
@@ -145,7 +149,11 @@ public:
     cocls::future<void> wait_for_flush() {
         return [&](auto promise) {
             std::lock_guard _(_mx);
-            _waiting.push_back({false, std::move(promise)});
+            if (_pending) {
+                _waiting.push_back({false, std::move(promise)});
+            } else {
+                promise();
+            }
         };
     }
 
@@ -211,8 +219,9 @@ protected:
         std::unique_lock lk(_mx);
         try {
             _pending_write.clear();
-            _closed = !*val;
-            if (_closed) {
+            bool b = !*val;
+            _closed |= b;
+            if (b) {
                 _prepared.clear();
                 _pending = false;
                 return on_idle();
@@ -237,7 +246,7 @@ protected:
 
 
     std::shared_ptr<IStream> stream;
-    mutable std::mutex _mx;
+    mutable std::recursive_mutex _mx;
     std::vector<char> _prepared;
     std::vector<char> _pending_write;
     std::vector<std::pair<bool,cocls::promise<void> > > _waiting;

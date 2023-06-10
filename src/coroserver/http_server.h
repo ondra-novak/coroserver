@@ -591,7 +591,6 @@ public:
                 _buffer.append(std::to_string(logger.serverity));
                 _buffer.append("> ");
                 _buffer.append(logger.message);
-                _buffer.append(" - ");
                 break;
             }
 
