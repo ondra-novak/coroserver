@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <system_error>
+#include <algorithm>
 
 namespace coroserver {
 
@@ -213,7 +214,7 @@ unsigned int PeerName::to_sockaddr(void *sockaddr, unsigned int sockaddr_len) co
             saddr->sun_family = AF_UNIX;
             std::string p = item.path.string();
             if (p.size() >= sizeof(saddr->sun_path)) throw std::runtime_error("Path is too long");
-            std::strncpy(saddr->sun_path, p.c_str(),sizeof(saddr->sun_path));
+            std::strncpy(saddr->sun_path, p.c_str(),sizeof(saddr->sun_path)-1);
             return sz;
         } else if constexpr(std::is_same_v<Type, Error>) {
             std::rethrow_exception(item.e);
