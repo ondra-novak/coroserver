@@ -108,15 +108,12 @@ public:
         if (_defined) return other._defined && strIEqual()(_text, other._text);
         else return !other._defined;
     }
-    bool operator!=(const HeaderValue &other) const {
-        return !operator==(other);
-    }
     bool operator==(const std::string_view &other) const {
         if (_defined) return strIEqual()(_text, other);
         return false;
     }
-    bool operator!=(const std::string_view &other) const {
-        return !operator==(other);
+    bool operator==(const char *other) const {
+        return operator==(std::string_view(other));
     }
 
     std::size_t get_uint() const {
