@@ -189,6 +189,10 @@ namespace strtable {
 
 constexpr std::string_view hdr_allow("Allow");
 constexpr std::string_view hdr_accept("Accept");
+constexpr std::string_view hdr_access_control_allow_origin("Access-Control-Allow-Origin");
+constexpr std::string_view hdr_access_control_allow_credentials("Access-Control-Allow-Credentials");
+constexpr std::string_view hdr_access_control_allow_headers("Access-Control-Allow-Headers");
+constexpr std::string_view hdr_access_control_allow_methods("Access-Control-Allow-Methods");
 constexpr std::string_view hdr_access_control_request_method("Access-Control-Request-Method");
 constexpr std::string_view hdr_access_control_request_headers("Access-Control-Request-Headers");
 constexpr std::string_view hdr_authorization("Authorization");
