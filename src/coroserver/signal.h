@@ -14,6 +14,8 @@
 #include "async_support.h"
 
 #include <cocls/future.h>
+
+#include <unordered_map>
 #include <vector>
 
 namespace coroserver {

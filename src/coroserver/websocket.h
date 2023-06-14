@@ -238,7 +238,7 @@ public:
 
         if (message.type == Type::connClose) {
             tmp.push_back(static_cast<char>(message.code>>8));
-            tmp.push_back(static_cast<char>(message.code && 0xFF));
+            tmp.push_back(static_cast<char>(message.code & 0xFF));
             if (!message.payload.empty()) {
                 std::copy(message.payload.begin(), message.payload.end(), std::back_inserter(tmp));
             }

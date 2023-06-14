@@ -11,6 +11,7 @@
 #include <vector>
 #include <variant>
 #include <concepts>
+#include <cstdint>
 
 
 namespace coroserver {
@@ -219,7 +220,7 @@ struct ForwardedHeader{
  */
 inline auto split_path(std::string_view vpath) {
     vpath = vpath.substr(0,std::min(vpath.find('?'), vpath.length()));
-    return [vpath, buffer = std::string(), splt = splitAt(vpath, "/")]() mutable {
+    return [ buffer = std::string(), splt = splitAt(vpath, "/")]() mutable {
         while (splt) {
             auto part = splt();
             if (!part.empty()) {

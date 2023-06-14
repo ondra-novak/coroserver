@@ -364,6 +364,7 @@ Stream createMTSafeOutputStream(Stream s) {
     return Stream(std::shared_ptr<IStream>(new _details::MTWriteStreamInstance(s.getStreamDevice()), _details::MTWriteStreamDeleter{}));
 }
 
+#if 0
 
 ///This class helps with multithreaded reading from a stream
 /**
@@ -395,7 +396,7 @@ public:
     template<typename ProcessFn>
     CXX20_REQUIRES(std::same_as<decltype(std::declval<ProcessFn>()(std::declval<std::string_view>())), ProcessResult>)
     cocls::future<bool>  operator()(const Stream &s, ProcessFn &&fn) {
-        return read_mt(_storage, std::forward<ProcessFn>(fn));
+        return read_mt(_storage, s,std::forward<ProcessFn>(fn));
     }
 
     ///Access to mutex.
@@ -544,7 +545,7 @@ protected:
     };
 };
 
-
+#endif
 }
 
 

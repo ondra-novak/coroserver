@@ -238,8 +238,8 @@ void Peer::on_attachment_error(const UMQException &e) {
 
 void Peer::on_hello_message(const std::string_view &version, const Payload &payload) {
     if (version == strVersion) throw makeError(ErrorCode::unsupported_version);
-    bool b = _hello_request(HelloMessage{payload.text,
-        payload.attachments,
+    bool b = _hello_request(HelloMessage{{payload.text,
+        payload.attachments},
         cocls::make_promise<Payload>([me = shared_from_this()](cocls::future<Payload> &f){
             try {
                 const Payload &p = *f;
@@ -287,7 +287,7 @@ void Peer::HelloMessage::accept() {
 }
 
 void Peer::HelloMessage::accept(std::string_view payload) {
-    accept(Payload{payload});
+    accept(Payload{payload,{}});
 }
 
 void Peer::HelloMessage::accept(Payload payload) {
