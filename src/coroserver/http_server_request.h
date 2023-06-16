@@ -334,6 +334,10 @@ public:
         }
     }
 
+    auto get_peer_name() const {
+        return _cur_stream.get_peer_name();
+    }
+
 
     ///a user bufer
     /** You can store anything there, however, some function
