@@ -347,22 +347,19 @@ void encode(const std::string_view &binary, Fn &&output, const Table &table = Ta
 
 template<typename Fn>
 void decode(const std::string_view &text, Fn &&output, const Table &table = Table::get_default_table()) {
-    auto iter = text.begin();
-    auto iend = text.end();
-    int b=0,c=0,d=0,e=0;
 
-
-    while  (iter != iend || (e & 0x80) != 0) {
-        b = table.revtable[static_cast<unsigned char>(*iter++)];
-        if (iter == iend || (b & 0x80) != 0) break;
-        c = table.revtable[static_cast<unsigned char>(*iter++)];
-        output(static_cast<char>((b<<2) | ((c & 0x3F) >> 4)));  //bbbbbbcc
-        if (iter == iend || (c & 0x80) != 0 ) break;
-        d = table.revtable[static_cast<unsigned char>(*iter++)];
-        output(static_cast<char>(((c<<4) | ((d & 0x3F) >> 2))& 0xFF)); //ccccdddd
-        if (iter == iend || (d & 0x80) != 0 ) break;
-        e = table.revtable[static_cast<unsigned char>(*iter++)];
-        output(static_cast<char>(((d<<6) | (e & 0x3F))& 0xFF));  //ddeeeeee
+    std::uint16_t accum = 0;
+    int pos = 0;
+    for (unsigned char c : text) {
+        if (c == '=') break;
+        unsigned char a = table.revtable[c];
+        if (a & 0x80) break;
+        accum = (accum << 6) | a;
+        pos += 6;
+        if (pos >= 8) {
+            output(static_cast<unsigned char>(accum >> (pos - 8)));
+            pos -= 8;
+        }
     }
 
 }
