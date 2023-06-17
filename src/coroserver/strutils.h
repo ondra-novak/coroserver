@@ -320,27 +320,29 @@ public:
 
 template<typename Fn>
 void encode(const std::string_view &binary, Fn &&output, const Table &table = Table::get_default_table()) {
-    auto iter = binary.begin();
-    auto iend = binary.end();
 
-    while (iter != iend) {
-        int b = static_cast<unsigned char>(*iter++);
-        output(table.charset[b >> 2]);                 //bbbbbb
-        if (iter != iend) {
-            int c = static_cast<unsigned char>(*iter++);
-            output(table.charset[((b<<4) | (c >> 4)) & 0x3F]);  //bbcccc
-            if (iter != iend) {
-                int d = static_cast<unsigned char>(*iter++);
-                output(table.charset[((c<<2) | (d >> 6)) & 0x3F]); //ccccdd
-                output(table.charset[d & 0x3F]);            //dddddd
-            } else {
-                output(table.charset[(c<<2) & 0x3F]);       //cccc00
-                for (char c: table.trailer1) output(c);
-            }
-        } else {
-            output(table.charset[(b<<4) & 0x3F]);           //bb0000
-            for (char c: table.trailer2) output(c);
+    std::uint16_t accum = 0;
+    int pos = 0;
+    for (unsigned char c : binary) {
+        accum = (accum << 8) | c;
+        pos += 8;
+        while (pos >= 6) {
+            unsigned char a = ((accum >> (pos - 6)) & 0x3F);
+            output(table.charset[a]);
+            pos-=6;
         }
+    }
+    pos+=4;
+    accum <<= 4;
+    while (pos >= 6) {
+        unsigned char a = ((accum >> (pos - 6)) & 0x3F);
+        output(table.charset[a]);
+        pos-=6;
+    }
+    switch (pos) {
+        case 0: for (char c: table.trailer2) output(c); break;
+        case 2: for (char c: table.trailer1) output(c); break;
+        default: break;
     }
 }
 
