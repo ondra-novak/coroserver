@@ -78,7 +78,7 @@ public:
     * be kept alive during the entire handshake process.
     * After the handshake is complete, the object should be destroyed.
     */
-    static Server accept(Stream &out,http::ServerRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false) {
+    static Server accept(Stream &out,http::ServerRequest &req, TimeoutSettings tm = {50000,50000}, bool need_fragmented = false) {
         return Server(out,req, tm, need_fragmented);
     }
 

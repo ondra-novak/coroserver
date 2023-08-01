@@ -170,10 +170,11 @@ void Poller_epoll::rearm_fd(bool first_call, FDMap::iterator iter) {
 			throw std::system_error(e, std::generic_category(), "epoll_ctl");
 		}
 
-	/*	if (lst.timeout < first_timeout) {
-		    first_timeout = lst.timeout;*/
-		    notify();
-		/*}*/
+		if (lst.timeout < first_timeout) {
+		    first_timeout = lst.timeout;
+		}
+        notify();
+
 	}
 }
 

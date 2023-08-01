@@ -65,7 +65,7 @@ protected:
     Stream _signal_stream;
     using Promises = std::vector<std::shared_ptr<cocls::promise<void> >  >;
     std::unordered_map<int, Promises> _listeners;
-    std::mutex _mx;
+    std::recursive_mutex _mx;
 
     cocls::suspend_point<void> on_signal(cocls::future<std::string_view> &f) noexcept;
 
