@@ -75,22 +75,26 @@ void Parser::reset_state() {
     _masked = false;
     _payload_len = 0;
     _unused_data = {};
+    _cur_message.clear();
 }
 
 void Parser::reset() {
+    _final_message.clear();
+    if (_type == opcodeContFrame) {
+        _final_message.shrink_to_fit();
+    }
     reset_state();
-    _cur_message.clear();
 }
 
 Message Parser::get_message() const {
     if (_final_type == Type::connClose) {
         std::uint16_t code = 0;
         std::string_view message;
-        if (_cur_message.size() >= 2) {
-            code = static_cast<unsigned char>(_cur_message[0]) * 256 + static_cast<unsigned char>(_cur_message[1]);
+        if (_final_message.size() >= 2) {
+            code = static_cast<unsigned char>(_final_message[0]) * 256 + static_cast<unsigned char>(_final_message[1]);
         }
-        if (_cur_message.size() > 2) {
-            message = std::string_view(_cur_message.data()+2, _cur_message.size() - 3);
+        if (_final_message.size() > 2) {
+            message = std::string_view(_final_message.data()+2, _final_message.size() - 3);
         }
         return Message {
             message,
@@ -100,7 +104,7 @@ Message Parser::get_message() const {
         };
     } else {
         return Message {
-            {_cur_message.data(), _cur_message.size()},
+            {_final_message.data(), _final_message.size()},
             _final_type,
             _type,
             _fin
@@ -121,8 +125,15 @@ bool Parser::finalize() {
         default: _final_type = Type::unknown;break;
     }
 
+    if (_final_message.empty()) {
+        std::swap(_final_message, _cur_message);
+    } else {
+        std::copy(_cur_message.begin(), _cur_message.end(), std::back_inserter(_final_message));
+        _cur_message.clear();
+    }
+
     if (!_fin) {
-        if (_need_fragmented) {
+        if (!_need_fragmented) {
             auto tmp = _unused_data;
             reset_state();
             return push_data(tmp);

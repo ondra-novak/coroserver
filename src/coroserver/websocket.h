@@ -186,6 +186,7 @@ protected:
 
     Type _final_type = Type::unknown;
     std::vector<char> _cur_message;
+    std::vector<char> _final_message;
 
     bool finalize();
 
