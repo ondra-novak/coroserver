@@ -54,15 +54,18 @@ bool Parser::push_data(std::string_view data) {
                 --i;
                 break;
             case State::payload:
-                _cur_message.push_back(c ^ _masking[_cur_message.size() & 0x3]);
-                _state = _cur_message.size() == _payload_len?State::complete:State::payload;
+                if (_cur_readbytes < _max_message_size_current) {
+                    _cur_message.push_back(c ^ _masking[_cur_readbytes & 0x3]);
+                }
+                ++_cur_readbytes;
+                _state = _cur_readbytes == _payload_len?State::complete:State::payload;
                 break;
             case State::complete:
                 _unused_data = data.substr(i);
                 return finalize();
         }
     }
-    if (_state >= State::payload_begin &&  _cur_message.size() == _payload_len) {
+    if (_state >= State::payload_begin &&  _cur_readbytes == _payload_len) {
         return finalize();
     }
     return false;
@@ -76,6 +79,7 @@ void Parser::reset_state() {
     _payload_len = 0;
     _unused_data = {};
     _cur_message.clear();
+    _cur_readbytes = 0;
 }
 
 void Parser::reset() {
@@ -125,6 +129,10 @@ bool Parser::finalize() {
         default: _final_type = Type::unknown;break;
     }
 
+    if (_cur_readbytes > _cur_message.size()) {
+        _final_type = Type::largeFrame;
+    }
+
     if (_final_message.empty()) {
         std::swap(_final_message, _cur_message);
     } else {
@@ -136,14 +144,18 @@ bool Parser::finalize() {
         if (!_need_fragmented) {
             auto tmp = _unused_data;
             reset_state();
+            _max_message_size_current = _max_message_size - _final_message.size();
             return push_data(tmp);
         }
     }
+    _max_message_size_current = _max_message_size;
+    _cur_readbytes = 0;
+
     return true;
 }
 
 
-Reader::Reader(Stream s, bool need_fragmented):_s(s), _parser(need_fragmented),_awt(this) {
+Reader::Reader(Stream s,  std::size_t max_message_size, bool need_fragmented):_s(s), _parser(max_message_size, need_fragmented),_awt(this) {
 }
 
 cocls::future<Message &> Reader::operator ()() {

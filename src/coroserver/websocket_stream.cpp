@@ -7,11 +7,11 @@ namespace ws{
 
 class Stream::InternalState {
 public:
-    InternalState(_Stream &s, Cfg &cfg)
+    InternalState(_Stream &s, Side type, Cfg &cfg)
     :_s(s)
-    ,_reader(cfg.need_fragmented)
+    ,_reader(cfg.max_message_size, cfg.need_fragmented)
     ,_writer(s)
-    ,_builder(cfg.client)
+    ,_builder(type == client)
     ,_awt(*this)
     ,_awt_destroy(*this) {}
 
@@ -163,7 +163,7 @@ std::size_t Stream::get_buffered_size() const {
 
 
 
-Stream::Stream(_Stream s, Cfg cfg):_ptr(create(s, cfg)) {}
+Stream::Stream(_Stream s, Side type, Cfg cfg):_ptr(create(s, type, cfg)) {}
 
 cocls::future<void> Stream::wait_for_flush() {
     return _ptr->wait_for_flush();
@@ -173,8 +173,8 @@ cocls::future<void> Stream::wait_for_idle() {
     return _ptr->wait_for_idle();
 }
 
-std::shared_ptr<Stream::InternalState> Stream::create(_Stream &s, Cfg &cfg) {
-    return std::shared_ptr<InternalState>(new InternalState(s, cfg), Deleter());
+std::shared_ptr<Stream::InternalState> Stream::create(_Stream &s, Side type, Cfg &cfg) {
+    return std::shared_ptr<InternalState>(new InternalState(s, type, cfg), Deleter());
 }
 
 }

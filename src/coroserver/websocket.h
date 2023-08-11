@@ -24,6 +24,8 @@ enum class Type: std::uint8_t {
     ping,
     ///pong frame
     pong,
+    ///large frame has been received and has been discarded - payload is empty
+    largeFrame
 };
 
 struct Message {
@@ -85,7 +87,11 @@ public:
      * useful, if the reader requires to stream messages. Default is false,
      * when fragmented message is received, it is completed and returned as whole
      */
-    Parser(bool need_fragmented = false):_need_fragmented(need_fragmented) {}
+    Parser(std::size_t max_message_size, bool need_fragmented)
+        :_need_fragmented(need_fragmented)
+        ,_max_message_size(max_message_size)
+        ,_max_message_size_current(max_message_size)
+        {}
 
 
     ///push data to the parser
@@ -178,6 +184,10 @@ protected:
     bool _fin = false;
     bool _masked = false;
 
+    std::size_t _max_message_size = 0;
+    std::size_t _max_message_size_current = 0;
+
+
     State _state = State::first_byte;
     unsigned char _type = 0;
     std::uint64_t _payload_len = 0;
@@ -187,6 +197,7 @@ protected:
     Type _final_type = Type::unknown;
     std::vector<char> _cur_message;
     std::vector<char> _final_message;
+    std::size_t _cur_readbytes = 0;
 
     bool finalize();
 
@@ -323,7 +334,7 @@ public:
      * @param need_fragmented set true, if you need fragmented messages, false if you
      * need completed message
      */
-    Reader(Stream s, bool need_fragmented = false);
+    Reader(Stream s, std::size_t max_message_size, bool need_fragmented);
 
     ///read next message
     /**

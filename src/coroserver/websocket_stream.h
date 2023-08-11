@@ -36,13 +36,17 @@ using _Stream = Stream;
 class Stream {
 public:
     struct Cfg {
-        bool client = false;
         bool need_fragmented = false;
+        std::size_t max_message_size = std::size_t(-1);
+    };
+
+    enum Side {
+        client,
+        server,
     };
 
 
-
-    Stream(_Stream s, Cfg cfg);
+    Stream(_Stream s, Side type, Cfg cfg);
 
     Stream() = default;
 
@@ -101,7 +105,7 @@ protected:
     std::shared_ptr<InternalState> _ptr;
 
 
-    std::shared_ptr<Stream::InternalState> create(_Stream &s, Cfg &cfg);
+    std::shared_ptr<Stream::InternalState> create(_Stream &s, Side type, Cfg &cfg);
 
 
 };

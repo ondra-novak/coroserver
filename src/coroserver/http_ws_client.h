@@ -81,8 +81,8 @@ namespace ws {
         static Client connect(Stream &out,
                               http::ClientRequest &req,
                               TimeoutSettings tm = {60000,60000},
-                              bool need_fragmented = false) {
-            return Client(out, req, tm, need_fragmented);
+                              Stream::Cfg cfg = {}) {
+            return Client(out, req, tm, cfg);
         }
 
         ///"Call" the state, which initiates the handshake
@@ -122,14 +122,14 @@ namespace ws {
 
     protected:
 
-        Client(Stream &out, http::ClientRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false)
-            :_out(out), _req(req), _tm(tm), _need_fragmented(need_fragmented), _awt(*this) {}
+        Client(Stream &out, http::ClientRequest &req, TimeoutSettings tm = {60000,60000}, Stream::Cfg cfg= {})
+            :_out(out), _req(req), _tm(tm), _cfg(cfg), _awt(*this) {}
 
         Stream &_out;
         cocls::suspend_point<void> after_send(cocls::future<_Stream> &f) noexcept;
         http::ClientRequest &_req;
         TimeoutSettings _tm;
-        bool _need_fragmented;
+        Stream::Cfg _cfg;
         cocls::promise<bool> _result;
         cocls::call_fn_future_awaiter<&Client::after_send> _awt;
         std::string _digest;

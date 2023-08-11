@@ -51,7 +51,7 @@ cocls::suspend_point<void> Server::on_response_sent(cocls::future<_Stream> &sfut
     try {
         auto s = *sfut;
         s.set_timeouts(_tm);
-        _out = Stream(s,{false, _need_fragmented});
+        _out = Stream(s,Stream::server, _cfg);
         auto r = _result(true);
         return r;
     } catch (...) {

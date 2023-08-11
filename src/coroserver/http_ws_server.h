@@ -78,8 +78,8 @@ public:
     * be kept alive during the entire handshake process.
     * After the handshake is complete, the object should be destroyed.
     */
-    static Server accept(Stream &out,http::ServerRequest &req, TimeoutSettings tm = {50000,50000}, bool need_fragmented = false) {
-        return Server(out,req, tm, need_fragmented);
+    static Server accept(Stream &out,http::ServerRequest &req, TimeoutSettings tm = {50000,50000},  Stream::Cfg cfg = {}) {
+        return Server(out,req, tm, cfg);
     }
 
     ///"Call" the state, which initiates the handshake
@@ -115,15 +115,15 @@ protected:
     Server(Stream &out,
            http::ServerRequest &req,
            TimeoutSettings tm = {60000,60000},
-           bool need_fragmented = false)
+           Stream::Cfg cfg = {})
         :_out(out)
-        ,_need_fragmented(need_fragmented)
+        ,_cfg(cfg)
         ,_tm(tm)
         ,_req(req)
         ,_awt(*this){}
 
     Stream &_out;
-    bool _need_fragmented;
+    Stream::Cfg _cfg;
     TimeoutSettings _tm;
     http::ServerRequest &_req;
     cocls::suspend_point<void> on_response_sent(cocls::future<_Stream> &s) noexcept;
