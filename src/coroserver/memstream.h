@@ -55,12 +55,12 @@ public:
 
     virtual TimeoutSettings get_timeouts() override;
     virtual PeerName get_peer_name() const override;
-    virtual cocls::future<std::string_view> read() override;
+    virtual coro::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
-    virtual cocls::future<bool> write(std::string_view buffer) override;
-    virtual cocls::future<bool> write_eof() override;
+    virtual coro::future<bool> write(std::string_view buffer) override;
+    virtual coro::future<bool> write_eof() override;
     virtual void set_timeouts(const TimeoutSettings &tm) override;
-    virtual cocls::suspend_point<void> shutdown() override;
+    virtual coro::suspend_point<void> shutdown() override;
     virtual bool is_read_timeout() const override;
     virtual Counters get_counters() const noexcept override;
 

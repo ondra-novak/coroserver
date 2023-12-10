@@ -22,12 +22,12 @@ class PipeStream: public AbstractStreamWithMetadata {
 public:
     PipeStream(AsyncSupport context, int fdread, int fdwrite,TimeoutSettings tms);
     ~PipeStream();
-    virtual cocls::future<std::string_view> read() override;
+    virtual coro::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
     virtual bool is_read_timeout() const override;
-    virtual cocls::future<bool> write(std::string_view buffer) override;
-    virtual cocls::future<bool> write_eof() override;
-    virtual cocls::suspend_point<void> shutdown() override;
+    virtual coro::future<bool> write(std::string_view buffer) override;
+    virtual coro::future<bool> write_eof() override;
+    virtual coro::suspend_point<void> shutdown() override;
     virtual Counters get_counters() const noexcept override;
     virtual PeerName get_peer_name() const override;
 
@@ -95,8 +95,8 @@ protected:
     int _fdread;
     int _fdwrite;
     Counters _cntr;
-    cocls::generator<std::string_view> _reader;
-    cocls::generator<bool, std::string_view> _writer; //writer
+    coro::generator<std::string_view> _reader;
+    coro::generator<bool, std::string_view> _writer; //writer
 
     std::vector<char> _read_buffer;
     bool _is_timeout = false;
@@ -107,8 +107,8 @@ protected:
 
 
 
-    cocls::generator<std::string_view> start_read();
-    cocls::generator<bool, std::string_view> start_write();
+    coro::generator<std::string_view> start_read();
+    coro::generator<bool, std::string_view> start_write();
 };
 
 

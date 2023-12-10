@@ -11,7 +11,7 @@ using namespace coroserver;
 
 using QueueMessage = std::variant<std::monostate, std::string>;
 
-cocls::async<void> reader(ws::Stream stream, cocls::queue<QueueMessage> &q) {
+coro::async<void> reader(ws::Stream stream, coro::queue<QueueMessage> &q) {
     auto f = stream.read();
     while (co_await f.has_value()) {
         const auto &msg = *f;
@@ -27,7 +27,7 @@ cocls::async<void> reader(ws::Stream stream, cocls::queue<QueueMessage> &q) {
     q.push(std::monostate());
 }
 
-cocls::async<void> client(ContextIO ctx, cocls::queue<QueueMessage> &data) {
+coro::async<void> client(ContextIO ctx, coro::queue<QueueMessage> &data) {
 
     http::Client httpc(ctx, "userver/20");
     http::ClientRequest req (co_await httpc.open(http::Method::GET, "http://127.0.0.1:10000/ws"));
@@ -48,7 +48,7 @@ cocls::async<void> client(ContextIO ctx, cocls::queue<QueueMessage> &data) {
 }
 
 constexpr coroserver::search_kmp new_line("\n");
-cocls::async<void> input(ContextIO ctx, cocls::queue<QueueMessage> &data) {
+coro::async<void> input(ContextIO ctx, coro::queue<QueueMessage> &data) {
     Stream s = PipeStream::stdio(ctx);
     std::string line;
     std::string name = "client: ";
@@ -66,7 +66,7 @@ cocls::async<void> input(ContextIO ctx, cocls::queue<QueueMessage> &data) {
     }
 }
 
-cocls::async<void> signal_stop(ContextIO ctx) {
+coro::async<void> signal_stop(ContextIO ctx) {
     try {
         SignalHandler sighandler(ctx);
         auto f =  sighandler({SIGINT, SIGTERM});
@@ -80,10 +80,10 @@ int main(int, char **) {
 
     ContextIO ctx = ContextIO::create(1);
     try {
-        cocls::queue<QueueMessage> q;
-        cocls::future<void> f = client(ctx,q).start();
-        cocls::future<void> g = input(ctx,q).start();
-        cocls::future<void> h = signal_stop(ctx);
+        coro::queue<QueueMessage> q;
+        coro::future<void> f = client(ctx,q).start();
+        coro::future<void> g = input(ctx,q).start();
+        coro::future<void> h = signal_stop(ctx);
         g.wait();
         std::cout << "Exiting..." << std::endl;
         ctx.stop();

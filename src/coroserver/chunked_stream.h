@@ -9,7 +9,8 @@
 #define SRC_COROSERVER_CHUNKED_STREAM_H_
 #include "stream.h"
 
-#include <cocls/generator.h>
+#include <coro.h>
+
 
 namespace coroserver {
 
@@ -26,9 +27,9 @@ class ChunkedStream: public AbstractProxyStream {
 public:
 
     ChunkedStream(std::shared_ptr<IStream> proxied, bool allow_read, bool allow_write);
-    virtual cocls::future<std::string_view> read() override;
-    virtual cocls::future<bool> write(std::string_view buffer) override;
-    virtual cocls::future<bool> write_eof() override;
+    virtual coro::future<std::string_view> read() override;
+    virtual coro::future<bool> write(std::string_view buffer) override;
+    virtual coro::future<bool> write_eof() override;
 
     ///Create chunked stream for reading
     static Stream read(Stream target);
@@ -41,28 +42,28 @@ public:
 
 protected:
 //write part
-    cocls::suspend_point<void> join_write(cocls::future<bool> &f) noexcept;
-    cocls::call_fn_future_awaiter<&ChunkedStream::join_write> _write_awt;
+    coro::suspend_point<void> join_write(coro::future<bool> &f) noexcept;
+    coro::call_fn_future_awaiter<&ChunkedStream::join_write> _write_awt;
     std::string_view _data_to_write;
     std::string _new_chunk_write;
-    cocls::promise<bool> _write_result;
+    coro::promise<bool> _write_result;
     bool _eof_written = false;
 
 //read part
     enum class ReadState {r1,n1,number,r2,n2,check_empty,data,r3,n3,eof};
-    cocls::suspend_point<void> join_read(cocls::future<std::string_view> &f) noexcept;
-    cocls::call_fn_future_awaiter<&ChunkedStream::join_read> _read_awt;
-    cocls::promise<std::string_view> _read_result;
+    coro::suspend_point<void> join_read(coro::future<std::string_view> &f) noexcept;
+    coro::call_fn_future_awaiter<&ChunkedStream::join_read> _read_awt;
+    coro::promise<std::string_view> _read_result;
     ReadState _rd_state = ReadState::number;
     std::size_t _chunk_size = 0;
 
 
 
 
-//    cocls::generator<std::string_view> _reader;
+//    coro::generator<std::string_view> _reader;
 
 
-//    cocls::generator<std::string_view> start_reader();
+//    coro::generator<std::string_view> start_reader();
 
 //    bool _eof_reached = false;
 };

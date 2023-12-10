@@ -5,7 +5,7 @@
 #include <coroserver/json/serializer.h>
 #include "test_stream.h"
 
-cocls::async<void> test1() {
+coro::async<void> test1() {
     std::string out;
     coroserver::Stream s = TestStream<100>::create({
         "[1,2,3,{\"a\":10,\"b\":\"ahoj čau\"}",

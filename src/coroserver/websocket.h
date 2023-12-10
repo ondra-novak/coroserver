@@ -1,7 +1,8 @@
 #pragma once
 
 #include "stream.h"
-#include <cocls/future_conv.h>
+#include <coro.h>
+
 #include <random>
 
 #include <string_view>
@@ -339,16 +340,16 @@ public:
      *
      * @note function is not MT Safe. You must avoid to request reading in parallel
      */
-    cocls::future<Message &> operator()();
+    coro::future<Message &> operator()();
 
 protected:
 
 
-    cocls::suspend_point<void> read_next(std::string_view &data, cocls::promise<Message &> &prom);
+    coro::suspend_point<void> read_next(std::string_view &data, coro::promise<Message &> &prom);
 
     Stream _s;
     Parser _parser;
-    cocls::future_conv<&Reader::read_next> _awt;
+    coro::future_conv<&Reader::read_next> _awt;
     Message msg;
 
 };
@@ -380,7 +381,7 @@ public:
      * @note By sending the message of the type Type::connClose, the stream is marked
      *  as closed.
      */
-    cocls::suspend_point<bool> operator()(const Message &msg);
+    coro::suspend_point<bool> operator()(const Message &msg);
     ///write message, register a promise for signal completion
     /**
      * @param msg message to send
@@ -392,7 +393,7 @@ public:
      * @retval true message enqueued and will be sent
      * @retval false stream has been closed, no more messages can be send (message has
      */
-    cocls::suspend_point<bool> operator()(const Message &msg, cocls::promise<void> sync);
+    coro::suspend_point<bool> operator()(const Message &msg, coro::promise<void> sync);
 
     ///Returns true, if writing is possible
     operator bool () const {
@@ -430,7 +431,7 @@ public:
      * cancels previous future.
 
      */
-    cocls::future<void> sync_for_idle();
+    coro::future<void> sync_for_idle();
 
     ~Writer() {
         assert(!_pending && "Destroying object with pending operation. Use sync_for_idle() to remove this message");
@@ -439,22 +440,22 @@ public:
 
 
 protected:
-    cocls::suspend_point<void> finish_write(cocls::future<bool> &val) noexcept;
+    coro::suspend_point<void> finish_write(coro::future<bool> &val) noexcept;
 
 
     Stream _s;
     std::vector<char> _prepared;
     std::vector<char> _pending_write;
-    std::vector<cocls::promise<void> > _waiting;
-    cocls::promise<void> _cleanup;
+    std::vector<coro::promise<void> > _waiting;
+    coro::promise<void> _cleanup;
     mutable std::mutex _mx;
     Builder _builder;
-    cocls::call_fn_future_awaiter<&Writer::finish_write> _awt;
+    coro::call_fn_future_awaiter<&Writer::finish_write> _awt;
     bool _closed = false;
     bool _pending = false;
 
-    cocls::suspend_point<bool> do_write(const Message &msg, std::unique_lock<std::mutex> &lk);
-    cocls::suspend_point<void> flush(std::unique_lock<std::mutex> &lk);
+    coro::suspend_point<bool> do_write(const Message &msg, std::unique_lock<std::mutex> &lk);
+    coro::suspend_point<void> flush(std::unique_lock<std::mutex> &lk);
 };
 
 }

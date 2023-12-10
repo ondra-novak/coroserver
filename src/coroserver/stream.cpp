@@ -12,13 +12,13 @@ namespace coroserver {
 class NullStream: public AbstractStreamWithMetadata {
 public:
     NullStream():AbstractStreamWithMetadata({}) {}
-    virtual cocls::future<std::string_view> read() override;
+    virtual coro::future<std::string_view> read() override;
     virtual IStream::Counters get_counters() const noexcept override;
     virtual PeerName get_peer_name() const override;
-    virtual cocls::future<bool> write(std::string_view buffer) override;
+    virtual coro::future<bool> write(std::string_view buffer) override;
     virtual bool is_read_timeout() const override;
-    virtual cocls::future<bool> write_eof() override;
-    virtual cocls::suspend_point<void> shutdown() override;
+    virtual coro::future<bool> write_eof() override;
+    virtual void shutdown() override;
 };
 
 Stream Stream::null_stream() {
@@ -26,8 +26,8 @@ Stream Stream::null_stream() {
     return s;
 
 }
-cocls::future<std::string_view> NullStream::read() {
-    return cocls::future<std::string_view>::set_value();
+coro::future<std::string_view> NullStream::read() {
+    return std::string_view();
 }
 
 IStream::Counters NullStream::get_counters() const noexcept {
@@ -38,20 +38,20 @@ PeerName NullStream::get_peer_name() const {
     return {};
 }
 
-cocls::future<bool> NullStream::write(std::string_view) {
-    return cocls::future<bool>::set_value(false);
+coro::future<bool> NullStream::write(std::string_view) {
+    return false;
 }
 
 bool NullStream::is_read_timeout() const {
     return false;
 }
 
-cocls::future<bool> NullStream::write_eof() {
-    return cocls::future<bool>::set_value(true);
+coro::future<bool> NullStream::write_eof() {
+    return true;
 }
 
-cocls::suspend_point<void> NullStream::shutdown() {
-    return {};
+void NullStream::shutdown() {
+
 }
 
 }

@@ -13,8 +13,8 @@
 #include "stream.h"
 #include "peername.h"
 
-#include <cocls/thread_pool.h>
-#include <cocls/generator.h>
+#include <coro.h>
+#include <functional>
 
 #include <stop_token>
 
@@ -30,54 +30,36 @@ namespace coroserver {
 class ContextIOImpl: public IAsyncSupport {
 public:
 
-
-
-    using Promise = IPoller<SocketHandle>::Promise;
     using AcceptResult = std::pair<SocketHandle, PeerName>;
 
 
-    ContextIOImpl(std::shared_ptr<cocls::thread_pool> pool);
-    ContextIOImpl(std::size_t iothreads = 0);
+    ContextIOImpl(coro::scheduler &sch);
+    ContextIOImpl(std::unique_ptr<coro::scheduler> sch);
+    ContextIOImpl(std::size_t iothreads);
     ~ContextIOImpl();
 
-    virtual void close(SocketHandle h) override;
-    virtual cocls::suspend_point<void> mark_closing(SocketHandle s) override;
-    virtual cocls::future<WaitResult> io_wait(SocketHandle handle,
-                                    AsyncOperation op,
-                                    std::chrono::system_clock::time_point timeout) override;
+    virtual WaitResult io_wait(SocketHandle handle,
+                     AsyncOperation op,
+                     std::chrono::system_clock::time_point timeout) override;
+    virtual void shutdown(SocketHandle handle)  override;
+    virtual void close(SocketHandle handle)  override;
 
+    void stop();
 
-
-    ///stop the context, cancel all waitings, all opened streams are marked as closed
-    cocls::suspend_point<void> stop();
-
-    ///Wait for io operation
-    /**
-     * Returns awaitable object (co_await)
-     *
-     * @param handle handle to open socket
-     * @param op operation
-     * @param timeout wait timeout
-     * @return awaitable object, which returns WaitResult
-     */
-
-
-    virtual cocls::future<WaitResult> wait_until(std::chrono::system_clock::time_point tp, const void *ident) override;
-    template<typename Dur>
-    cocls::future<WaitResult> wait_for(Dur duration, const void *ident) {
-        return wait_until(std::chrono::system_clock::now()+duration, ident);
+    coro::scheduler &get_scheduler()  {
+        return *_scheduler;
     }
 
-    cocls::suspend_point<bool> cancel_wait(const void *ident) override;
-
-
-    cocls::thread_pool &get_pool() {
-        return *_pool;
-    }
 
 protected:
-    std::shared_ptr<cocls::thread_pool> _pool;
-    std::unique_ptr<IPoller<SocketHandle> > _disp;
+
+    using SchDeleter = void (*)(coro::scheduler *sch);
+    using SchPtr = std::unique_ptr<coro::scheduler, SchDeleter>;
+
+
+    SchPtr _scheduler;
+    std::unique_ptr<IPoller> _disp;
+    coro::future<void> _disp_run;
 };
 
 
@@ -116,22 +98,27 @@ public:
      *
      * @see start
      */
-    static ContextIO create(std::shared_ptr<cocls::thread_pool> pool);
-    static ContextIO create(std::size_t iothreads = 0);
+    static ContextIO create(coro::scheduler &sch);
+    static ContextIO create(std::unique_ptr<coro::scheduler> sch);
+        static ContextIO create(std::size_t iothreads = 0);
+
+
+    coro::scheduler &get_scheduler()  {
+        return _ptr->get_scheduler();
+    }
+
 
     ///Create listening socket at given peer
-    ListeningSocketHandle listen_socket(const PeerName &addr);
+    AsyncSocket listen_socket(const PeerName &addr);
     ///Create connected socket. Connection is asynchronous, you need to check status of socket
-    SocketHandle create_connected_socket(const PeerName &addr);
+    AsyncSocket create_connected_socket(const PeerName &addr);
 
-    operator AsyncSupport() const {
-        return AsyncSupport(_ptr);
-    }
+
 
     ///Create accept generator
     /**
      * Accept generator opens one or more ports at given addresses,
-     * and starts listening on it. Each generator call returns cocls::future which
+     * and starts listening on it. Each generator call returns coro::future which
      * is resolved by connected stream.
      *
      * The listening can be stopped by one of following ways. You can use
@@ -148,7 +135,7 @@ public:
      *
      * @return generator
      */
-    cocls::generator<Stream> accept(
+    coro::generator<Stream> accept(
             std::vector<PeerName> &list,
             std::stop_token token = {},
             TimeoutSettings tms = {defaultTimeout,defaultTimeout});
@@ -156,7 +143,7 @@ public:
     ///Create accept generator
     /**
      * Accept generator opens one or more ports at given addresses,
-     * and starts listening on it. Each generator call returns cocls::future which
+     * and starts listening on it. Each generator call returns coro::future which
      * is resolved by connected stream.
      *
      * The listening can be stopped by one of following ways. You can use
@@ -172,7 +159,7 @@ public:
      *
      * @return generator
      */
-    cocls::generator<Stream> accept(
+    coro::generator<Stream> accept(
             std::vector<PeerName> &&list,
             std::stop_token token = {},
             TimeoutSettings tms = {defaultTimeout,defaultTimeout});
@@ -180,7 +167,7 @@ public:
 
     ///Connect stream to one of given addresses
 
-    cocls::future<Stream> connect(std::vector<PeerName> list, int timeout_ms = defaultTimeout, TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+    coro::future<Stream> connect(std::vector<PeerName> list, int timeout_ms = defaultTimeout, TimeoutSettings tms = {defaultTimeout,defaultTimeout});
 
 
 
@@ -195,7 +182,7 @@ public:
      * to finish their work. You need to join all pending coroutines to ensure, that
      * everything is stopped. The context itself is destroyed once all references are removed
      */
-    cocls::suspend_point<void> stop();
+    void stop();
 
 
     ///Retrieve stop function
@@ -229,15 +216,16 @@ public:
 
 
 public:
-    template<typename Fn>
-    CXX20_REQUIRES(std::invocable<Fn, Stream>)
-    cocls::future<void> tcp_server(Fn &&main_fn, std::vector<PeerName> lsn_peers,
+    template<std::invocable<Stream> Fn>
+    coro::lazy_future<void> tcp_server(Fn &&main_fn, std::vector<PeerName> lsn_peers,
             std::stop_token stoptoken = {},
             TimeoutSettings tms = {defaultTimeout, defaultTimeout}) {
         auto gen = accept(std::move(lsn_peers),stoptoken, tms);
-        auto fn = [](cocls::generator<Stream> gen, Fn main_fn) -> cocls::async<void> {
-            while (co_await gen.next()) {
-                main_fn(std::move(gen.value()));
+        auto fn = [](coro::generator<Stream> gen, Fn main_fn) -> coro::async<void> {
+            auto f = gen();
+            while (co_await f.has_value()) {
+                main_fn(std::move(f.get()));
+                f = gen();
             }
         };
         return fn(std::move(gen), std::move(main_fn));
@@ -246,7 +234,7 @@ public:
 
 
 ///Declaration of factor, which is able to create connection to given host:port
-using ConnectionFactory = std::function<cocls::future<Stream>(std::string_view)>;
+using ConnectionFactory = std::function<coro::future<Stream>(std::string_view)>;
 
 
 }

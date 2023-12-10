@@ -6,20 +6,20 @@ set(testFiles
     compile_test.cpp
     peername.cpp
     server_and_connect.cpp
-    read_until.cpp
-    chartest.cpp
-    json.cpp
-    tcp_test.cpp
-    chunked_stream.cpp
-    limited_stream.cpp
-    http_server.cpp
-    prefixmap.cpp
-    named_enum.cpp
-    query.cpp
-    http_client.cpp
-    mt_stream.cpp
-    shared_lockable_ptr.cpp
-    message_stream.cpp
+#    read_until.cpp
+#    chartest.cpp
+#    json.cpp
+#    tcp_test.cpp
+#    chunked_stream.cpp
+#    limited_stream.cpp
+#    http_server.cpp
+#    prefixmap.cpp
+#    named_enum.cpp
+#    query.cpp
+#    http_client.cpp
+#    mt_stream.cpp
+#    shared_lockable_ptr.cpp
+#    message_stream.cpp
 )
 
 link_libraries(

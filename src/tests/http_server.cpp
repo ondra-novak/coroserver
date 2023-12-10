@@ -8,7 +8,7 @@ using namespace coroserver::http;
 
 
 
-cocls::async<void> test_GET_http10() {
+coro::async<void> test_GET_http10() {
 
     std::string out;
     auto s = TestStream<50>::create({"GET /path HTTP/1.0\r\nHost: example.com\r\nX-Header: ","test\r\nX-Header2 : test2\r\n","\r\n"}, &out);
@@ -26,7 +26,7 @@ cocls::async<void> test_GET_http10() {
     co_await req.send("<html><body>It's works</body></html>");
     CHECK(out == "HTTP/1.0 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 36\r\nServer: CoroServer 1.0 (C++20)\r\nConnection: close\r\n\r\n<html><body>It's works</body></html>");
 }
-cocls::async<void> test_GET_http10_infstrm() {
+coro::async<void> test_GET_http10_infstrm() {
 
     std::string out;
     auto s = TestStream<50>::create({"GET /path HTTP/1.0\r\nHost: example.com\r\nX-Header: ","test\r\nX-Header2 : test2\r\n","\r\n"}, &out);
@@ -42,7 +42,7 @@ cocls::async<void> test_GET_http10_infstrm() {
 
 }
 
-cocls::async<void> test_GET_http11() {
+coro::async<void> test_GET_http11() {
 
     std::string out;
     auto s = TestStream<50>::create({"GET /path HTTP/1.1\r\nHost: example.com\r\nX-Header: test\r\nX-Header2 : test2\r\n\r\n"}, &out);
@@ -66,7 +66,7 @@ cocls::async<void> test_GET_http11() {
     CHECK(out == "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nCache-Control: max-age=1234\r\nX-Accel-Buffering: no\r\nLast-Modified: Fri, 29 Apr 2022 12:49:48 GMT\r\nX-Test: 123\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 36\r\nServer: CoroServer 1.0 (C++20)\r\n\r\n<html><body>It's works</body></html>");
 }
 
-cocls::async<void> test_GET_http11_infstrm() {
+coro::async<void> test_GET_http11_infstrm() {
 
     std::string out;
     auto s = TestStream<50>::create({"GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n"}, &out);
@@ -82,7 +82,7 @@ cocls::async<void> test_GET_http11_infstrm() {
 }
 
 
-cocls::async<void> test_POST_body() {
+coro::async<void> test_POST_body() {
     auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"});
 
@@ -97,7 +97,7 @@ cocls::async<void> test_POST_body() {
     CHECK_EQUAL(b, "Extra data");
 }
 
-cocls::async<void> test_POST_body_chunked() {
+coro::async<void> test_POST_body_chunked() {
     auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n",
                             "8\r\n",
                             "01234567\r",
@@ -115,7 +115,7 @@ cocls::async<void> test_POST_body_chunked() {
     CHECK_EQUAL(b, "Extra data");
 }
 
-cocls::async<void> test_POST_body_expect() {
+coro::async<void> test_POST_body_expect() {
     std::string out;
     auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"}, &out);
@@ -130,7 +130,7 @@ cocls::async<void> test_POST_body_expect() {
     CHECK(out== "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
 }
 
-cocls::async<void> test_POST_body_expect_discard() {
+coro::async<void> test_POST_body_expect_discard() {
     std::string out;
     auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\nExpect: 100-continue\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"}, &out);
@@ -147,7 +147,7 @@ cocls::async<void> test_POST_body_expect_discard() {
 
 }
 
-cocls::async<void> test_POST_body_discard() {
+coro::async<void> test_POST_body_discard() {
     std::string out;
     auto s = TestStream<50>::create({"POST /path HTTP/1.1\r\nHost: example.com\r\nContent-Length: 18\r\n\r\n",
                             "0123456789ABCDEF\r\nExtra data"}, &out);
@@ -176,7 +176,7 @@ void test_server() {
         req.set_status(402);
         c1 = true;
     });
-    server.set_handler("/a",coroserver::http::Method::GET, [&](coroserver::http::ServerRequest &req, std::string_view vpath) -> cocls::future<bool> {
+    server.set_handler("/a",coroserver::http::Method::GET, [&](coroserver::http::ServerRequest &req, std::string_view vpath) -> coro::future<bool> {
         CHECK_EQUAL(vpath, "/b");
         req.add_date(std::chrono::system_clock::from_time_t(1651236587));
         c2 = true;

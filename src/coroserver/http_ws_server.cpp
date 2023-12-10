@@ -14,7 +14,7 @@ namespace coroserver {
 namespace ws {
 
 
- cocls::future<bool> Server::operator()() {
+ coro::future<bool> Server::operator()() {
     return [&](auto result) {
         if (!_req.allow({http::Method::GET})
           || _req[http::strtable::hdr_upgrade] != http::HeaderValue(http::strtable::val_websocket)
@@ -47,7 +47,7 @@ namespace ws {
     };
 }
 
-cocls::suspend_point<void> Server::on_response_sent(cocls::future<_Stream> &sfut) noexcept {
+coro::suspend_point<void> Server::on_response_sent(coro::future<_Stream> &sfut) noexcept {
     try {
         auto s = *sfut;
         s.set_timeouts(_tm);

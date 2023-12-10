@@ -3,7 +3,7 @@
 
 
 
-cocls::async<void> make_GET_request(coroserver::https::Client &client) {
+coro::async<void> make_GET_request(coroserver::https::Client &client) {
     coroserver::http::ClientRequest req(co_await client.open(coroserver::http::Method::GET, "https://eu.httpbin.org/get?aa=10"));
     coroserver::Stream response = co_await req.send();
     std::string data;
@@ -18,7 +18,7 @@ cocls::async<void> make_GET_request(coroserver::https::Client &client) {
 }
 
 
-cocls::async<void> make_POST_request(coroserver::https::Client &client) {
+coro::async<void> make_POST_request(coroserver::https::Client &client) {
     coroserver::http::ClientRequest req(co_await client.open(coroserver::http::Method::POST, "https://eu.httpbin.org/post?aa=10"));
     coroserver::Stream response = co_await req.send("Ahoj=Nazdar");
     std::string data;
@@ -32,7 +32,7 @@ cocls::async<void> make_POST_request(coroserver::https::Client &client) {
 
 }
 
-cocls::async<void> make_POST_request_te(coroserver::https::Client &client) {
+coro::async<void> make_POST_request_te(coroserver::https::Client &client) {
     coroserver::http::ClientRequest req(co_await client.open(coroserver::http::Method::POST, "https://eu.httpbin.org/post?aa=te"));
     coroserver::Stream body = co_await req.begin_body();
     co_await body.write("Ahoj nazdar");
@@ -50,7 +50,7 @@ cocls::async<void> make_POST_request_te(coroserver::https::Client &client) {
 
 }
 
-cocls::async<void> make_POST_request_te_except(coroserver::https::Client &client, bool fail) {
+coro::async<void> make_POST_request_te_except(coroserver::https::Client &client, bool fail) {
     coroserver::http::ClientRequest req(co_await client.open(coroserver::http::Method::POST, fail?"https://eu.httpbin.org/status/403":"https://eu.httpbin.org/post?aa=te"));
     req.expect100continue();
     coroserver::Stream body = co_await req.begin_body();
@@ -72,7 +72,7 @@ cocls::async<void> make_POST_request_te_except(coroserver::https::Client &client
 
 }
 
-cocls::async<void> make_POST_request_te_except_empty(coroserver::https::Client &client) {
+coro::async<void> make_POST_request_te_except_empty(coroserver::https::Client &client) {
     coroserver::http::ClientRequest req(co_await client.open(coroserver::http::Method::POST, "https://eu.httpbin.org/post?aa=te"));
     req.expect100continue();
     coroserver::Stream response = co_await req.send();

@@ -11,46 +11,50 @@
 #include "async_support.h"
 #include "defs.h"
 #include "stream.h"
-#include <cocls/generator.h>
+#include <coro.h>
+
 
 namespace coroserver {
 
 class ContextIOImpl;
 
 
-
 class SocketStream: public AbstractStreamWithMetadata {
 public:
-    SocketStream(AsyncSupport context, SocketHandle h, PeerName peer, TimeoutSettings tms);
-    ~SocketStream();
-    virtual cocls::future<std::string_view> read() override;
+    SocketStream(AsyncSocket socket, PeerName peer, TimeoutSettings tms);
+    virtual coro::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
     virtual bool is_read_timeout() const override;
-    virtual cocls::future<bool> write(std::string_view buffer) override;
-    virtual cocls::future<bool> write_eof() override;
-    virtual cocls::suspend_point<void> shutdown() override;
+    virtual coro::future<bool> write(std::string_view buffer) override;
+    virtual coro::future<bool> write_eof() override;
+    virtual void shutdown() override;
     virtual Counters get_counters() const noexcept override;
     virtual PeerName get_peer_name() const override;
 
 protected:
-    AsyncSupport _ctx;
-    SocketHandle _h;
+    AsyncSocket _socket;
     Counters _cntr;
     PeerName _peer;
-    cocls::generator<std::string_view> _reader;
-    cocls::generator<bool, std::string_view> _writer; //writer
+
+    coro::future<bool> _wait_read_result;
+    coro::future<bool> _wait_write_result;
+    coro::future<bool>::target_type _wait_read_target;
+    coro::future<bool>::target_type _wait_write_target;
+    coro::promise<std::string_view> _read_promise;
+    coro::promise<bool> _write_promise;
 
     std::vector<char> _read_buffer;
-    bool _is_timeout = false;
+    std::string_view _write_buffer;
+
     bool _is_eof = false;
     bool _is_closed = false;
     std::size_t _last_read_full = 0;
     std::size_t _new_buffer_size = 1024;
 
-
-
-    cocls::generator<std::string_view> start_read();
-    cocls::generator<bool, std::string_view> start_write();
+    void write_begin();
+    bool read_begin(std::string_view &buff);
+    void read_completion(coro::future<bool> *f) noexcept;
+    void write_completion(coro::future<bool> *f) noexcept;
 };
 
 }

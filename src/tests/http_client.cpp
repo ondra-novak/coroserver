@@ -6,7 +6,7 @@
 
 using namespace coroserver;
 
-cocls::async<void> test_create_request() {
+coro::async<void> test_create_request() {
 
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
@@ -22,7 +22,7 @@ cocls::async<void> test_create_request() {
     CHECK_EQUAL(res,"xyz");
 }
 
-cocls::async<void> test_create_empty_request() {
+coro::async<void> test_create_empty_request() {
 
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
@@ -36,7 +36,7 @@ cocls::async<void> test_create_empty_request() {
     CHECK_EQUAL(res,"xyz");
 }
 
-cocls::async<void> test_GET_request() {
+coro::async<void> test_GET_request() {
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
 
@@ -50,7 +50,7 @@ cocls::async<void> test_GET_request() {
 
 }
 
-cocls::async<void> test_request_100_cont() {
+coro::async<void> test_request_100_cont() {
 
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 202 OK\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
@@ -69,7 +69,7 @@ cocls::async<void> test_request_100_cont() {
     CHECK_EQUAL(res,"xyz");
 }
 
-cocls::async<void> test_request_100_cont_error() {
+coro::async<void> test_request_100_cont_error() {
 
     std::string out;
     Stream s = TestStream<100>::create({"HTTP/1.1 403 Error\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
@@ -86,11 +86,11 @@ cocls::async<void> test_request_100_cont_error() {
     CHECK_EQUAL(res,"xyz");
 }
 
-cocls::async<void> test_client_1() {
+coro::async<void> test_client_1() {
     std::string out;
     http::Client client({"TestClient", [&](std::string_view host){
         CHECK_EQUAL(host, "www.example.com:123");
-        return cocls::future<Stream>::set_value(
+        return coro::future<Stream>::set_value(
                 TestStream<100>::create({"HTTP/1.1 403 Error\r\nContent-Length: 3\r\n\r\nxyz"}, &out)
         );
     },nullptr});

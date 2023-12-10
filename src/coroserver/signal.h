@@ -45,29 +45,29 @@ public:
     /**
      * @param signal signal to await
      * @return future which can be co_awaited
-     * @exception cocls::await_canceled_exception - object has been destroyed
+     * @exception coro::await_canceled_exception - object has been destroyed
      * without catching a signal
      */
-    cocls::future<void> operator()(int signal);
+    coro::future<void> operator()(int signal);
     ///Await on many signals
     /**
      * @param signals signals to await
      * @return future which can be co_awaited
-     * @exception cocls::await_canceled_exception - object has been destroyed
+     * @exception coro::await_canceled_exception - object has been destroyed
      * without catching a signal
      */
-    cocls::future<void> operator()(std::initializer_list<int > signals);
+    coro::future<void> operator()(std::initializer_list<int > signals);
 
 
 protected:
     Stream _signal_stream;
-    using Promises = std::vector<std::shared_ptr<cocls::promise<void> >  >;
+    using Promises = std::vector<std::shared_ptr<coro::promise<void> >  >;
     std::unordered_map<int, Promises> _listeners;
     std::mutex _mx;
 
-    cocls::suspend_point<void> on_signal(cocls::future<std::string_view> &f) noexcept;
+    coro::suspend_point<void> on_signal(coro::future<std::string_view> &f) noexcept;
 
-    cocls::call_fn_future_awaiter<&SignalHandler::on_signal> _awt;
+    coro::call_fn_future_awaiter<&SignalHandler::on_signal> _awt;
 
 
 };

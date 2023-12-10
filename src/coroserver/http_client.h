@@ -9,7 +9,7 @@
 #define SRC_COROSERVER_CLIENT_H_
 #include "http_client_request.h"
 
-#include <cocls/function.h>
+#include <coro.h>
 
 #include "io_context.h"
 namespace coroserver{
@@ -18,7 +18,7 @@ namespace http {
 
 
 inline ConnectionFactory connectionFactory(ContextIO ctx, int timeout_ms, TimeoutSettings tms) {
-    return [ctx  = std::move(ctx), timeout_ms, tms](std::string_view host) mutable ->cocls::future<Stream> {
+    return [ctx  = std::move(ctx), timeout_ms, tms](std::string_view host) mutable ->coro::future<Stream> {
         auto list = PeerName::lookup(host, "80");
         return ctx.connect(std::move(list), timeout_ms, tms);
     };
@@ -74,7 +74,7 @@ public:
      * @param url url. Url can contain protocol, host, path. The host can contain authorization
      * @return ClientRequestParams
      */
-    cocls::future<ClientRequestParams> open(Method method, std::string_view url);
+    coro::future<ClientRequestParams> open(Method method, std::string_view url);
 
 protected:
 

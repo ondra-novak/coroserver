@@ -3,8 +3,7 @@
 #define _SRC_COROSERVER_MT_STREAM_qoiwujdoiqjdoiqdjoq_
 #include "stream.h"
 
-#include <cocls/mutex.h>
-#include <cocls/coro_storage.h>
+#include <coro.h>
 #include <vector>
 #include <memory>
 #include <concepts>
@@ -55,7 +54,7 @@ public:
      */
     template<typename Fn>
     CXX20_REQUIRES(std::invocable<Fn, decltype([](char){})>)
-    cocls::suspend_point<bool> operator()(Fn &&fn) {
+    coro::suspend_point<bool> operator()(Fn &&fn) {
         std::unique_lock lk(_mx);
         if (_e) std::rethrow_exception(_e);
         if (_closed) return false;
@@ -63,7 +62,7 @@ public:
         if (_pending) return true;
         _pending = true;
         std::swap(_prepared,_pending_write);
-        auto out = cocls::suspend_point<bool>(on_flush(),true);
+        auto out = coro::suspend_point<bool>(on_flush(),true);
         lk.unlock();
         _awt << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
         return out;
@@ -80,7 +79,7 @@ public:
      * @retval false write is impossible
      * @exception any any exception captured during recent flush
      */
-    cocls::suspend_point<bool> operator()(std::string_view txt) {
+    coro::suspend_point<bool> operator()(std::string_view txt) {
         return (*this)([txt](auto wr){
             for (auto y:txt) wr(y);
         });
@@ -124,7 +123,7 @@ public:
      * @note In compare to wait_for_flush(), this operation doesn't resolve
      * the future, when there is non-empty buffer waiting to be written
      */
-    cocls::future<void> wait_for_idle() {
+    coro::future<void> wait_for_idle() {
         return [&](auto promise) {
             std::lock_guard _(_mx);
             _waiting.push_back({true, std::move(promise)});
@@ -142,7 +141,7 @@ public:
      * @note In compare to wait_for_idle(), this operation resolves the future
      * after the data are sent, but before the write is complete.
      */
-    cocls::future<void> wait_for_flush() {
+    coro::future<void> wait_for_flush() {
         return [&](auto promise) {
             std::lock_guard _(_mx);
             _waiting.push_back({false, std::move(promise)});
@@ -207,7 +206,7 @@ public:
     }
 
 protected:
-    cocls::suspend_point<void> finish_write(cocls::future<bool> &val) noexcept {
+    coro::suspend_point<void> finish_write(coro::future<bool> &val) noexcept {
         std::unique_lock lk(_mx);
         try {
             _pending_write.clear();
@@ -221,7 +220,7 @@ protected:
                 return on_idle();
             } else {
                 std::swap(_pending_write,_prepared);
-                cocls::suspend_point<void> out = on_flush();
+                coro::suspend_point<void> out = on_flush();
                 lk.unlock();
                 _awt << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
                 return out;
@@ -240,23 +239,23 @@ protected:
     mutable std::mutex _mx;
     std::vector<char> _prepared;
     std::vector<char> _pending_write;
-    std::vector<std::pair<bool,cocls::promise<void> > > _waiting;
-    cocls::call_fn_future_awaiter<&MTStreamWriter::finish_write> _awt;
+    std::vector<std::pair<bool,coro::promise<void> > > _waiting;
+    coro::call_fn_future_awaiter<&MTStreamWriter::finish_write> _awt;
     bool _closed = false;
     bool _pending = false;
     bool _write_eof = false;
     std::exception_ptr _e;
 
-    cocls::suspend_point<void> on_idle() {
+    coro::suspend_point<void> on_idle() {
         //on_idle flushes all waiting promises
-        cocls::suspend_point<void> out;
+        coro::suspend_point<void> out;
         for (auto &x: _waiting) out << x.second();
         _waiting.clear();
         return out;
     }
-    cocls::suspend_point<void> on_flush() {
+    coro::suspend_point<void> on_flush() {
         //flush only on_flush promises
-        cocls::suspend_point<void> out;
+        coro::suspend_point<void> out;
         _waiting.erase(std::remove_if(_waiting.begin(), _waiting.end(),[&](auto &p){
             if (p.first) return false;
             out << p.second();
@@ -265,13 +264,13 @@ protected:
         return out;
     }
 
-    cocls::suspend_point<void> on_destroy(cocls::future<void> &) noexcept {
+    coro::suspend_point<void> on_destroy(coro::future<void> &) noexcept {
         _destroy_awt.~call_fn_future_awaiter();
         delete this;
         return {};
     }
     union {
-        cocls::call_fn_future_awaiter<&MTStreamWriter::on_destroy> _destroy_awt;
+        coro::call_fn_future_awaiter<&MTStreamWriter::on_destroy> _destroy_awt;
     };
 
     void destroy() {
@@ -295,17 +294,17 @@ class MTWriteStreamInstance: public AbstractStream {
 public:
     MTWriteStreamInstance(std::shared_ptr<IStream> device)
         :_writer(device),_awt(*this) {}
-    virtual cocls::future<bool> write(std::string_view buffer) override {
-        return cocls::future<bool>::set_value(_writer(buffer));
+    virtual coro::future<bool> write(std::string_view buffer) override {
+        return coro::future<bool>::set_value(_writer(buffer));
     }
-    virtual cocls::future<bool> write_eof() override {
-        return cocls::future<bool>::set_value(_writer.write_eof());
+    virtual coro::future<bool> write_eof() override {
+        return coro::future<bool>::set_value(_writer.write_eof());
     }
     virtual TimeoutSettings get_timeouts() override {
         return _writer.getStreamDevice()->get_timeouts();
     }
-    virtual cocls::future<std::string_view> read() override {
-        return cocls::future<std::string_view>::set_value(read_putback_buffer());
+    virtual coro::future<std::string_view> read() override {
+        return coro::future<std::string_view>::set_value(read_putback_buffer());
     }
     virtual IStream::Counters get_counters() const noexcept override{
         return IStream::Counters{0,_writer.getStreamDevice()->get_counters().write};
@@ -318,7 +317,7 @@ public:
             tm.write_timeout_ms
         });
     }
-    virtual cocls::suspend_point<void> shutdown() override {
+    virtual coro::suspend_point<void> shutdown() override {
         return _writer.getStreamDevice()->shutdown();
     }
 
@@ -328,11 +327,11 @@ public:
 
 protected:
     MTStreamWriter _writer;
-    cocls::suspend_point<void> on_idle(cocls::future<void> &) noexcept {
+    coro::suspend_point<void> on_idle(coro::future<void> &) noexcept {
         delete this;
         return {};
     }
-    cocls::call_fn_future_awaiter<&MTWriteStreamInstance::on_idle> _awt;
+    coro::call_fn_future_awaiter<&MTWriteStreamInstance::on_idle> _awt;
 };
 
 struct MTWriteStreamDeleter {
@@ -385,7 +384,7 @@ public:
      */
     template<typename ProcessFn>
     CXX20_REQUIRES(std::same_as<decltype(std::declval<ProcessFn>()(std::declval<std::string_view>())), ProcessResult>)
-    cocls::future<bool>  operator()(const Stream &s, ProcessFn &&fn) {
+    coro::future<bool>  operator()(const Stream &s, ProcessFn &&fn) {
         return read_mt(_storage, std::forward<ProcessFn>(fn));
     }
 
@@ -395,12 +394,12 @@ public:
     }
 
     template<typename Iterator>
-    cocls::future<bool> read_until(const Stream &s,
+    coro::future<bool> read_until(const Stream &s,
             Iterator &&write_iter,
             std::string_view pattern,
             std::size_t limit = std::numeric_limits<std::size_t>::max()) {
         if (pattern.empty()) return read_block(s,std::forward<Iterator>(write_iter), limit);
-        if (limit == 0) return cocls::future<bool>::set_value(true);
+        if (limit == 0) return coro::future<bool>::set_value(true);
         return (*this)([
                         write_iter = std::move(write_iter),
                         kmp = search_kmp<0>(pattern),
@@ -420,10 +419,10 @@ public:
     }
 
     template<typename Iterator>
-    cocls::future<bool> read_block(const Stream &s,
+    coro::future<bool> read_block(const Stream &s,
             Iterator &&write_iter,
             std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        if (limit == 0) return cocls::future<bool>::set_value(true);
+        if (limit == 0) return coro::future<bool>::set_value(true);
         return (*this)([
                         write_iter = std::move(write_iter),
                         limit,
@@ -446,7 +445,7 @@ public:
 protected:
 
     template<typename ProcessFn, typename Allocator>
-    cocls::with_allocator<Allocator, cocls::async<bool> > read_mt(Stream s, ProcessFn fn) {
+    coro::with_allocator<Allocator, coro::async<bool> > read_mt(Stream s, ProcessFn fn) {
         auto own = co_await _mx.lock();
         std::string_view txt;
         do {
@@ -460,8 +459,8 @@ protected:
         co_return false;
     }
 
-    cocls::mutex _mx;
-    cocls::reusable_storage_mtsafe _storage;
+    coro::mutex _mx;
+    coro::reusable_storage_mtsafe _storage;
 
 };
 
@@ -471,8 +470,8 @@ class StreamMT {
     public:
         Internal(Stream s):_writer(s) {}
 
-        cocls::async<void> destroy() {
-            cocls::future<void> f = _writer.wait_for_idle();
+        coro::async<void> destroy() {
+            coro::future<void> f = _writer.wait_for_idle();
             auto ownership = co_await _reader.lock();
             co_await f;
             co_await ownership.release();
@@ -489,18 +488,18 @@ public:
         :_ptr(new Internal(s), Deleter{}) {}
 
     template<typename ProcessFn>
-    cocls::future<bool>  read(const Stream &s, ProcessFn &&fn) {
+    coro::future<bool>  read(const Stream &s, ProcessFn &&fn) {
         return _ptr->_reader(s,std::forward<ProcessFn>(fn));
     }
     template<typename Iterator>
-    cocls::future<bool> read_until(const Stream &s,
+    coro::future<bool> read_until(const Stream &s,
             Iterator &&write_iter,
             std::string_view pattern,
             std::size_t limit = std::numeric_limits<std::size_t>::max()) {
         return _ptr->_reader.read_until(s,std::forward<Iterator>(write_iter), pattern,limit);
     }
     template<typename Iterator>
-    cocls::future<bool> read_block(const Stream &s,
+    coro::future<bool> read_block(const Stream &s,
             Iterator &&write_iter,
             std::size_t limit = std::numeric_limits<std::size_t>::max()) {
         return _ptr->_reader.read_block(s,std::forward<Iterator>(write_iter), limit);
@@ -516,10 +515,10 @@ public:
     std::size_t get_buffered_size() const {
         return _ptr->_writer.get_buffered_size();
     }
-    cocls::future<void> wait_for_flush() {
+    coro::future<void> wait_for_flush() {
         return _ptr->_writer.wait_for_flush();
     }
-    cocls::future<void> wait_for_idle() {
+    coro::future<void> wait_for_idle() {
         return _ptr->_writer.wait_for_idle();
     }
 

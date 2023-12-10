@@ -6,8 +6,7 @@
 #include "http_stringtables.h"
 #include "prefixmap.h"
 
-#include <cocls/function.h>
-#include <cocls/generator.h>
+#include <coro.h>
 #include <shared_mutex>
 #include <memory>
 #include <functional>
@@ -25,9 +24,9 @@ namespace http {
 class IHandler {
 public:
 
-    class Ret: public cocls::future<void> {
+    class Ret: public coro::future<void> {
     public:
-        using cocls::future<void>::future;
+        using coro::future<void>::future;
         template<typename Fn>
         CXX20_REQUIRES(((std::is_integral_v<typename decltype(std::declval<Fn>()())::value_type>
                         && sizeof(typename decltype(std::declval<Fn>()())::value_type) <= sizeof(void *))
@@ -44,7 +43,7 @@ public:
             try {
                 new(this) auto(fn());
             } catch (...) {
-                new(this) auto([]()->cocls::future<void>{return cocls::future<void>::set_exception(std::current_exception());});
+                new(this) auto([]()->coro::future<void>{return coro::future<void>::set_exception(std::current_exception());});
             }
         }
     };
@@ -82,12 +81,12 @@ public:
                 try {
                     if constexpr(std::is_void_v<RetVal>) {
                         _fn(req, vpath);
-                        return [&]{return cocls::future<void>::set_value();};
+                        return [&]{return coro::future<void>::set_value();};
                     } else {
                         return Ret([&]{return _fn(req, vpath);});
                     }
                 } catch (...) {
-                    return [&]{return cocls::future<void>::set_exception(std::current_exception());};
+                    return [&]{return coro::future<void>::set_exception(std::current_exception());};
                 }
             }
         protected:
@@ -107,12 +106,12 @@ public:
                 try {
                     if constexpr(std::is_void_v<RetVal>) {
                         _fn(req);
-                        return [&]{return cocls::future<void>::set_value();};
+                        return [&]{return coro::future<void>::set_value();};
                     } else {
                         return Ret([&]{return _fn(req);});
                     }
                 } catch (...) {
-                    return [&]{return cocls::future<void>::set_exception(std::current_exception());};
+                    return [&]{return coro::future<void>::set_exception(std::current_exception());};
                 }
             }
         protected:
@@ -326,8 +325,8 @@ public:
      */
     template<typename Tracer>
     CXX20_REQUIRES(std::invocable<Tracer, TraceEvent, ServerRequest &>)
-    cocls::future<void> start(cocls::generator<Stream> tcp_server, Tracer tracer) {
-        return [&](cocls::promise<void> prom) {
+    coro::future<void> start(coro::generator<Stream> tcp_server, Tracer tracer) {
+        return [&](coro::promise<void> prom) {
             _exit_promise = std::move(prom);
             serve_gen(std::move(tcp_server), std::move(tracer)).detach();
         };
@@ -345,7 +344,7 @@ public:
      * a value. You should wait for this future to ensure, that server is
      * clean up to be destroyed.
      */
-    cocls::future<void> start(cocls::generator<Stream> tcp_server) {
+    coro::future<void> start(coro::generator<Stream> tcp_server) {
         return start(std::move(tcp_server),[](TraceEvent, ServerRequest &) {});
     }
 
@@ -355,7 +354,7 @@ public:
      * @return future which is resolved once the connection is closed
      *
      */
-    cocls::future<void> serve_req(Stream s) {
+    coro::future<void> serve_req(Stream s) {
         return serve_req_coro(std::move(s), [](TraceEvent, ServerRequest &) {});
     }
     ///Manually serve on given connection
@@ -366,7 +365,7 @@ public:
      *
      */
     template<typename Tracer>
-    cocls::future<void> serve_req(Stream s, Tracer tracer) {
+    coro::future<void> serve_req(Stream s, Tracer tracer) {
         return serve_req_coro(std::move(s), std::move(tracer));
     }
 
@@ -388,7 +387,7 @@ protected:
     RequestFactory _factory;
     std::shared_mutex _mx;
     PrefixMap<MethodMap> _endpoints;
-    cocls::promise<void> _exit_promise;
+    coro::promise<void> _exit_promise;
     std::atomic<int> _requests = 0;
 
     friend class std::lock_guard<Server>;
@@ -403,7 +402,7 @@ protected:
 
 
     template<typename Tracer>
-    cocls::async<void> serve_gen(cocls::generator<Stream> tcp_server, Tracer tracer) {
+    coro::async<void> serve_gen(coro::generator<Stream> tcp_server, Tracer tracer) {
         std::lock_guard _(*this);
         while (co_await tcp_server.next()) {
             serve_req_coro(std::move(tcp_server.value()), tracer).detach();
@@ -422,7 +421,7 @@ protected:
     }
 
     template<typename Tracer>
-    cocls::async<void> serve_req_coro(Stream s, Tracer tracer) {
+    coro::async<void> serve_req_coro(Stream s, Tracer tracer) {
         //prepare server request
         ServerRequest req = _factory?_factory(std::move(s)):ServerRequest(std::move(s));
 

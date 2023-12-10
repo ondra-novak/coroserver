@@ -52,10 +52,10 @@ SignalHandler::~SignalHandler() {
     _signal_stream.shutdown();
 }
 
-cocls::future<void> SignalHandler::operator()(std::initializer_list<int > signals) {
+coro::future<void> SignalHandler::operator()(std::initializer_list<int > signals) {
     return [this,signals](auto promise) {
         std::lock_guard _(_mx);
-        auto shp = std::make_shared<cocls::promise<void> >(std::move(promise));
+        auto shp = std::make_shared<coro::promise<void> >(std::move(promise));
         for (auto sig: signals) {
             Promises &p = _listeners[sig];
             p.erase(std::remove_if(p.begin(), p.end(), [](const auto &x){return !(*x);}),p.end());
@@ -67,16 +67,16 @@ cocls::future<void> SignalHandler::operator()(std::initializer_list<int > signal
 
 }
 
-cocls::future<void> SignalHandler::operator()(int signal) {
+coro::future<void> SignalHandler::operator()(int signal) {
     return operator()({signal});
 }
 
-cocls::suspend_point<void> SignalHandler::on_signal(cocls::future<std::string_view> &f) noexcept {
+coro::suspend_point<void> SignalHandler::on_signal(coro::future<std::string_view> &f) noexcept {
     std::lock_guard _(_mx);
     try {
         std::string_view data = *f;
         if (!data.empty()) {
-            cocls::suspend_point<void> out;
+            coro::suspend_point<void> out;
             for (auto sig: data) {
                 auto iter = _listeners.find(sig);
                 if (iter != _listeners.end()) {
@@ -94,7 +94,7 @@ cocls::suspend_point<void> SignalHandler::on_signal(cocls::future<std::string_vi
     } catch (...) {
         //
     }
-    return cocls::coro_queue::create_suspend_point([&]{
+    return coro::coro_queue::create_suspend_point([&]{
         _listeners.clear();
     });
 }

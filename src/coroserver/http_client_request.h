@@ -4,7 +4,7 @@
 #include "http_common.h"
 #include "stream.h"
 
-#include <cocls/generator.h>
+#include <coro.h>
 
 namespace coroserver {
 
@@ -138,7 +138,7 @@ public:
      * function begin_body with the argument
      */
 
-    cocls::future<Stream> begin_body();
+    coro::future<Stream> begin_body();
 
     ///Sends headers and begin sending of the body
     /**
@@ -158,20 +158,20 @@ public:
      *
      *
      */
-    cocls::future<Stream> begin_body(std::size_t content_length);
+    coro::future<Stream> begin_body(std::size_t content_length);
 
 
     ///Send request or finish the body and read response.
     /**
      * @return response stream. Function also sets response headers and status code
      */
-    cocls::future<Stream> send();
+    coro::future<Stream> send();
     ///Send request with body
     /**
      * @param body body to send.
      * @return response stream. Function also sets response headers and status code
      */
-    cocls::future<Stream> send(std::string_view body);
+    coro::future<Stream> send(std::string_view body);
 
 
     ///Retrieve response status code
@@ -235,21 +235,21 @@ protected:
     void prepare_header(Method method, std::string_view path);
     void owr_hdr(std::string_view hdr);
 
-    cocls::suspend_point<void> after_send_headers(cocls::future<bool> &res) noexcept;
-    cocls::suspend_point<void> receive_response(cocls::future<std::string_view> &res) noexcept;
+    coro::suspend_point<void> after_send_headers(coro::future<bool> &res) noexcept;
+    coro::suspend_point<void> receive_response(coro::future<std::string_view> &res) noexcept;
     unsigned int _rcvstatus = 0;
-    cocls::call_fn_future_awaiter<&ClientRequest::after_send_headers> _after_send_headers_awt;
-    cocls::call_fn_future_awaiter<&ClientRequest::receive_response> _receive_response_awt;
-    cocls::promise<Stream> _stream_promise;
+    coro::call_fn_future_awaiter<&ClientRequest::after_send_headers> _after_send_headers_awt;
+    coro::call_fn_future_awaiter<&ClientRequest::receive_response> _receive_response_awt;
+    coro::promise<Stream> _stream_promise;
     Command _command = Command::none;
     std::string_view _body_to_write;
 
 
 
-    cocls::future<bool> send_headers();
+    coro::future<bool> send_headers();
     void prepare_body_stream();
     void prepare_response_stream();
-    cocls::suspend_point<void> after_receive_headers();
+    coro::suspend_point<void> after_receive_headers();
 
 
 };

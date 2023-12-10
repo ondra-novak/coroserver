@@ -4,7 +4,7 @@
 #include <coroserver/io_context.h>
 
 
-cocls::async<void> write_task(coroserver::ContextIO ctx, std::string port) {
+coro::async<void> write_task(coroserver::ContextIO ctx, std::string port) {
     coroserver::Stream stream = co_await ctx.connect(PeerName::lookup("localhost", port));
     coroserver::CharacterWriter<coroserver::Stream> wr(stream);
     for (int i = 0; i < 655360; i++) {
@@ -13,7 +13,7 @@ cocls::async<void> write_task(coroserver::ContextIO ctx, std::string port) {
     co_await wr.flush();
 }
 
-cocls::async<void> read_task(coroserver::Stream s) {
+coro::async<void> read_task(coroserver::Stream s) {
     int x = 0;
     int cnt = 0;
     coroserver::CharacterReader<coroserver::Stream> rd(s);
@@ -27,7 +27,7 @@ cocls::async<void> read_task(coroserver::Stream s) {
     CHECK_EQUAL(cnt, 655360);
 }
 
-cocls::async<void> server_task(cocls::future<coroserver::Stream> &f) {
+coro::async<void> server_task(coro::future<coroserver::Stream> &f) {
 
     coroserver::Stream s = co_await f;
     co_await read_task(s);
@@ -41,7 +41,7 @@ int main() {
     auto addr = PeerName::lookup("127.0.0.1","*");
     auto listener = ctx.accept(addr);
 
-    cocls::future<coroserver::Stream> f([&]{return listener();});
+    coro::future<coroserver::Stream> f([&]{return listener();});
 
     write_task(ctx, addr[0].get_port()).detach();
 

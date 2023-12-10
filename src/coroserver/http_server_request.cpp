@@ -30,7 +30,7 @@ ServerRequest::ServerRequest(Stream s, bool secure)
 ServerRequest::~ServerRequest() {
 }
 
-cocls::future<bool> ServerRequest::load() {
+coro::future<bool> ServerRequest::load() {
     _status_code = 0;
     _status_message = {};
     _search_hdr_state = 0;
@@ -46,7 +46,7 @@ cocls::future<bool> ServerRequest::load() {
     return _load_awt << [&]{return _cur_stream.read();};
 }
 
-cocls::suspend_point<void> ServerRequest::load_coro(std::string_view &data, cocls::promise<bool> &res) {
+coro::suspend_point<void> ServerRequest::load_coro(std::string_view &data, coro::promise<bool> &res) {
     if (data.empty()) return res(false);
     for (std::size_t cnt = data.size(), i = 0; i < cnt; i++) {
         char c= data[i];
@@ -354,25 +354,25 @@ void ServerRequest::content_type_from_extension(const std::string_view &path) {
     }
 }
 
-cocls::suspend_point<void> ServerRequest::send_resp_body(Stream &s, cocls::promise<bool> &res) {
+coro::suspend_point<void> ServerRequest::send_resp_body(Stream &s, coro::promise<bool> &res) {
     _forward_awt(std::move(res)) << [&]{return s.write(_send_body_data);};
     return {};
 }
 
 
-cocls::future<bool> ServerRequest::send(std::string_view body) {
+coro::future<bool> ServerRequest::send(std::string_view body) {
     _send_body_data = body;
     add_header(strtable::hdr_content_length, body.size());
     return _send_resp_body_awt << [&]{return send();};
     //return send_coro(_coro_storage, body);
 }
 
-cocls::future<bool> ServerRequest::send(std::ostringstream &body) {
+coro::future<bool> ServerRequest::send(std::ostringstream &body) {
     _user_buffer = body.str();
     return send(std::string_view(_user_buffer));
 }
 
-cocls::suspend_point<void> ServerRequest::send_resp(bool &st, cocls::promise<Stream> &res) {
+coro::suspend_point<void> ServerRequest::send_resp(bool &st, coro::promise<Stream> &res) {
     if (!st) {
         return res(LimitedStream::write(_cur_stream, 0));
     }
@@ -392,7 +392,7 @@ cocls::suspend_point<void> ServerRequest::send_resp(bool &st, cocls::promise<Str
 }
 
 
-cocls::future<Stream> ServerRequest::send() {
+coro::future<Stream> ServerRequest::send() {
     return _send_resp_awt << [&]{return discard_body_intr();};
 }
 
@@ -443,11 +443,11 @@ std::string_view ServerRequest::prepare_output_headers() {
 
 }
 
-cocls::future<bool> ServerRequest::discard_body_intr() {
+coro::future<bool> ServerRequest::discard_body_intr() {
     if (!_has_body || _expect_100_continue) {
         _has_body = false;
         _expect_100_continue = false;
-        return cocls::future<bool>::set_value(true);
+        return coro::future<bool>::set_value(true);
     } else {
         return _discard_body_awt << [&]{return _body_stream.read();};
     }
@@ -455,7 +455,7 @@ cocls::future<bool> ServerRequest::discard_body_intr() {
 }
 
 
-cocls::suspend_point<void> ServerRequest::discard_body_coro(std::string_view &data, cocls::promise<bool> &res) {
+coro::suspend_point<void> ServerRequest::discard_body_coro(std::string_view &data, coro::promise<bool> &res) {
     if (data.empty()) return res(true);
     _discard_body_awt(std::move(res)) << [&]{return _body_stream.read();};
     return {};
@@ -463,9 +463,9 @@ cocls::suspend_point<void> ServerRequest::discard_body_coro(std::string_view &da
 }
 
 
-cocls::future<bool> ServerRequest::send_file(const std::string &path, bool use_chunked) {
+coro::future<bool> ServerRequest::send_file(const std::string &path, bool use_chunked) {
     std::ifstream f(path);
-    if (!f) return cocls::future<bool>::set_value(false);
+    if (!f) return coro::future<bool>::set_value(false);
     if (!use_chunked) {
         f.seekg(0,std::ios::end);
         auto sz = f.tellg();
@@ -486,9 +486,9 @@ Stream ServerRequest::get_body_coro(bool &res) {
 }
 
 
-cocls::future<Stream> ServerRequest::get_body() {
+coro::future<Stream> ServerRequest::get_body() {
     if (!_has_body) {
-        return cocls::future<Stream>::set_value(LimitedStream::read(_cur_stream, 0));
+        return coro::future<Stream>::set_value(LimitedStream::read(_cur_stream, 0));
     }
     if (_expect_100_continue) {
         auto iter = _output_headers.begin();
@@ -501,7 +501,7 @@ cocls::future<Stream> ServerRequest::get_body() {
             return _cur_stream.write(out);
         };
     }
-    return cocls::future<Stream>::set_value(_body_stream);
+    return coro::future<Stream>::set_value(_body_stream);
 
 
 }

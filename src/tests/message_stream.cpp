@@ -3,7 +3,7 @@
 #include <coroserver/message_stream.h>
 
 
-cocls::async<void> test(int size) {
+coro::async<void> test(int size) {
     std::string in;
     std::string tmp;
     std::string out;

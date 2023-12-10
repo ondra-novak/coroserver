@@ -47,9 +47,9 @@ public:
 
     MessageStream(const std::shared_ptr<IStream> &proxied, std::size_t max_msg_size);
 
-    virtual cocls::future<std::string_view> read() override;
-    virtual cocls::future<bool> write(std::string_view buffer) override;
-    virtual cocls::future<bool> write_eof() override;
+    virtual coro::future<std::string_view> read() override;
+    virtual coro::future<bool> write(std::string_view buffer) override;
+    virtual coro::future<bool> write_eof() override;
 
     static Stream create(const Stream &target, std::size_t max_msg_size = std::numeric_limits<std::size_t>::max());
 
@@ -59,15 +59,15 @@ protected:
     std::vector<char> _read_msg_buffer;
     std::size_t _read_size = 0;
     bool _reading_size = true;
-    cocls::promise<std::string_view> _read_result;
-    cocls::suspend_point<void> on_read(cocls::future<std::string_view> &f) noexcept;
-    cocls::call_fn_future_awaiter<&MessageStream::on_read> _read_awt;
+    coro::promise<std::string_view> _read_result;
+    coro::suspend_point<void> on_read(coro::future<std::string_view> &f) noexcept;
+    coro::call_fn_future_awaiter<&MessageStream::on_read> _read_awt;
 
     std::string _write_msg_buffer;
     std::string_view _write_payload;
-    cocls::suspend_point<void> on_write(cocls::future<bool> &f) noexcept;
-    cocls::promise<bool> _write_result;
-    cocls::call_fn_future_awaiter<&MessageStream::on_write> _write_awt;
+    coro::suspend_point<void> on_write(coro::future<bool> &f) noexcept;
+    coro::promise<bool> _write_result;
+    coro::call_fn_future_awaiter<&MessageStream::on_write> _write_awt;
     void encode_size(std::size_t sz, bool first = true);
 
 

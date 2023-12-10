@@ -2,7 +2,7 @@
 #include <coroserver/mt_stream.h>
 
 #include "test_stream.h"
-cocls::async<void> test_writer() {
+coro::async<void> test_writer() {
     std::string out;
     auto stream = TestStream<100>::create({}, &out);
     coroserver::MTStreamWriter wr(stream);

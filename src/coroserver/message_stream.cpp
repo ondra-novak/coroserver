@@ -11,7 +11,7 @@ MessageStream::MessageStream(const std::shared_ptr<IStream> &proxied, std::size_
 
 }
 
-cocls::future<std::string_view> MessageStream::read() {
+coro::future<std::string_view> MessageStream::read() {
     return [&](auto promise) {
         auto pb = read_putback_buffer();
         if (!pb.empty()) {
@@ -36,7 +36,7 @@ void MessageStream::encode_size(std::size_t sz, bool first) {
     }
 }
 
-cocls::future<bool> MessageStream::write(std::string_view buffer) {
+coro::future<bool> MessageStream::write(std::string_view buffer) {
     return [&](auto promise) {
         if (buffer.empty()) {
             promise(true);
@@ -50,7 +50,7 @@ cocls::future<bool> MessageStream::write(std::string_view buffer) {
     };
 }
 
-cocls::future<bool> MessageStream::write_eof() {
+coro::future<bool> MessageStream::write_eof() {
     return [&](auto promise) {
         _write_payload = {};
         _write_result = std::move(promise);
@@ -61,7 +61,7 @@ cocls::future<bool> MessageStream::write_eof() {
 
 }
 
-cocls::suspend_point<void> MessageStream::on_read(cocls::future<std::string_view> &f) noexcept {
+coro::suspend_point<void> MessageStream::on_read(coro::future<std::string_view> &f) noexcept {
     try {
         std::string_view data = *f;
         for (std::size_t i = 0, cnt = data.size() ; i < cnt; ++i) {
@@ -99,7 +99,7 @@ cocls::suspend_point<void> MessageStream::on_read(cocls::future<std::string_view
     }
 }
 
-cocls::suspend_point<void> MessageStream::on_write(cocls::future<bool> &f) noexcept {
+coro::suspend_point<void> MessageStream::on_write(coro::future<bool> &f) noexcept {
     try {
         bool r = *f;
         auto p = std::exchange(_write_payload,{});

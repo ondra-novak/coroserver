@@ -15,14 +15,14 @@ public:
     ,_awt(*this)
     ,_awt_destroy(*this) {}
 
-    cocls::suspend_point<bool> write(const Message &msg) {
+    coro::suspend_point<bool> write(const Message &msg) {
         return _writer([&](auto fn){
             _builder(msg, std::forward<decltype(fn)>(fn));
         });
     }
 
-    cocls::future<Message> read() {
-        if (_closed) return cocls::future<Message>::set_value(Message{{},Type::connClose, Base::closeNoStatus});
+    coro::future<Message> read() {
+        if (_closed) return coro::future<Message>::set_value(Message{{},Type::connClose, Base::closeNoStatus});
         return [&](auto p) {
             if (_reader.is_complete()) {
                 _reader.reset();
@@ -51,17 +51,17 @@ public:
         _awt_destroy << [&]{return _writer.wait_for_idle();};
     }
 
-    cocls::future<void> wait_for_flush() {
+    coro::future<void> wait_for_flush() {
         return _writer.wait_for_flush();
     }
 
-    cocls::future<void> wait_for_idle() {
+    coro::future<void> wait_for_idle() {
         return _writer.wait_for_idle();
     }
 
 protected:
 
-    cocls::suspend_point<void> on_read(cocls::future<std::string_view> &fut) noexcept { // @suppress("No return")
+    coro::suspend_point<void> on_read(coro::future<std::string_view> &fut) noexcept { // @suppress("No return")
         try {
             std::string_view data = *fut;
             if (data.empty()) {
@@ -102,7 +102,7 @@ protected:
         }
     }
 
-    cocls::suspend_point<void> destroy_self(cocls::future<void> &) noexcept {
+    coro::suspend_point<void> destroy_self(coro::future<void> &) noexcept {
         //now we know, that writer is idle
         //we can destroy object
         delete this;
@@ -115,9 +115,9 @@ protected:
     Parser _reader;
     MTStreamWriter _writer;
     Builder _builder;
-    cocls::promise<Message> _read_promise;
-    cocls::call_fn_future_awaiter<&InternalState::on_read> _awt;
-    cocls::call_fn_future_awaiter<&InternalState::destroy_self> _awt_destroy;
+    coro::promise<Message> _read_promise;
+    coro::call_fn_future_awaiter<&InternalState::on_read> _awt;
+    coro::call_fn_future_awaiter<&InternalState::destroy_self> _awt_destroy;
     bool _ping_sent = false;
     bool _closed = false;
 };
@@ -129,12 +129,12 @@ struct Stream::Deleter {
 };
 
 
-cocls::suspend_point<bool> Stream::write(const Message &msg) {
+coro::suspend_point<bool> Stream::write(const Message &msg) {
     return _ptr->write(msg);
 }
 
 
-cocls::future<Message> Stream::read() {
+coro::future<Message> Stream::read() {
     return _ptr->read();
 }
 
@@ -151,11 +151,11 @@ std::size_t Stream::get_buffered_size() const {
 
 Stream::Stream(_Stream s, Cfg cfg):_ptr(create(s, cfg)) {}
 
-cocls::future<void> Stream::wait_for_flush() {
+coro::future<void> Stream::wait_for_flush() {
     return _ptr->wait_for_flush();
 }
 
-cocls::future<void> Stream::wait_for_idle() {
+coro::future<void> Stream::wait_for_idle() {
     return _ptr->wait_for_idle();
 }
 

@@ -28,7 +28,7 @@ public:
     virtual coroserver::PeerName get_peer_name() const override {
         return {};
     }
-    virtual cocls::future<std::string_view> read() override {
+    virtual coro::future<std::string_view> read() override {
         if (async_delay_ms) {
             return [&](auto promise) {
                 std::thread thr([this,promise = std::move(promise)]() mutable {
@@ -38,7 +38,7 @@ public:
                 thr.detach();
             };
         } else
-            return cocls::future<std::string_view>::set_value(read_nb());
+            return coro::future<std::string_view>::set_value(read_nb());
     }
     virtual std::string_view read_nb() override {
         auto sub = read_putback_buffer();
@@ -49,7 +49,7 @@ public:
         _cntr.read+=_tmp.size();
         return _tmp;
     }
-    virtual cocls::future<bool> write(std::string_view s) override {
+    virtual coro::future<bool> write(std::string_view s) override {
         if (_out) {
             if (async_delay_ms) {
                 return [&](auto promise) {
@@ -65,22 +65,22 @@ public:
             } else {
                 _cntr.write+=s.size();
                _out->append(s);
-               return cocls::future<bool>::set_value(true);
+               return coro::future<bool>::set_value(true);
             }
         } else {
-            return cocls::future<bool>::set_value(false);
+            return coro::future<bool>::set_value(false);
         }
     }
     virtual bool is_read_timeout() const override {
         return false;
     }
-    virtual cocls::future<bool> write_eof() override {
-        return cocls::future<bool>::set_value(_out != nullptr);
+    virtual coro::future<bool> write_eof() override {
+        return coro::future<bool>::set_value(_out != nullptr);
     }
     virtual void set_timeouts(const coroserver::TimeoutSettings &) override {
 
     }
-    virtual cocls::suspend_point<void > shutdown() override {return {};}
+    virtual coro::suspend_point<void > shutdown() override {return {};}
 
     virtual Counters get_counters() const noexcept override  {
         return _cntr;

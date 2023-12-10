@@ -20,9 +20,9 @@ coroserver::LimitedStream::LimitedStream(std::shared_ptr<IStream> proxied,
 
 }
 
-cocls::future<std::string_view> LimitedStream::read() {
+coro::future<std::string_view> LimitedStream::read() {
     auto buff = read_putback_buffer();
-    if (!buff.empty() || !_limit_read) return cocls::future<std::string_view>::set_value(buff);
+    if (!buff.empty() || !_limit_read) return coro::future<std::string_view>::set_value(buff);
     return [&](auto promise) {
         _read_result = std::move(promise);
         _read_awt << [&]{return _proxied->read();}; //continue by join
@@ -46,7 +46,7 @@ LimitedStream::~LimitedStream() {
     if (_limit_read || _limit_write) _proxied->shutdown();
 }
 
-cocls::suspend_point<void> LimitedStream::join_read(cocls::future<std::string_view> &fut) noexcept {
+coro::suspend_point<void> LimitedStream::join_read(coro::future<std::string_view> &fut) noexcept {
     try {
         std::string_view data = *fut;
         auto ret = data.substr(0, _limit_read);
@@ -59,17 +59,17 @@ cocls::suspend_point<void> LimitedStream::join_read(cocls::future<std::string_vi
 
 }
 
-cocls::future<bool> LimitedStream::write(std::string_view buffer) {
-    if (buffer.empty()) return cocls::future<bool>::set_value(true);
+coro::future<bool> LimitedStream::write(std::string_view buffer) {
+    if (buffer.empty()) return coro::future<bool>::set_value(true);
     auto b = buffer.substr(0, _limit_write);
-    if (b.empty()) return cocls::future<bool>::set_value(false);
+    if (b.empty()) return coro::future<bool>::set_value(false);
     _limit_write-=b.size();
     return _proxied->write(b);
 }
 
-cocls::future<bool> LimitedStream::write_eof() {
+coro::future<bool> LimitedStream::write_eof() {
     if (_limit_write) {
-        return ([&]()->cocls::async<bool> {
+        return ([&]()->coro::async<bool> {
             CharacterWriter<Stream> wr(_proxied);
             bool ret;
             while (_limit_write) {
@@ -81,7 +81,7 @@ cocls::future<bool> LimitedStream::write_eof() {
             co_return ret;
         })();
     } else {
-        return cocls::future<bool>::set_value(true);
+        return coro::future<bool>::set_value(true);
     }
 }
 

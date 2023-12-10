@@ -14,7 +14,7 @@ namespace https {
 
 ///Https connection factory
 inline ConnectionFactory connectionFactory(ContextIO ioctx, ssl::Context sslctx, int timeout_ms, TimeoutSettings tms) {
-    return [ioctx  = std::move(ioctx), sslctx = std::move(sslctx), timeout_ms, tms](std::string_view host) mutable ->cocls::future<Stream> {
+    return [ioctx  = std::move(ioctx), sslctx = std::move(sslctx), timeout_ms, tms](std::string_view host) mutable ->coro::future<Stream> {
         auto list = PeerName::lookup(host, "443");
         Stream s = co_await ioctx.connect(std::move(list), timeout_ms, tms);
         co_return ssl::Stream::connect(s, sslctx, std::string(host));

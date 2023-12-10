@@ -27,7 +27,7 @@ struct Message {
 
 class IConnection {
 public:
-    virtual cocls::future<Message> receive() = 0;
+    virtual coro::future<Message> receive() = 0;
     virtual bool send(const Message &msg) = 0;
     virtual ~IConnection() = default;
 };

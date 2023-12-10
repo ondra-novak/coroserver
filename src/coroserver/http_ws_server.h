@@ -90,7 +90,7 @@ public:
      * @retval false handshake failed, stream is not defined, you need to
      * check request
      */
-    cocls::future<bool> operator()();
+    coro::future<bool> operator()();
 
     ///Allows to co_await on the state.
     /**
@@ -102,7 +102,7 @@ public:
      * check server's response stored in the http::ClientRequest object passed
      * as argument in the constructor
      */
-    cocls::future_awaiter<bool> operator co_await() {
+    coro::future_awaiter<bool> operator co_await() {
         return [&]{return (*this)();};
     }
 
@@ -126,10 +126,10 @@ protected:
     bool _need_fragmented;
     TimeoutSettings _tm;
     http::ServerRequest &_req;
-    cocls::suspend_point<void> on_response_sent(cocls::future<_Stream> &s) noexcept;
+    coro::suspend_point<void> on_response_sent(coro::future<_Stream> &s) noexcept;
 
-    cocls::promise<bool> _result;
-    cocls::call_fn_future_awaiter<&Server::on_response_sent> _awt;
+    coro::promise<bool> _result;
+    coro::call_fn_future_awaiter<&Server::on_response_sent> _awt;
 };
 
 

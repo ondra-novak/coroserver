@@ -30,9 +30,9 @@ public:
     Stream &operator=(const Stream &) = delete;
     ~Stream();
 
-    virtual cocls::future<std::string_view> read() override;
-    virtual cocls::future<bool> write(std::string_view data) override;
-    virtual cocls::future<bool> write_eof() override;
+    virtual coro::future<std::string_view> read() override;
+    virtual coro::future<bool> write(std::string_view data) override;
+    virtual coro::future<bool> write_eof() override;
 
     static _Stream accept(_Stream s, Context ctx);
     static _Stream accept(_Stream s, Context ctx, const Certificate &server_cert);
@@ -47,7 +47,7 @@ public:
      * @param ssl_error (optional) function called when exception is thrown from the accept function (for logging)
      * @return
      */
-    static cocls::generator<_Stream> accept(cocls::generator<_Stream> gen, Context ctx, cocls::function<void()> ssl_error = {});
+    static coro::generator<_Stream> accept(coro::generator<_Stream> gen, Context ctx, coro::function<void()> ssl_error = {});
 
 protected:
 
@@ -74,11 +74,11 @@ protected:
     std::array<char, 16384> _rdbuff;
     std::vector<char> _wrbuff;
 
-    cocls::mutex _rdmx;
-    cocls::mutex _wrmx;
+    coro::mutex _rdmx;
+    coro::mutex _wrmx;
 
-    cocls::reusable_storage _rdstor;
-    cocls::reusable_storage _wrstor;
+    coro::reusable_storage _rdstor;
+    coro::reusable_storage _wrstor;
 
 
     ///special result from run_ssl_io - operation complete, return retval
@@ -89,7 +89,7 @@ protected:
 
 
     template<typename Ret, typename Fn>
-    cocls::with_allocator<cocls::reusable_storage, cocls::async<Ret> > run_ssl_io(cocls::reusable_storage &, Fn fn, Ret failRet);
+    coro::with_allocator<coro::reusable_storage, coro::async<Ret> > run_ssl_io(coro::reusable_storage &, Fn fn, Ret failRet);
 
 };
 

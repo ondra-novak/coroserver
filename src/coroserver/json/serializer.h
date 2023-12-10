@@ -8,8 +8,7 @@
 #ifndef SRC_COROSERVER_JSON_SERIALIZER_H_
 #define SRC_COROSERVER_JSON_SERIALIZER_H_
 
-#include <cocls/future.h>
-#include <cocls/async.h>
+#include <coro.h>
 #include "../character_io.h"
 #include "value.h"
 
@@ -457,7 +456,7 @@ public:
      * @return generator
      */
     template<size_t max_buffer_size = 16384>
-     static cocls::generator<std::string_view> generator(const Value &v) {
+     static coro::generator<std::string_view> generator(const Value &v) {
          return generator_coro<const Value &, max_buffer_size>(v);
      }
     ///Serializing generator - generates strings
@@ -468,14 +467,14 @@ public:
      * @return generator
      */
     template<size_t max_buffer_size = 16384>
-     static cocls::generator<std::string_view> generator(Value &&v) {
+     static coro::generator<std::string_view> generator(Value &&v) {
          return generator_coro<Value, max_buffer_size>(std::move(v));
      }
 
 
 protected:
     template<typename V, size_t max_buffer_size = 16384>
-    static cocls::generator<std::string_view> generator_coro(V v) {
+    static coro::generator<std::string_view> generator_coro(V v) {
         Serializer sr(v);
         std::array<char, max_buffer_size> buff;
         std::size_t cnt = sr.to_buffer(buff);

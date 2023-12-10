@@ -59,7 +59,7 @@ void ClientRequest::open(Method method, std::string_view path) {
     _response_stream = Stream(nullptr);
     _body_to_write = {};
     _command = Command::none;
-    _stream_promise(cocls::drop);
+    _stream_promise(coro::drop);
     _rcvstatus = 0;
 
     prepare_header(method, path);
@@ -157,7 +157,7 @@ ClientRequest &&ClientRequest::expect100continue() {
 
 
 
-cocls::future<bool> ClientRequest::send_headers() {
+coro::future<bool> ClientRequest::send_headers() {
     _req_headers << strtable::hdr_host << ": " << _host << "\r\n";
     if (!_auth.empty()) {
         _req_headers << strtable::hdr_authorization << ": " << _host << "\r\n";
@@ -186,7 +186,7 @@ cocls::future<bool> ClientRequest::send_headers() {
     return _s.write(_req_headers.view());
 }
 
-cocls::future<Stream> ClientRequest::begin_body() {
+coro::future<Stream> ClientRequest::begin_body() {
     if (!_has_te && _content_length == 0) use_chunked();
 
     return [&](auto promise) {
@@ -202,7 +202,7 @@ cocls::future<Stream> ClientRequest::begin_body() {
 
 static constexpr search_kmp<4> end_of_header("\r\n\r\n");
 
-cocls::suspend_point<void> ClientRequest::receive_response(cocls::future<std::string_view> &res) noexcept {
+coro::suspend_point<void> ClientRequest::receive_response(coro::future<std::string_view> &res) noexcept {
     try {
         std::string_view data = *res;
         if (data.empty()) throw ConnectionReset();
@@ -222,7 +222,7 @@ cocls::suspend_point<void> ClientRequest::receive_response(cocls::future<std::st
     }
 }
 
-cocls::suspend_point<void> ClientRequest::after_receive_headers() {
+coro::suspend_point<void> ClientRequest::after_receive_headers() {
     std::string_view first_line;
     if (!HeaderMap::headers({_response_headers_data.data(),_response_headers_data.size()}, _response_headers, first_line)) {
         throw InvalidFormat();
@@ -245,7 +245,7 @@ cocls::suspend_point<void> ClientRequest::after_receive_headers() {
             return _stream_promise(_body_stream);
         case Command::sendRequest:
             if (_status_code == 100) {
-                cocls::future<bool> fakeres = cocls::future<bool>::set_value(true);
+                coro::future<bool> fakeres = coro::future<bool>::set_value(true);
                 return after_send_headers(fakeres);
             }
             prepare_response_stream();
@@ -262,12 +262,12 @@ void ClientRequest::prepare_body_stream() {
     _content_length = 0;
 }
 
-cocls::future<Stream> ClientRequest::begin_body(std::size_t ctl) {
+coro::future<Stream> ClientRequest::begin_body(std::size_t ctl) {
     content_length(ctl);
     return begin_body();
 }
 
-cocls::future<Stream> ClientRequest::send() {
+coro::future<Stream> ClientRequest::send() {
     return [&](auto promise) {
         _stream_promise = std::move(promise);
         _command = Command::sendRequest;
@@ -288,7 +288,7 @@ cocls::future<Stream> ClientRequest::send() {
 
 
 
-cocls::future<Stream> ClientRequest::send(std::string_view body) {
+coro::future<Stream> ClientRequest::send(std::string_view body) {
     if (!_req_sent) {
         if (_has_te) throw std::logic_error("Invalid request state: Transfer Encoding cannot be used when send(<body>) is called");
         return [&](auto promise) {
@@ -328,7 +328,7 @@ void ClientRequest::prepare_response_stream() {
     _resp_recv = true;
 }
 
-cocls::suspend_point<void> ClientRequest::after_send_headers(cocls::future<bool> &res) noexcept {
+coro::suspend_point<void> ClientRequest::after_send_headers(coro::future<bool> &res) noexcept {
     try {
         bool r = *res;
         if (!r) throw ConnectionReset();

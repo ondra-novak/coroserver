@@ -29,7 +29,7 @@ PipeStream::~PipeStream() {
     if (_fdread>=0) _ctx.close(_fdread);
     if (_fdwrite>=0 && _fdwrite != _fdread) _ctx.close(_fdwrite);
 }
-cocls::generator<std::string_view> PipeStream::start_read() {
+coro::generator<std::string_view> PipeStream::start_read() {
     while (true) {
         std::string_view data;
         while (!_is_eof && data.empty()) {
@@ -73,9 +73,9 @@ cocls::generator<std::string_view> PipeStream::start_read() {
     }
 }
 
-cocls::future<std::string_view> PipeStream::read() {
+coro::future<std::string_view> PipeStream::read() {
     auto buff = read_putback_buffer();
-    if (!buff.empty() || _reader.done()) return cocls::future<std::string_view>::set_value(buff);
+    if (!buff.empty() || _reader.done()) return coro::future<std::string_view>::set_value(buff);
     return [&]{return _reader();};
 }
 
@@ -102,26 +102,26 @@ bool PipeStream::is_read_timeout() const {
     return _is_timeout;
 }
 
-cocls::future<bool> PipeStream::write(std::string_view buffer) {
-    if (_writer.done()) return cocls::future<bool>::set_value(false);
+coro::future<bool> PipeStream::write(std::string_view buffer) {
+    if (_writer.done()) return coro::future<bool>::set_value(false);
     return [&]{return _writer(buffer);};
 }
 
-cocls::future<bool> PipeStream::write_eof() {
-    if (_is_closed) return cocls::future<bool>::set_value(false);
+coro::future<bool> PipeStream::write_eof() {
+    if (_is_closed) return coro::future<bool>::set_value(false);
     if (_fdwrite>=0) {
         _ctx.close(_fdwrite);
         _fdwrite =  -1;
     }
     _is_closed = true;
-    return cocls::future<bool>::set_value(true);
+    return coro::future<bool>::set_value(true);
 }
 
-cocls::suspend_point<void> PipeStream::shutdown() {
+coro::suspend_point<void> PipeStream::shutdown() {
     _is_closed = true;
     _is_eof = true;
     _is_timeout = false;
-    cocls::suspend_point<void> out;
+    coro::suspend_point<void> out;
     if (_fdread >= 0) out << _ctx.mark_closing(_fdread);
     if (_fdwrite >= 0) out << _ctx.mark_closing(_fdwrite);
     return out;
@@ -192,7 +192,7 @@ Stream PipeStream::stdio(AsyncSupport context, TimeoutSettings tms, bool duplica
     return Stream(std::make_shared<PipeStream>(context, rd, wr, tms));
 }
 
-cocls::generator<bool, std::string_view> PipeStream::start_write() {
+coro::generator<bool, std::string_view> PipeStream::start_write() {
     std::string_view buff = co_yield nullptr;
     while (true) {
         while (!_is_closed && !buff.empty()) {

@@ -1,12 +1,11 @@
 #ifndef SRC_COROSERVER_JSON_PARSER_H_
 #define SRC_COROSERVER_JSON_PARSER_H_
 
-#include <cocls/future.h>
-#include <cocls/generator.h>
 #include "../character_io.h"
 #include "value.h"
-#include <utility>
 
+#include <coro.h>
+#include <utility>
 #include <stack>
 
 namespace coroserver{
@@ -317,7 +316,7 @@ protected:
 
 
 template<typename Alloc, typename Stream>
-inline cocls::with_allocator<Alloc, cocls::async<Value> > parse_coro(Alloc &, Stream stream) {
+inline coro::with_allocator<Alloc, coro::async<Value> > parse_coro(Alloc &, Stream stream) {
     std::stack<Value> stack;
     CharacterReader rd(stream);
     std::string buffer;
@@ -656,8 +655,8 @@ inline cocls::with_allocator<Alloc, cocls::async<Value> > parse_coro(Alloc &, St
 
 
 template<typename Stream>
-cocls::future<Value> parse(Stream stream) {
-    cocls::default_storage stor;
+coro::future<Value> parse(Stream stream) {
+    coro::default_storage stor;
     return parse_coro(stor, std::move(stream));
 
 }

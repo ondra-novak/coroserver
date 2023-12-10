@@ -93,7 +93,7 @@ namespace ws {
          * @retval false handshake failed, stream is not defined, you need to
          * check request
          */
-        cocls::future<bool> operator()();
+        coro::future<bool> operator()();
 
 
         ///Allows to co_await on the state.
@@ -106,7 +106,7 @@ namespace ws {
          * check server's response stored in the http::ClientRequest object passed
          * as argument in the constructor
          */
-        cocls::future_awaiter<bool> operator co_await() {
+        coro::future_awaiter<bool> operator co_await() {
             return [&]{return (*this)();};
         }
 
@@ -126,12 +126,12 @@ namespace ws {
             :_out(out), _req(req), _tm(tm), _need_fragmented(need_fragmented), _awt(*this) {}
 
         Stream &_out;
-        cocls::suspend_point<void> after_send(cocls::future<_Stream> &f) noexcept;
+        coro::suspend_point<void> after_send(coro::future<_Stream> &f) noexcept;
         http::ClientRequest &_req;
         TimeoutSettings _tm;
         bool _need_fragmented;
-        cocls::promise<bool> _result;
-        cocls::call_fn_future_awaiter<&Client::after_send> _awt;
+        coro::promise<bool> _result;
+        coro::call_fn_future_awaiter<&Client::after_send> _awt;
         std::string _digest;
 
 

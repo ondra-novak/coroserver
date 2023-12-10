@@ -3,8 +3,9 @@
 
 #include "stream.h"
 #include "websocket.h"
-#include <cocls/mutex.h>
-#include <cocls/generator.h>
+#include <coro.h>
+
+
 
 namespace coroserver {
 
@@ -47,7 +48,7 @@ public:
     Stream() = default;
 
 
-    cocls::suspend_point<bool> write(const Message &msg);
+    coro::suspend_point<bool> write(const Message &msg);
 
     ///Read from websocket
     /**
@@ -68,7 +69,7 @@ public:
      *
      * @note Function IS NOT MT SAFE.
      */
-    cocls::future<Message> read();
+    coro::future<Message> read();
 
     std::size_t get_buffered_size() const;
 
@@ -84,18 +85,18 @@ public:
     State get_state() const;
 
     ///close the stream explicitly
-    cocls::suspend_point<bool> close() {
+    coro::suspend_point<bool> close() {
         return write(Message{{},Type::connClose,Base::closeNormal});
     }
 
     ///close the stream explicitly
-    cocls::suspend_point<bool> close(std::uint16_t code) {
+    coro::suspend_point<bool> close(std::uint16_t code) {
         return write(Message{{},Type::connClose,code});
     }
 
-    cocls::future<void> wait_for_flush();
+    coro::future<void> wait_for_flush();
 
-    cocls::future<void> wait_for_idle();
+    coro::future<void> wait_for_idle();
 
 protected:
 

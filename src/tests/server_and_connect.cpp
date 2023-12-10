@@ -18,9 +18,9 @@ void check1() {
 
     auto connecting = ctx.connect(addrs_connect);
 
-    Stream s = connecting.join();
+    Stream s = connecting;
 
-    Stream r = wtconn1.join();
+    Stream r = wtconn1;
 }
 void check2() {
     ContextIO ctx = ContextIO::create(2);
@@ -33,9 +33,9 @@ void check2() {
 
     auto connecting = ctx.connect(addrs_connect);
 
-    Stream s = connecting.join();
+    Stream s = connecting;
 
-    Stream r = wtconn1.join();
+    Stream r = wtconn1;
 }
 
 int main() {

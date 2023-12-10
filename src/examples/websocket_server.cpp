@@ -74,8 +74,8 @@ forge_nick();
 )html";
 
 
-using MyPublisher = cocls::publisher<std::string>;
-using MySubscriber = cocls::subscriber<std::string>;
+using MyPublisher = coro::publisher<std::string>;
+using MySubscriber = coro::subscriber<std::string>;
 
 std::string to_id(const void *ptr) {
     std::ostringstream s;
@@ -83,7 +83,7 @@ std::string to_id(const void *ptr) {
     return s.str();
 }
 
-cocls::async<void> reader(ws::Stream stream, MyPublisher &publisher, const MySubscriber *instance) {
+coro::async<void> reader(ws::Stream stream, MyPublisher &publisher, const MySubscriber *instance) {
     do {
         const ws::Message &msg = co_await stream.read();
         switch (msg.type) {
@@ -102,7 +102,7 @@ cocls::async<void> reader(ws::Stream stream, MyPublisher &publisher, const MySub
     while (true);
 }
 
-cocls::async<void> writer(ws::Stream s, MyPublisher &publisher) {
+coro::async<void> writer(ws::Stream s, MyPublisher &publisher) {
     MySubscriber sbs(publisher);
     reader(s, publisher, &sbs).detach();
     while (co_await sbs.next()) {
@@ -114,7 +114,7 @@ cocls::async<void> writer(ws::Stream s, MyPublisher &publisher) {
 
 }
 
-cocls::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) {
+coro::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) {
     ws::Stream s;
     bool b = co_await ws::Server::accept(s, req);
     if (b) {
@@ -146,7 +146,7 @@ int main(int, char **) {
                 req.content_type(http::ContentType::text_html_utf8);
                 return req.send(page);
             } else {
-                return cocls::future<bool>::set_value(false);
+                return coro::future<bool>::set_value(false);
             }
     });
     auto task = server.start(std::move(listener),http::DefaultLogger([](std::string_view line){

@@ -12,26 +12,26 @@ PeerName MemStream::get_peer_name() const {
 
 
 
-cocls::future<std::string_view> MemStream::read() {
+coro::future<std::string_view> MemStream::read() {
     std::string_view data = read_putback_buffer();
     _cntr.read+=data.size();
-    return cocls::future<std::string_view>::set_value(data);
+    return coro::future<std::string_view>::set_value(data);
 }
 
 std::string_view MemStream::read_nb() {
     return read_putback_buffer();
 }
 
-cocls::future<bool> MemStream::write(std::string_view buffer) {
-    if (_write_closed) return cocls::future<bool>::set_value(false);
+coro::future<bool> MemStream::write(std::string_view buffer) {
+    if (_write_closed) return coro::future<bool>::set_value(false);
     _cntr.write+=buffer.size();
     std::copy(buffer.begin(), buffer.end(), std::back_inserter(_output_buff));
-    return cocls::future<bool>::set_value(true);
+    return coro::future<bool>::set_value(true);
 }
 
-cocls::future<bool> MemStream::write_eof() {
+coro::future<bool> MemStream::write_eof() {
     bool x = std::exchange(_write_closed, true);
-    return cocls::future<bool>::set_value(!x);
+    return coro::future<bool>::set_value(!x);
 }
 
 void MemStream::set_timeouts(const TimeoutSettings &tm) {
@@ -50,7 +50,7 @@ Stream MemStream::create(std::vector<char> input) {
     return Stream(std::make_shared<MemStream>(std::move(input)));
 }
 
-cocls::suspend_point<void> MemStream::shutdown() {
+coro::suspend_point<void> MemStream::shutdown() {
     return {};
 }
 

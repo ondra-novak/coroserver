@@ -7,7 +7,7 @@
 
 using namespace coroserver;
 
-cocls::async<void> co_main(Stream s) {
+coro::async<void> co_main(Stream s) {
     http::ServerRequest req(s);
     while (co_await req.load()) {
         if (req.allow({http::Method::GET,http::Method::HEAD})) {

@@ -14,7 +14,7 @@ class WsConnection: public IConnection  {
 public:
     WsConnection(ws::Stream s):_s(std::move(s)),_awt(*this) {}
 
-    virtual cocls::future<Message> receive() override;
+    virtual coro::future<Message> receive() override;
     virtual bool send(const Message &msg) override;
 
     static PConnection create(ws::Stream s) {
@@ -22,13 +22,13 @@ public:
     }
 
 protected:
-    cocls::suspend_point<void> on_receive(cocls::future<ws::Message> &f) noexcept;
+    coro::suspend_point<void> on_receive(coro::future<ws::Message> &f) noexcept;
     ws::Stream _s;
-    cocls::call_fn_future_awaiter<&WsConnection::on_receive> _awt;
-    cocls::promise<Message> _result;
+    coro::call_fn_future_awaiter<&WsConnection::on_receive> _awt;
+    coro::promise<Message> _result;
 };
 
-inline cocls::future<Message> WsConnection::receive() {
+inline coro::future<Message> WsConnection::receive() {
     return [&](auto promise) {
         _result = std::move(promise);
         _awt << [&]{return _s.read();};
@@ -45,7 +45,7 @@ inline bool WsConnection::send(const Message &msg) {
 }
 
 
-inline cocls::suspend_point<void> WsConnection::on_receive(cocls::future<ws::Message> &f) noexcept {
+inline coro::suspend_point<void> WsConnection::on_receive(coro::future<ws::Message> &f) noexcept {
     try {
         const ws::Message &msg = *f;
         switch (msg.type) {

@@ -135,14 +135,14 @@ bool Parser::finalize() {
 Reader::Reader(Stream s, bool need_fragmented):_s(s), _parser(need_fragmented),_awt(this) {
 }
 
-cocls::future<Message &> Reader::operator ()() {
+coro::future<Message &> Reader::operator ()() {
     if (_parser.is_complete()) _parser.reset();
     return _awt << [&]{return _s.read();};
 }
 
-cocls::suspend_point<void> Reader::read_next(std::string_view &data,  cocls::promise<Message &> &prom) {
+coro::suspend_point<void> Reader::read_next(std::string_view &data,  coro::promise<Message &> &prom) {
 
-    if (data.empty()) return prom(cocls::drop);
+    if (data.empty()) return prom(coro::drop);
 
     bool r = _parser.push_data(data);
     if (r) {
@@ -158,13 +158,13 @@ cocls::suspend_point<void> Reader::read_next(std::string_view &data,  cocls::pro
 Writer::Writer(Stream s, bool client):_s(s), _builder(client),_awt(*this) {
 }
 
-cocls::suspend_point<bool> Writer::operator()(const Message &msg) {
+coro::suspend_point<bool> Writer::operator()(const Message &msg) {
     std::unique_lock lk(_mx);
     if (_closed) return false;
     return do_write(msg, lk);
 }
 
-cocls::suspend_point<bool> Writer::operator()(const Message &msg, cocls::promise<void> sync) {
+coro::suspend_point<bool> Writer::operator()(const Message &msg, coro::promise<void> sync) {
     std::unique_lock lk(_mx);
     if (_closed) {
         lk.unlock();
@@ -174,8 +174,8 @@ cocls::suspend_point<bool> Writer::operator()(const Message &msg, cocls::promise
     return do_write(msg, lk);
 }
 
-cocls::suspend_point<void> Writer::flush(std::unique_lock<std::mutex> &lk) {
-    cocls::suspend_point<void> out;;
+coro::suspend_point<void> Writer::flush(std::unique_lock<std::mutex> &lk) {
+    coro::suspend_point<void> out;;
     for (auto &p: _waiting) out << p();
     _waiting.clear();
     _pending = true;
@@ -185,15 +185,15 @@ cocls::suspend_point<void> Writer::flush(std::unique_lock<std::mutex> &lk) {
     return out;
 }
 
-cocls::suspend_point<bool> Writer::do_write(const Message &msg, std::unique_lock<std::mutex> &lk) {
+coro::suspend_point<bool> Writer::do_write(const Message &msg, std::unique_lock<std::mutex> &lk) {
     if (!_builder(msg, [&](char c){_prepared.push_back(c);})) return false;
     if (msg.type == Type::connClose) _closed = true;
-    return {_pending?cocls::suspend_point<void>():flush(lk), true};
+    return {_pending?coro::suspend_point<void>():flush(lk), true};
 }
 
-cocls::future<void> Writer::sync_for_idle() {
+coro::future<void> Writer::sync_for_idle() {
     std::unique_lock lk(_mx);
-    return [&](cocls::promise<void> p) {
+    return [&](coro::promise<void> p) {
         if (!_pending) {
             p();
         } else {
@@ -202,7 +202,7 @@ cocls::future<void> Writer::sync_for_idle() {
     };
 }
 
-cocls::suspend_point<void> Writer::finish_write(cocls::future<bool> &val) noexcept {
+coro::suspend_point<void> Writer::finish_write(coro::future<bool> &val) noexcept {
     std::unique_lock lk(_mx);
     try {
         bool ret = *val;

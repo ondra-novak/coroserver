@@ -4,24 +4,11 @@
 #define SRC_COROSERVER_SOCKET_SUPPORT_
 
 #include "defs.h"
-#include <cocls/future.h>
+#include <coro.h>
 #include <memory>
 
 
 namespace coroserver {
-
-enum class WaitResult {
-    ///wait operation complete
-    complete = 0,
-    ///wait unsuccessful, timeout elapsed
-    timeout,
-    ///socket as been marked as closing
-    closed,
-    ///an error detected during processing
-    error,
-
-_count};    //contains count of states
-
 
 enum class AsyncOperation {
     ///reading from stream
@@ -32,126 +19,152 @@ enum class AsyncOperation {
     accept,
     ///connect to a server
     connect,
+    ///end of waitable operations
+    _count,
+};
 
-_count};  //contains count of states
 
+///Future contains result of wait operation
+/**
+ * Future can be resolved with true, when operation is complete
+ *
+ * Future can be resolved with false, when operation timeouted
+ *
+ * Future can be resolved with no-value. when connection has been closed
+ *
+ * Future can be resolved with an exception in case of error
+ */
+using WaitResult = coro::future<bool>;
+
+
+void close_socket(const SocketHandle &handle);
 
 
 class IAsyncSupport {
 public:
 
+
     virtual ~IAsyncSupport() = default;
-    virtual cocls::future<WaitResult> io_wait(SocketHandle handle,
-                                             AsyncOperation op,
-                                             std::chrono::system_clock::time_point timeout) = 0;
-    virtual cocls::suspend_point<void> mark_closing(SocketHandle handle) = 0;
+    virtual WaitResult io_wait(SocketHandle handle,
+                     AsyncOperation op,
+                     std::chrono::system_clock::time_point timeout) = 0;
+    virtual void shutdown(SocketHandle handle) = 0;
     virtual void close(SocketHandle handle) = 0;
-    virtual cocls::future<WaitResult> wait_until(std::chrono::system_clock::time_point tp, const void *ident) = 0;
-    virtual cocls::suspend_point<bool> cancel_wait(const void *ident) = 0;
 };
 
-/// Suppport context for sockets. (minimal interface)
+
+
+///Contains asynchronous socket
 /**
- *  Objects working with raw sockets should hold this object, which is count-ref pointer to support object. It
- *  allows to handle asynchronous operations
+ * @tparam SocketHandle type of socket handle (platform depend)
  */
-class AsyncSupport {
+
+class AsyncSocket {
 public:
-    ///initialize object
-    /**
-     * @param ptr pointer to implementation.
-     *
-     * It is unlikely that you will need to construct object directly. In most cases, it is available as result
-     * of function or method
-     */
-    AsyncSupport(std::shared_ptr<IAsyncSupport> ptr):_ptr(std::move(ptr)) {}
 
-    ///Perform asynchronous waiting
+    AsyncSocket() = default;
+    ///construct async socket
     /**
-     * @param handle socket handle which is being monitored for async operation.
-     * @param op asynchronous operation to wait on
-     * @param timeout time-point in a future, when the operation is finished as timeout. Use max() to infinity
-     * waiting.
-     * @return Function return future which is resolved with one of WaitResult.
-     *
-     * @note Compound value handle-op is considered as unique key to a map of pending operations. Calling this
-     * function with duplicated key is UB.
+     * @param h handle socket
+     * @param async_support pointer to async support (aka context)
      */
-    cocls::future<WaitResult> io_wait(SocketHandle handle,
-                                      AsyncOperation op,
-                                      std::chrono::system_clock::time_point timeout) {
-                                        return _ptr->io_wait(handle, op, timeout);
-                                      }
+    AsyncSocket(SocketHandle h, std::shared_ptr<IAsyncSupport> async_support)
+        :_async_support(std::move(async_support)),_h(std::move(h)),_valid(true) {}
+    ///Destroy async socket
+    ~AsyncSocket() {
+        if (_valid) {
+            _async_support->close(_h);
+            std::destroy_at(&_h);
+        }
+    }
+    ///Move
+    AsyncSocket(AsyncSocket &&other)
+        :_async_support(std::move(other._async_support))
+        ,_valid(std::exchange(other._valid, false)) {
+        if (_valid) {
+            std::construct_at(&_h, std::move(other._h));
+            std::destroy_at(&other._h);
+        }
+    }
+    ///Move
+    AsyncSocket &operator=(AsyncSocket &&other) {
+        if (&other != this) {
+            if (_valid) std::destroy_at(&_h);
+            _valid = std::exchange(other._valid, false);
+            std::construct_at(&_h,std::move(other._h));
+            std::destroy_at(&other._h);
+            _async_support = std::move(other._async_support);
+        }
+        return *this;
+    }
 
-    /// Marks socket as closing
+    ///convert to socket handle
+    operator SocketHandle() const {return _h;}
+    ///test validity
+    explicit operator bool() const {return _valid;}
+
+    ///Asynchronous wait
     /**
-     *  This operation affect any pending and further waiting. Any currently pending or future waiting is immediately
-     *  resolved with result WaitResult::closed. It is considered as closed connection regadless on state of the connection. Function
-     *  allows to unblock any pending operation when stream is being closed prematurely.
+     * @param op async operation to wait
+     * @retval true success
+     * @retval false - timeout, never happen here
+     * @retval no-value - connection shutdown
+     * @exception any error detected on socket
+     */
+    coro::future<bool> io_wait(AsyncOperation op) {
+        return io_wait(op, std::chrono::system_clock::time_point::max());
+    }
+    ///Asynchronous wait
+    /**
+     * @param op async operation to wait
+     * @param timeout absolute time point when timeout happen. If the timepoint is
+     * in past, it timeout immediatelly, however, if there is pending event it returns
+     * success.
+     * @retval true success
+     * @retval false timeout
+     * @retval no-value - connection shutdown
+     * @exception any error detected on socket
+     */
+    WaitResult io_wait(AsyncOperation op, std::chrono::system_clock::time_point timeout) {
+        return _async_support->io_wait(_h, op, timeout);
+    }
+    ///Asynchronous wait
+    /**
+     * @param op async operation to wait
+     * @param dur timeout duration
+     * @retval true success
+     * @retval false timeout
+     * @retval no-value - connection shutdown
+     * @exception any error detected on socket
+     */
+    template<typename Rep, typename Period>
+    WaitResult io_wait(AsyncOperation op, std::chrono::duration<Rep, Period> dur) {
+        return io_wait(op, std::chrono::system_clock::now()+dur);
+    }
+    ///Shutdown connection
+    /**
+     * This cancels any async waiting, including any future requests for async waiting.
+     * However, the socket is still valid, and can be used for communition, so
+     * any unread data can be still read.
      *
-     *  @note Any pending coroutines are prepared in returned suspend_point
+     * @note cancel event is distributed in current thread, so any awaiting coroutine
+     * is waken up now. The function returns after cancel is processed by all
+     * awaiting coroutines
      */
-    cocls::suspend_point<void> mark_closing(SocketHandle handle) {
-         return _ptr->mark_closing(handle);
+    void shutdown() {
+        _async_support->shutdown(_h);
     }
-    /// Closes the socket
-    /**
-     *  Do not call standard syscall ::close() on the socket. You need to call this function to close the socket. It also
-     *  releases any remaining resources associated with the socked, that could be created to handle asynchronous operations
-     *
-     *  @note Ensure, that there is no pending operation before the socket is closed. You should call mark_closing() and
-     *  join any coroutines that can work with the handle.
-     *
-     */
-    void close(SocketHandle handle) {
-        _ptr->close(handle);
-    }
-    ///Wait until specified timepoint is reached
-    /**
-     * This is just generic "sleep" helps to implement user level timeouts. The promise
-     * becomes resolved once the timepoint is reached. The waiting can be also canceled
-     * @param tp timepoint to reach
-     * @param ident identifier, to ability to cancel such wait. Can be any arbitrary
-     * value serves as identifier. It is presented as pointer as it is expected, that
-     * pointer to owner will be used as identifier (this)
-     * @return future which resolves one of following values
-     * @retval WaitResult::timeout operation reached specified timeout
-     * @retval WaitResult::complete operation has been canceled (cancel request is complete)
-     * @retval WaitResult::closed operation has been canceled because context has been stopped
-     */
-    cocls::future<WaitResult> wait_until(std::chrono::system_clock::time_point tp, const void *ident) {
-        return _ptr->wait_until(tp,ident);;
-    }
-    ///Wait for specified duration
-    /**
-     * This is just generic "sleep" helps to implement user level timeouts. The promise
-     * becomes resolved once the timepoint is reached. The waiting can be also canceled
-     * @param duration duration. The final timeout is calculated as now()+duration
-     * @param ident identifier, to ability to cancel such wait. Can be any arbitrary
-     * value serves as identifier. It is presented as pointer as it is expected, that
-     * pointer to owner will be used as identifier (this)
-     * @return future which resolves one of following values
-     * @retval WaitResult::timeout operation reached specified timeout
-     * @retval WaitResult::complete operation has been canceled (cancel request is complete)
-     * @retval WaitResult::closed operation has been canceled because context has been stopped
-     */
-    template<typename Dur>
-    cocls::future<WaitResult> wait_for(Dur duration, const void *ident) {
-        return wait_until(std::chrono::system_clock::now()+duration, ident);
-    }
-    ///Cancels specified waiting
-    /**
-     * @param ident identifier of operation. The canceled waiting is resolved as WaitResult::closed
-     * @retval true found and canceled
-     * @retval false not found, probably complete already
-     */
-    cocls::suspend_point<bool> cancel_wait(const void *ident) {
-        return _ptr->cancel_wait(ident);
+
+    AsyncSocket set_socket_handle(SocketHandle h) {
+        return AsyncSocket(h, _async_support);
     }
 
 protected:
-    std::shared_ptr<IAsyncSupport> _ptr;
-
+    std::shared_ptr<IAsyncSupport> _async_support;
+    union {
+        SocketHandle _h;
+    };
+    bool _valid = false;
 };
 
 

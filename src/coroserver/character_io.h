@@ -31,7 +31,7 @@ namespace coroserver {
  object first.
  */
 template<typename Stream>
-class CharacterReader: public cocls::awaiter {
+class CharacterReader: public coro::awaiter {
 public:
     ///construct reader
     CharacterReader(Stream s):_s(s) {}
@@ -103,7 +103,7 @@ public:
 
 protected:
     Stream _s;
-    cocls::future<std::string_view> _fut;
+    coro::future<std::string_view> _fut;
     const char *_ptr = nullptr;
     const char *_end = nullptr;
 };
@@ -137,7 +137,7 @@ public:
     CharacterWriter(Stream s):_s(s) {}
 
     ///awaiter which is returned from write, allows to fast co_await in case of asynchronous access
-    class Awaitable: public cocls::awaiter {
+    class Awaitable: public coro::awaiter {
     public:
         Awaitable(CharacterWriter &owner, bool flush):_owner(owner),_state(flush?flush_req:noflush) {}
         Awaitable(const Awaitable &) = delete;
@@ -197,7 +197,7 @@ public:
             flushed_fail
         };
         State _state;
-        cocls::future<bool> _fut;
+        coro::future<bool> _fut;
     };
 
     ///write the character

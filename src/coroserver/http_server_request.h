@@ -11,9 +11,7 @@
 #include "stream.h"
 #include "http_common.h"
 
-#include <cocls/common.h>
-#include <cocls/future_conv.h>
-#include <cocls/coro_storage.h>
+#include <coro.h>
 
 
 namespace coroserver {
@@ -38,7 +36,7 @@ public:
      * this status. In all cases, keep_alive is disabled, you should disconnect the stream
      * right after response.
      */
-    cocls::future<bool> load();
+    coro::future<bool> load();
 
     ///retrieve method
     Method get_method() const {return _method;}
@@ -183,7 +181,7 @@ public:
      *
      * You should avoid to call function by multiple times
      */
-    cocls::future<Stream> get_body();
+    coro::future<Stream> get_body();
     ///Sends response (status code is set to 200 in case, that status code is not set)
     /**
      * @param body body to send as string. Note that underlying string must remain
@@ -194,21 +192,21 @@ public:
      * @return future for completion
      *
      * @code
-     * cocls::asyn<void> coro(ServerRequest &req) {
+     * coro::asyn<void> coro(ServerRequest &req) {
      *      std::string_view text("text to send");
      *      co_await req.send(text);
      * }
      *
-     * cocls::future<void> not_coro(ServerRequest &req) {
+     * coro::future<void> not_coro(ServerRequest &req) {
      *      std::string_view text("text to send");
      *      return req.send(std::string(text));
      * }
      * @endcode
      *
      */
-    cocls::future<bool> send(std::string_view body);
+    coro::future<bool> send(std::string_view body);
     ///Send response and retrieve stream to send response body
-    cocls::future<Stream> send();
+    coro::future<Stream> send();
     ///Send response prepared in content of std::ostringstream
     /**
      * @param body in stringstream. Function moves the content to the internal buffer
@@ -216,7 +214,7 @@ public:
      * until the completion
      * @return
      */
-    cocls::future<bool> send(std::ostringstream &body);
+    coro::future<bool> send(std::ostringstream &body);
 
     ///Send the string
     /**
@@ -226,13 +224,13 @@ public:
      * @return
      *
      * @code
-     * cocls::future<void> not_coro(ServerRequest &req) {
+     * coro::future<void> not_coro(ServerRequest &req) {
      *      std::string_view text("text to send");
      *      return req.send(std::string(text));
      * }
      * @endcode
      */
-    cocls::future<bool> send(std::string &&body) {
+    coro::future<bool> send(std::string &&body) {
         _user_buffer = std::move(body);
         return send(std::string_view(_user_buffer));
     }
@@ -247,7 +245,7 @@ public:
      *
      * @return
      */
-    cocls::future<bool> send(const char *x) {
+    coro::future<bool> send(const char *x) {
         return send(std::string_view(x));
     }
 
@@ -259,10 +257,10 @@ public:
      * Content-Type, catching, last-modified, etc
      * @return a future
      */
-    cocls::future<bool> send_file(const std::string &path, bool use_chunked = false);
+    coro::future<bool> send_file(const std::string &path, bool use_chunked = false);
 
     template<typename _IOStream, std::size_t buffer = 16384>
-    cocls::future<bool> send_stream(_IOStream stream)  {
+    coro::future<bool> send_stream(_IOStream stream)  {
         Stream s = co_await send();
         char buff[buffer];
         while (!stream.eof()) {
@@ -385,28 +383,28 @@ protected:
     Logger _logger;
 
 
-    cocls::suspend_point<void> load_coro(std::string_view &data, cocls::promise<bool> &res);
-    cocls::future_conv<&ServerRequest::load_coro> _load_awt;
+    coro::suspend_point<void> load_coro(std::string_view &data, coro::promise<bool> &res);
+    coro::future_conv<&ServerRequest::load_coro> _load_awt;
     unsigned int _search_hdr_state = 0;
 
     Stream get_body_coro(bool &res);
-    cocls::future_conv<&ServerRequest::get_body_coro> _get_body_awt;
+    coro::future_conv<&ServerRequest::get_body_coro> _get_body_awt;
 
 
-    cocls::future<bool> discard_body_intr();
+    coro::future<bool> discard_body_intr();
 
-    cocls::suspend_point<void> discard_body_coro(std::string_view &data, cocls::promise<bool> &res);
-    cocls::future_conv<&ServerRequest::discard_body_coro> _discard_body_awt;
+    coro::suspend_point<void> discard_body_coro(std::string_view &data, coro::promise<bool> &res);
+    coro::future_conv<&ServerRequest::discard_body_coro> _discard_body_awt;
 
-    cocls::suspend_point<void> send_resp(bool &, cocls::promise<Stream> &res);
-    cocls::future_conv<&ServerRequest::send_resp> _send_resp_awt;
+    coro::suspend_point<void> send_resp(bool &, coro::promise<Stream> &res);
+    coro::future_conv<&ServerRequest::send_resp> _send_resp_awt;
 
-    cocls::suspend_point<void> send_resp_body(Stream &s, cocls::promise<bool> &res);
-    cocls::future_conv<&ServerRequest::send_resp_body> _send_resp_body_awt;
+    coro::suspend_point<void> send_resp_body(Stream &s, coro::promise<bool> &res);
+    coro::future_conv<&ServerRequest::send_resp_body> _send_resp_body_awt;
     std::string_view _send_body_data;
 
     static bool future_forward(bool &b) {return b;}
-    cocls::future_conv<future_forward> _forward_awt;
+    coro::future_conv<future_forward> _forward_awt;
 
 
 

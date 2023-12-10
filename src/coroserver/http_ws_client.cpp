@@ -41,7 +41,7 @@ static void generate_key_and_digest(std::string &key, std::string &digest) {
 
 }
 
-cocls::future<bool> Client::operator()() {
+coro::future<bool> Client::operator()() {
     return [&](auto promise) {
         _result= std::move(promise);
         std::string key;
@@ -54,7 +54,7 @@ cocls::future<bool> Client::operator()() {
     };
 }
 
-cocls::suspend_point<void> Client::after_send(cocls::future<_Stream> &f) noexcept {
+coro::suspend_point<void> Client::after_send(coro::future<_Stream> &f) noexcept {
     try {
         _Stream s(std::move(*f));
         if (_req.get_status() == 101 && _req["Sec-WebSocket-Accept"] == std::string_view(_digest)) {

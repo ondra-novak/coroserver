@@ -21,7 +21,7 @@ public:
     StaticPage(std::filesystem::path document_root, std::string index_html = "index.html", unsigned int cache_seconds = 0);
 
 
-    cocls::future<bool> operator()(ServerRequest &req, std::string_view vpath) const;
+    coro::future<bool> operator()(ServerRequest &req, std::string_view vpath) const;
 
 protected:
 

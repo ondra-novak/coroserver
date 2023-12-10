@@ -13,7 +13,8 @@
 
 #include "scheduler.h"
 
-#include <cocls/thread_pool.h>
+#include <coro.h>
+
 
 #include <array>
 #include <atomic>
@@ -29,43 +30,35 @@
 namespace coroserver {
 
 
-class Poller_epoll: public IPoller<int> {
+class Poller_epoll: public IPoller {
 public:
 
     using SocketHandle = int;
 
-	Poller_epoll(cocls::thread_pool &pool);
+	Poller_epoll();
 	virtual ~Poller_epoll() override;
 
-	///wait for read, resolve promise when done
-    virtual void async_wait(AsyncOperation op, SocketHandle s, Promise p, std::chrono::system_clock::time_point timeout = std::chrono::system_clock::time_point::max()) override;
+    virtual coro::future<void> start(coro::scheduler &scheduler) override;
+    virtual void stop() override;
 
-    ///cancel read, and all further reads, socket is marked as closed
-    virtual cocls::suspend_point<void> mark_closing(SocketHandle s) override;
 
-    ///cancel all io operations - all sockets are marked as closed
-    virtual cocls::suspend_point<void> mark_closing_all() override;
-
-    ///a handle has been closed
-    virtual void handle_closed(SocketHandle s) override;
-
-    ///timeout wait, use poller as scheduler
-    virtual void schedule(const void *ident, Promise p, std::chrono::system_clock::time_point timeout) override;
-
-    ///cancels specified timer
-    virtual cocls::suspend_point<bool> cancel_schedule(const void *ident) override;
+    virtual WaitResult io_wait(SocketHandle handle,
+                               AsyncOperation op,
+                               std::chrono::system_clock::time_point timeout) override;
+    virtual void shutdown(SocketHandle handle) override;
+    virtual void close(SocketHandle handle) override;
 
 
 protected:
 
-    cocls::async<void> worker(cocls::thread_pool &pool);
+    coro::async<void> worker(coro::scheduler &pool);
 
 
     using Op = AsyncOperation;
 
 	struct Reg {
 		std::chrono::system_clock::time_point timeout;
-		Promise cb;
+		coro::promise<bool> cb;
 	};
 
 	class RegList: public std::array<Reg,  static_cast<int>(Op::_count)>{
@@ -81,25 +74,25 @@ protected:
 	int event_fd;
 
 	std::mutex _mx;
-
 	FDMap fd_map;
 	MarkedClosingMap mclosing_map;
 	std::chrono::system_clock::time_point first_timeout;
+	bool _running = false;
+	bool _request_stop = false;
+	std::condition_variable _cond;
+	coro::scheduler *_current_scheduler = nullptr;
 
-
-	cocls::future<void> _running;
-	std::atomic<bool> _stopped = false;
-	std::atomic<bool> _exit = false;
 
 	void notify();
 	void rearm_fd(bool first_call, FDMap::iterator iter);
 
-	std::chrono::system_clock::time_point clear_timeouts(cocls::suspend_point<void> &spt, std::chrono::system_clock::time_point now);
+	using PendingNotify = std::vector<coro::future<bool>::pending_notify>;
+
+	std::chrono::system_clock::time_point clear_timeouts(PendingNotify &spt, std::chrono::system_clock::time_point now);
 
 
-	Scheduler<Promise> _sch;
 
-
+	void check_still_running();
 
 };
 

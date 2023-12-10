@@ -51,11 +51,11 @@ public:
 
     struct Payload {
         std::string_view text;
-        std::vector<cocls::shared_future<std::vector<char> > > attachments;
+        std::vector<coro::shared_future<std::vector<char> > > attachments;
     };
 
     struct HelloMessage: Payload {
-        cocls::promise<Payload> _response;
+        coro::promise<Payload> _response;
         void accept();
         void accept(std::string_view payload);
         void accept(Payload payload);
@@ -67,9 +67,9 @@ public:
 
     Peer();
 
-    cocls::future<HelloMessage> start_server(PConnection conn);
+    coro::future<HelloMessage> start_server(PConnection conn);
 
-    cocls::future<Payload> start_client(PConnection conn, Payload hello = {});
+    coro::future<Payload> start_client(PConnection conn, Payload hello = {});
 
 
     State get_state() const;
@@ -212,27 +212,27 @@ protected:
 
     PConnection _conn;
 
-    cocls::future<void> _close_future;
-    cocls::promise<void> _close_promise;
+    coro::future<void> _close_future;
+    coro::promise<void> _close_promise;
     std::atomic_flag _closing;
     bool _closed = false;
 
     bool send(Type type, std::string_view id = {}, std::string_view payload = {}, int attachments = 0);
     bool send(Type type, std::string_view id = {}, const Payload &pl = {});
     void start_reader();
-    cocls::suspend_point<void> on_message(cocls::future<Message> &f) noexcept;
+    coro::suspend_point<void> on_message(coro::future<Message> &f) noexcept;
     bool recvTextMessage(std::string_view message);
     bool recvBinaryMessage(std::string_view message);
 
-    void allocate_attachments(std::string_view txtcount, std::vector<cocls::shared_future<std::vector<char> > > &attach);
+    void allocate_attachments(std::string_view txtcount, std::vector<coro::shared_future<std::vector<char> > > &attach);
 
-    cocls::call_fn_future_awaiter<&Peer::on_message> _on_msg_awt;
+    coro::call_fn_future_awaiter<&Peer::on_message> _on_msg_awt;
 
-    std::queue<cocls::promise<std::vector<char> > > _awaited_binary;
-    std::queue<cocls::shared_future<std::vector<char> > > _attach_send_queue;
+    std::queue<coro::promise<std::vector<char> > > _awaited_binary;
+    std::queue<coro::shared_future<std::vector<char> > > _attach_send_queue;
     std::mutex _attach_send_queue_mx;
-    cocls::suspend_point<void> on_attachment_ready(cocls::awaiter *) noexcept;
-    cocls::call_fn_awaiter<&Peer::on_attachment_ready> _att_ready;
+    coro::suspend_point<void> on_attachment_ready(coro::awaiter *) noexcept;
+    coro::call_fn_awaiter<&Peer::on_attachment_ready> _att_ready;
     std::shared_ptr<Peer> _att_ready_peer_ref;
 
 
@@ -241,8 +241,8 @@ protected:
     void on_welcome_message(const std::string_view &version, const Payload &payload);
 
 
-    cocls::promise<Payload> _welcome_response;
-    cocls::promise<HelloMessage> _hello_request;
+    coro::promise<Payload> _welcome_response;
+    coro::promise<HelloMessage> _hello_request;
 
 
 };

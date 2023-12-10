@@ -24,7 +24,7 @@ Peer::State Peer::get_state() const {
     return State::open;
 }
 
-cocls::suspend_point<void> Peer::on_message(cocls::future<Message> &f) noexcept {
+coro::suspend_point<void> Peer::on_message(coro::future<Message> &f) noexcept {
     try {
         bool st = true;
         const Message &msg = *f;
@@ -43,9 +43,9 @@ cocls::suspend_point<void> Peer::on_message(cocls::future<Message> &f) noexcept 
         if (!st) {
             _closed = true;
             _conn->send({MessageType::close,{}});
-            cocls::suspend_point<void> a = _close_promise();
-            a << _hello_request(cocls::drop);
-            a << _welcome_response(cocls::drop);
+            coro::suspend_point<void> a = _close_promise();
+            a << _hello_request(coro::drop);
+            a << _welcome_response(coro::drop);
             return a;
         }
         _on_msg_awt << [&]{return _conn->receive();};
@@ -58,7 +58,7 @@ cocls::suspend_point<void> Peer::on_message(cocls::future<Message> &f) noexcept 
         } catch (...) {
             //empty
         }
-        cocls::suspend_point<void> a = _close_promise(std::current_exception());
+        coro::suspend_point<void> a = _close_promise(std::current_exception());
         a << _hello_request(std::current_exception());
         a << _welcome_response(std::current_exception());
         return a;
@@ -67,18 +67,18 @@ cocls::suspend_point<void> Peer::on_message(cocls::future<Message> &f) noexcept 
 }
 
 
-void Peer::allocate_attachments(std::string_view txtcount, std::vector<cocls::shared_future<std::vector<char> > > &attach) {
+void Peer::allocate_attachments(std::string_view txtcount, std::vector<coro::shared_future<std::vector<char> > > &attach) {
     auto cnt = string2unsigned<unsigned int>(txtcount.begin(), txtcount.end(), 10);
     for (unsigned int i = 0; i < cnt; ++i) {
         attach.push_back(
-                cocls::shared_future<std::vector<char> >([&](auto promise) {
+                coro::shared_future<std::vector<char> >([&](auto promise) {
             _awaited_binary.push(std::move(promise));
         }));
     }
 }
 
 bool Peer::recvTextMessage(std::string_view message) {
-    std::vector<cocls::shared_future<std::vector<char> > > attachments;
+    std::vector<coro::shared_future<std::vector<char> > > attachments;
     try {
         do {
             if (message.empty()) {
@@ -159,7 +159,7 @@ bool Peer::send(Type type, std::string_view id, const Payload &pl) {
     }
 }
 
-cocls::suspend_point<void> Peer::on_attachment_ready(cocls::awaiter *awt) noexcept {
+coro::suspend_point<void> Peer::on_attachment_ready(coro::awaiter *awt) noexcept {
     std::unique_lock  lk(_attach_send_queue_mx);
     while (!_attach_send_queue.empty() && !_closing.test()) {
         auto &f = _attach_send_queue.front();
@@ -240,7 +240,7 @@ void Peer::on_hello_message(const std::string_view &version, const Payload &payl
     if (version == strVersion) throw makeError(ErrorCode::unsupported_version);
     bool b = _hello_request(HelloMessage{payload.text,
         payload.attachments,
-        cocls::make_promise<Payload>([me = shared_from_this()](cocls::future<Payload> &f){
+        coro::make_promise<Payload>([me = shared_from_this()](coro::future<Payload> &f){
             try {
                 const Payload &p = *f;
                 me->send(Type::welcome, {}, p);
@@ -263,7 +263,7 @@ void Peer::on_welcome_message(const std::string_view &version, const Payload &pa
 
 
 
-cocls::future<Peer::HelloMessage> Peer::start_server(PConnection conn) {
+coro::future<Peer::HelloMessage> Peer::start_server(PConnection conn) {
     return [&](auto promise) {
         _hello_request = std::move(promise);
         _conn = std::move(conn);
@@ -271,7 +271,7 @@ cocls::future<Peer::HelloMessage> Peer::start_server(PConnection conn) {
     };
 }
 
-cocls::future<Peer::Payload> Peer::start_client(PConnection conn, Payload hello) {
+coro::future<Peer::Payload> Peer::start_client(PConnection conn, Payload hello) {
     return [&](auto promise) {
         _welcome_response = std::move(promise);
         _conn = std::move(conn);

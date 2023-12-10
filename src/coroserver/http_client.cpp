@@ -22,7 +22,7 @@ Client::Client(Config cfg, StaticHeaders hdrs)
 }
 
 
-cocls::future<ClientRequestParams> Client::open(Method method,std::string_view url) {
+coro::future<ClientRequestParams> Client::open(Method method,std::string_view url) {
     ConnectionFactory *fact = nullptr;
     if (url.compare(0, 7, "http://") == 0) {
         fact = &_cfg.http;

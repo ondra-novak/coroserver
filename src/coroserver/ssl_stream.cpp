@@ -21,9 +21,9 @@ Stream::Stream(_Stream target, Context ctx):AbstractProxyStream(target.getStream
 }
 
 
-cocls::future<std::string_view> Stream::read() {
+coro::future<std::string_view> Stream::read() {
     std::string_view tmp = AbstractStream::read_putback_buffer();
-    if (!tmp.empty()) return cocls::future<std::string_view>::set_value(tmp);
+    if (!tmp.empty()) return coro::future<std::string_view>::set_value(tmp);
 
     return run_ssl_io<std::string_view>(_rdstor, [this](std::string_view &ret) mutable {
         int r = SSL_read(_ssl, _rdbuff.data(), _rdbuff.size());
@@ -34,7 +34,7 @@ cocls::future<std::string_view> Stream::read() {
         return 0;
     },tmp);
 }
-cocls::future<bool> Stream::write(std::string_view data) {
+coro::future<bool> Stream::write(std::string_view data) {
     return run_ssl_io<bool>(_wrstor, [this,data = std::string_view(data)](bool &ret) mutable {
         //write up 16384 bytes as the max TLS packet size is that size
         int r =  SSL_write(_ssl, data.data(), std::min<std::size_t>(data.size(),16384));
@@ -113,7 +113,7 @@ Stream::~Stream() {
 }
 
 
-cocls::future<bool> Stream::write_eof() {
+coro::future<bool> Stream::write_eof() {
     if (_state == established) {
         return run_ssl_io<bool>(_wrstor, [this](bool &b){
             _state = closing;
@@ -121,12 +121,12 @@ cocls::future<bool> Stream::write_eof() {
             return SSL_shutdown(_ssl);
         },false);
     } else {
-        return cocls::future<bool>::set_value(true);
+        return coro::future<bool>::set_value(true);
     }
 }
 
 template<typename Ret, typename Fn>
-cocls::with_allocator<cocls::reusable_storage, cocls::async<Ret> > Stream::run_ssl_io(cocls::reusable_storage &, Fn fn, Ret failRet) {
+coro::with_allocator<coro::reusable_storage, coro::async<Ret> > Stream::run_ssl_io(coro::reusable_storage &, Fn fn, Ret failRet) {
     std::unique_lock lk(_mx);
     Ret retval = failRet;
     bool rep = true;
@@ -196,7 +196,7 @@ cocls::with_allocator<cocls::reusable_storage, cocls::async<Ret> > Stream::run_s
 }
 
 
-cocls::generator<_Stream> Stream::accept(cocls::generator<_Stream> gen, Context ctx, cocls::function<void()> ssl_error) {
+coro::generator<_Stream> Stream::accept(coro::generator<_Stream> gen, Context ctx, coro::function<void()> ssl_error) {
     bool b = co_await gen.next();
     while (b) {
         try {

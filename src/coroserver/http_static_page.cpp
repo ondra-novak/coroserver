@@ -21,14 +21,14 @@ StaticPage::StaticPage(std::filesystem::path document_root, std::string index_ht
 {
 }
 
-cocls::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view path) const {
+coro::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view path) const {
     auto p = _doc_root;
     {
         bool addindex = true;
         auto splt = split_path(path);
         std::string_view part = splt();
         while (!part.empty()) {
-            if (part == "..") return cocls::future<bool>::set_value();
+            if (part == "..") return coro::future<bool>::set_value();
             if (part != ".") {
                 p/=part;
                 addindex = false;
@@ -41,7 +41,7 @@ cocls::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view
     std::error_code ec;
     auto wt = std::filesystem::last_write_time(p, ec);
     if (ec) {
-        return cocls::future<bool>::set_value();
+        return coro::future<bool>::set_value();
     }
 
     auto etag = "\""+ std::to_string(
@@ -60,7 +60,7 @@ cocls::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view
     std::string fp=p;
 
     std::ifstream in(fp);
-    if (!in) return cocls::future<bool>::set_value(false);
+    if (!in) return coro::future<bool>::set_value(false);
 
     in.seekg(0, std::ios::end);
     auto sz = in.tellg();

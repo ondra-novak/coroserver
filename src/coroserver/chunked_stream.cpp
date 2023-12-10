@@ -15,17 +15,17 @@ ChunkedStream::ChunkedStream(std::shared_ptr<IStream> proxied, bool allow_read, 
 
 }
 
-cocls::future<std::string_view> ChunkedStream::read() {
+coro::future<std::string_view> ChunkedStream::read() {
     auto buff = read_putback_buffer();
-    if (!buff.empty() || _rd_state == ReadState::eof) return cocls::future<std::string_view>::set_value(buff);
-    return [&](cocls::promise<std::string_view> p) {
+    if (!buff.empty() || _rd_state == ReadState::eof) return coro::future<std::string_view>::set_value(buff);
+    return [&](coro::promise<std::string_view> p) {
         _read_result = std::move(p);
         _read_awt << [&]{return _proxied->read();};
     };
 
 }
 
-cocls::suspend_point<void> ChunkedStream::join_read(cocls::future<std::string_view> &f) noexcept {
+coro::suspend_point<void> ChunkedStream::join_read(coro::future<std::string_view> &f) noexcept {
 
     auto error = []{
             throw std::runtime_error("Invalid chunk format");
@@ -142,19 +142,19 @@ static void hex2str(std::size_t sz, std::string &out) {
     }
 }
 
-cocls::future<bool> ChunkedStream::write(std::string_view buffer) {
-    if (_eof_written) return cocls::future<bool>::set_value(false);
+coro::future<bool> ChunkedStream::write(std::string_view buffer) {
+    if (_eof_written) return coro::future<bool>::set_value(false);
     assert(_data_to_write.empty() && "Write is still pending");
     _data_to_write = buffer;
     hex2str(buffer.size(), _new_chunk_write);
     _new_chunk_write.append("\r\n");
-    return [&](cocls::promise<bool> p) {
+    return [&](coro::promise<bool> p) {
         _write_result = std::move(p);
         _write_awt << [&]{return _proxied->write(_new_chunk_write);};
     };
 }
 
-cocls::suspend_point<void> ChunkedStream::join_write(cocls::future<bool> &f) noexcept {
+coro::suspend_point<void> ChunkedStream::join_write(coro::future<bool> &f) noexcept {
     try {
         bool res = f.value();
         if (res && !_data_to_write.empty()) {
@@ -172,16 +172,16 @@ cocls::suspend_point<void> ChunkedStream::join_write(cocls::future<bool> &f) noe
     }
 }
 
-cocls::future<bool> ChunkedStream::write_eof() {
+coro::future<bool> ChunkedStream::write_eof() {
     _eof_written = true;
     _new_chunk_write.append("0\r\n\r\n");
-    return [&](cocls::promise<bool> p) {
+    return [&](coro::promise<bool> p) {
         _write_result = std::move(p);
         _write_awt << [&]{return _proxied->write(_new_chunk_write);};
     };
 }
 #if 0
-cocls::generator<std::string_view> ChunkedStream::start_reader() {
+coro::generator<std::string_view> ChunkedStream::start_reader() {
     std::size_t chunk_size = 0;
     bool next_chunk = false;
     unsigned int hex_table[32] = {

@@ -4,145 +4,148 @@
 #include <sys/socket.h>
 namespace coroserver {
 
-
-SocketStream::SocketStream(AsyncSupport context, SocketHandle h, PeerName peer, TimeoutSettings tms)
+SocketStream::SocketStream(AsyncSocket socket, PeerName peer, TimeoutSettings tms)
 :AbstractStreamWithMetadata(std::move(tms))
-,_ctx(std::move(context))
-,_h(h)
-,_peer(std::move(peer))
-,_reader(start_read())
-,_writer(start_write())
-{
-
+,_socket(std::move(socket))
+,_peer(std::move(peer)) {
+    coro::target_member_fn_activation<&SocketStream::read_completion>(_wait_read_target, this);
+    coro::target_member_fn_activation<&SocketStream::write_completion>(_wait_write_target, this);
 }
 
-SocketStream::~SocketStream() {
-    _ctx.close(_h);
-}
-cocls::generator<std::string_view> SocketStream::start_read() {
-    while (true) {
-        std::string_view data;
-        while (!_is_eof && data.empty()) {
-            _read_buffer.resize(_new_buffer_size);
-            int r = ::recv(_h, _read_buffer.data(), _read_buffer.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
-            if (r > 0) {
-                _cntr.read+=r;
-                std::size_t sz = static_cast<std::size_t>(r);
-                data = std::string_view(_read_buffer.data(), sz);
-                bool was_full = sz == _read_buffer.size();
-                if (_last_read_full) {
-                    _new_buffer_size = _last_read_full+r;
-                }
-                _last_read_full = was_full?_read_buffer.size():0;
-
-            } else if (r == 0) {
-                _is_eof = true;
-            } else {
-                int err = errno;
-                if (err == EWOULDBLOCK || err == EAGAIN) {
-                    _last_read_full = 0;
-                    WaitResult w = co_await _ctx.io_wait(_h,AsyncOperation::read,
-                            _tms.from_duration(_tms.read_timeout_ms));
-                    switch (w) {
-                        case WaitResult::closed:
-                            _is_eof = true;
-                            break;
-                        case WaitResult::timeout:
-                            _is_timeout = true;
-                            co_yield std::string_view();
-                            _is_timeout = false;
-                        default:
-                            break;
-                    }
-                } else {
-                    throw std::system_error(err, std::system_category(), "recv()");
-                }
-            }
+bool SocketStream::read_begin(std::string_view &buff) {
+    buff = this->read_putback_buffer();
+    if (!buff.empty() || _is_eof) return true;
+    _read_buffer.resize(_new_buffer_size);
+    int r = ::recv(_socket, _read_buffer.data(), _read_buffer.size(), MSG_DONTWAIT| MSG_NOSIGNAL);
+    if (r>0) {
+        buff = std::string_view(_read_buffer.data(), r);
+        if (buff.size() == _read_buffer.size()) {
+            _new_buffer_size = _new_buffer_size*3/2;
         }
-        co_yield data;
+        return true;
+    } else if (r<0) {
+        int e = errno;
+        if (e == EWOULDBLOCK || e == EAGAIN) {
+            return false;
+        } else {
+            throw std::system_error(e, std::system_category(), "recv failed");
+        }
+    } else {
+        _is_eof = true;
+        return true;
     }
+
 }
 
-cocls::future<std::string_view> SocketStream::read() {
-    auto buff = read_putback_buffer();
-    if (!buff.empty() || _reader.done()) return cocls::future<std::string_view>::set_value(buff);
-    return [&]{return _reader();};
+coro::future<std::string_view> SocketStream::read() {
+    std::string_view buff;
+    if (read_begin(buff)) return buff;
+    return [&](auto p) {
+        _read_promise = std::move(p);
+        _wait_read_result << [&]{return _socket.io_wait(AsyncOperation::read,
+                TimeoutSettings::from_duration(_tms.read_timeout_ms));};
+        _wait_read_result.register_target(_wait_read_target);
+    };
 }
 
 std::string_view SocketStream::read_nb() {
-    auto buff = read_putback_buffer();
-    if (!buff.empty() || _is_eof) return buff;
-    int r = ::recv(_h, _read_buffer.data(), _read_buffer.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
-    if (r >= 0) {
-        _is_eof = r == 0;
-        _cntr.read+=r;
-        buff = std::string_view(_read_buffer.data(), r);
-        return buff;
-    } else {
-        int err = errno;
-        if (err == EWOULDBLOCK || err == EAGAIN) {
-            return buff;
+    std::string_view buff;
+    read_begin(buff);
+    return buff;
+}
+
+void SocketStream::read_completion(coro::future<bool> *f) noexcept {
+    try {
+        if (f->has_value()) {
+            bool st = *f;
+            if (st) {
+                _read_promise(read_nb());
+            } else {
+                _read_promise();
+            }
         } else {
-            throw std::system_error(err, std::system_category(), "recv()");
+            _is_eof = true;
+            _read_promise();
         }
+    } catch (...) {
+        _read_promise.reject();
     }
 }
 
 bool SocketStream::is_read_timeout() const {
-    return _is_timeout;
+    return !_is_eof;
 }
 
-cocls::future<bool> SocketStream::write(std::string_view buffer) {
-    if (_writer.done()) return cocls::future<bool>::set_value(false);
-    return [&]{return _writer(buffer);};
+coro::future<bool> SocketStream::write(std::string_view buffer) {
+    return [&](auto p) {
+        _write_promise = std::move(p);
+        _write_buffer = buffer;
+        write_begin();
+    };
 }
-
-cocls::future<bool> SocketStream::write_eof() {
-    if (_is_closed) return cocls::future<bool>::set_value(false);
-    ::shutdown(_h, SHUT_WR);
-    _is_closed = true;
-    return cocls::future<bool>::set_value(true);
-}
-
-cocls::suspend_point<void> SocketStream::shutdown() {
-    _is_closed = true;
-    _is_eof = true;
-    _is_timeout = false;
-    return _ctx.mark_closing(_h);
-}
-
-cocls::generator<bool, std::string_view> SocketStream::start_write() {
-    std::string_view buff = co_yield nullptr;
-    while (true) {
-        while (!_is_closed && !buff.empty()) {
-            int r = ::send(_h, buff.data(), buff.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
-            if (r >= 0) {
-                _cntr.write+=r;
-                buff = buff.substr(r);
-                _is_closed = r == 0;
-            } else {
-                int err = errno;
-                if (err == EWOULDBLOCK || err == EAGAIN) {
-                    WaitResult w = co_await _ctx.io_wait(_h, AsyncOperation::write,
-                            _tms.from_duration(_tms.write_timeout_ms));
-                    switch(w) {
-                        case WaitResult::timeout:
-                        case WaitResult::closed:
-                            _is_closed = true;
-                            break;
-                        default:
-                            break;
-                    }
-                } else if (err == EPIPE) {
-                    _is_closed = true;
-                } else {
-                    throw std::system_error(err, std::system_category(), "send()");
-                }
+void SocketStream::write_begin() {
+    if (_is_closed) {
+        _write_promise(false);
+        return;
+    }
+    int r;
+    do {
+        r = ::send(_socket, _write_buffer.data(), _write_buffer.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
+        if (r > 0) {
+            auto sub = _write_buffer.substr(r);
+            if (sub.empty()) {
+                _write_promise(true);
+                return ;
             }
+            _write_buffer = sub;
         }
-        buff = co_yield !_is_closed;
+    } while (r > 0);
+    if (r < 0) {
+        int e = errno;
+        if (e == EWOULDBLOCK|| e == EAGAIN) {
+            _wait_write_result << [&]{return _socket.io_wait(AsyncOperation::write,
+                    TimeoutSettings::from_duration(_tms.write_timeout_ms));};
+            _wait_write_result.register_target(_wait_write_target);
+        } else if (e == EPIPE) {
+            _is_closed = true;
+            _write_promise(false);
+        } else {
+            throw std::system_error(e, std::system_category(), "send failed");
+        }
+    } else {
+        throw std::system_error(EPIPE, std::system_category(), "send returned 0");
     }
 }
+
+void SocketStream::write_completion(coro::future<bool> *f) noexcept {
+    try {
+        if (f->has_value()) {
+            bool st = *f;
+            if (st) {
+                write_begin();
+            } else {
+                _write_promise(false);
+            }
+        } else {
+            _is_closed = true;
+            _write_promise(false);
+        }
+    } catch (...) {
+        _write_promise.reject();
+    }
+}
+
+coro::future<bool> SocketStream::write_eof() {
+    if (_is_closed) return false;
+    ::shutdown(_socket, SHUT_WR);
+    _is_closed = true;
+    return true;
+}
+
+void SocketStream::shutdown() {
+    return _socket.shutdown();
+}
+
 
 SocketStream::Counters SocketStream::get_counters() const noexcept {
     return _cntr;
