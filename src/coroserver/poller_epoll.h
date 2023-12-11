@@ -51,7 +51,6 @@ public:
 
 protected:
 
-    coro::async<void> worker(coro::scheduler &pool);
 
 
     using Op = AsyncOperation;
@@ -68,6 +67,7 @@ protected:
 
 	using FDMap = std::unordered_map<SocketHandle, RegList>;
 	using MarkedClosingMap = std::set<SocketHandle>;
+    using PendingNotify = std::vector<coro::future<bool>::pending_notify>;
 
 
 	int epoll_fd;
@@ -81,15 +81,20 @@ protected:
 	bool _request_stop = false;
 	std::condition_variable _cond;
 	coro::scheduler *_current_scheduler = nullptr;
+	coro::scheduler::unblock_target _ublock_trg;
+	coro::promise<void> _end_promise;
+    PendingNotify ntf;
+
 
 
 	void notify();
 	void rearm_fd(bool first_call, FDMap::iterator iter);
 
-	using PendingNotify = std::vector<coro::future<bool>::pending_notify>;
 
 	std::chrono::system_clock::time_point clear_timeouts(PendingNotify &spt, std::chrono::system_clock::time_point now);
 
+
+	void worker() noexcept;
 
 
 	void check_still_running();

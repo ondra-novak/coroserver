@@ -51,7 +51,7 @@ ContextIOImpl::ContextIOImpl(std::unique_ptr<coro::scheduler> sch)
 
 ContextIOImpl::~ContextIOImpl() {
     _disp->stop();
-    _disp_run.get();
+    _scheduler->await(_disp_run);
 }
 
 WaitResult ContextIOImpl::io_wait(SocketHandle handle,

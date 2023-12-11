@@ -63,7 +63,18 @@ coro::future<void> Poller_epoll::start(coro::scheduler &scheduler) {
         if (_running) throw std::logic_error("Already running");
         _running = true;
         _request_stop = false;
-        return scheduler.execute(worker(scheduler));
+        _current_scheduler = &scheduler;
+        coro::target_simple_activation(_ublock_trg, [&](coro::scheduler *sch){
+            notify();
+            sch->register_unblock(_ublock_trg);
+        });
+        scheduler.register_unblock(_ublock_trg);
+
+        return [&](auto prom) {
+            _end_promise = std::move(prom);
+            scheduler.schedule([&]{worker();});
+        };
+
     } catch (...) {
         return coro::future<void>(std::current_exception());
     }
@@ -80,6 +91,7 @@ void Poller_epoll::stop() {
          }
          std::swap(tmp ,fd_map);
          _request_stop = true;
+         _current_scheduler->unregister_unblock(_ublock_trg);
          notify();
      }
 }
@@ -226,109 +238,98 @@ std::chrono::system_clock::time_point Poller_epoll::clear_timeouts(PendingNotify
 }
 
 
-
-coro::async<void> Poller_epoll::worker(coro::scheduler &sch) {
+void Poller_epoll::worker() noexcept {
     std::unique_lock lock(_mx);
+
     try {
-
-        PendingNotify ntf;
-        _current_scheduler = &sch;
         auto now = std::chrono::system_clock::now();
-        bool any_queued = true;
-        while (!_request_stop) {
-            //release current thread, if there is any queued coroutines
-            if (any_queued) {
-                lock.unlock();
-                co_await sch;
-                lock.lock();
-            }
-            epoll_event events[16];
-            int r;
 
-            do {
-                int timeout = -1;
-                any_queued = !sch.is_idle();
-                //ask the pool, if there is a task in queue
-                if (any_queued) {
-                    //this prevents deadlock when threads are exhausted. So do not
-                    //perform blocking operation
-                    //so just check epoll without timeout
-                    timeout = 0;
-                } else {
-                    //if not, we can continue in blocking operation
-                    if (first_timeout == std::chrono::system_clock::time_point::max()) {
-                        timeout = -1;
-                    } else if (first_timeout < now) {
-                        timeout = 0;
-                    } else {
-                        timeout = std::chrono::duration_cast<std::chrono::milliseconds>(first_timeout - now).count();
-                    }
-                }
-                lock.unlock();
-                r = epoll_wait(epoll_fd, events, 16, timeout);
-                if (r < 0) {
-                    int e = errno;
-                    if (e != EINTR) {
-                        throw std::system_error(e, std::generic_category(), "epoll_wait");
-                    }
-                }
-                lock.lock();
-            } while (r < 0);
-            now = std::chrono::system_clock::now();
+        epoll_event events[16];
+        int r;
 
-            ntf.clear();
-
-            if (r == 0) {
-                first_timeout = clear_timeouts(ntf, now);
+        do {
+            int timeout = -1;
+            auto intr = _current_scheduler->get_idle_interval();
+            auto xtm = std::min(intr, first_timeout);
+            //if not, we can continue in blocking operation
+            if (xtm == std::chrono::system_clock::time_point::max()) {
+                timeout = -1;
+            } else if (xtm < now) {
+                timeout = 0;
             } else {
-                for (int i = 0; i < r; i++) {
-                    auto &e = events[i];
-                    int fd = e.data.fd;
-                    if (fd != event_fd) {
-                        auto iter = fd_map.find(fd);
-                        if (iter != fd_map.end()) {
-                            RegList &regs = fd_map[fd];
-                            if (e.events & EPOLLERR) {
-                                for (auto &x: regs) {
-                                    //any error on socket
-                                    //is reported as complete
-                                    //because the error is also reported during futher socket operation
-                                    ntf.push_back(x.cb(true));
-                                }
-                            }
-                            if (e.events & EPOLLIN) {
-                                auto &xa = regs[static_cast<int>(Op::accept)];
-                                auto &xr = regs[static_cast<int>(Op::read)];
-                                ntf.push_back(xa.cb(true));
-                                ntf.push_back(xr.cb(true));
-                            }
-                            if (e.events & EPOLLOUT) {
-                                auto &xc = regs[static_cast<int>(Op::connect)];
-                                auto &xw = regs[static_cast<int>(Op::write)];
-                                ntf.push_back(xc.cb(true));
-                                ntf.push_back(xw.cb(true));
-                            }
-                            rearm_fd(false, iter);
-                        }
-
-                    }
-                }
-                for (auto &x: ntf) {
-                    sch.schedule(std::move(x));
+                timeout = std::chrono::duration_cast<std::chrono::milliseconds>(xtm - now).count();
+            }
+            lock.unlock();
+            r = epoll_wait(epoll_fd, events, 16, timeout);
+            if (r < 0) {
+                int e = errno;
+                if (e != EINTR) {
+                    throw std::system_error(e, std::generic_category(), "epoll_wait");
                 }
             }
-            any_queued = !sch.is_idle();
+            lock.lock();
+        } while (r < 0);
+        now = std::chrono::system_clock::now();
+
+        ntf.clear();
+
+        if (r == 0) {
+            first_timeout = clear_timeouts(ntf, now);
+        } else {
+            for (int i = 0; i < r; i++) {
+                auto &e = events[i];
+                int fd = e.data.fd;
+                if (fd != event_fd) {
+                    auto iter = fd_map.find(fd);
+                    if (iter != fd_map.end()) {
+                        RegList &regs = fd_map[fd];
+                        if (e.events & EPOLLERR) {
+                            for (auto &x: regs) {
+                                //any error on socket
+                                //is reported as complete
+                                //because the error is also reported during futher socket operation
+                                ntf.push_back(x.cb(true));
+                            }
+                        }
+                        if (e.events & EPOLLIN) {
+                            auto &xa = regs[static_cast<int>(Op::accept)];
+                            auto &xr = regs[static_cast<int>(Op::read)];
+                            ntf.push_back(xa.cb(true));
+                            ntf.push_back(xr.cb(true));
+                        }
+                        if (e.events & EPOLLOUT) {
+                            auto &xc = regs[static_cast<int>(Op::connect)];
+                            auto &xw = regs[static_cast<int>(Op::write)];
+                            ntf.push_back(xc.cb(true));
+                            ntf.push_back(xw.cb(true));
+                        }
+                        rearm_fd(false, iter);
+                    }
+
+                }
+            }
+            for (auto &x: ntf) {
+                if (x) _current_scheduler->schedule(std::move(x));
+            }
         }
-    } catch (const coro::broken_promise_exception &) {
-        //thread pool has been stoped, we can't run further
+        if (_request_stop) {
+            _running = false;
+            _current_scheduler = nullptr;
+            lock.unlock();
+            _cond.notify_all();
+            _end_promise();
+
+        } else {
+            _current_scheduler->schedule([&]{worker();});
+        }
+    } catch (...) {
+        _running = false;
+        _current_scheduler = nullptr;
+        lock.unlock();
+        _cond.notify_all();
+        _end_promise.reject();
     }
-    _current_scheduler = nullptr;
-    _running = false;
-    _cond.notify_all();
-
 }
-
-
 
 
 void Poller_epoll::close(SocketHandle handle) {

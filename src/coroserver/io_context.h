@@ -100,7 +100,7 @@ public:
      */
     static ContextIO create(coro::scheduler &sch);
     static ContextIO create(std::unique_ptr<coro::scheduler> sch);
-        static ContextIO create(std::size_t iothreads = 0);
+        static ContextIO create(std::size_t iothreads = 2);
 
 
     coro::scheduler &get_scheduler()  {
