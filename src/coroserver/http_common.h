@@ -309,8 +309,7 @@ using QueryFieldMap = StaticLookupTable<std::string_view, QueryValueRef<T>, N>;
  * @param content content
  * @param fn function which receives key/value pair
  */
-template<typename Fn>
-CXX20_REQUIRES(std::invocable<Fn, std::string, std::string>)
+template<std::invocable<std::string, std::string> Fn>
 void parse_form_urlencoded_enum_kv(std::string_view content, Fn &&fn) {
     std::string key;
     std::string value;
@@ -466,8 +465,7 @@ void build_query(const T &source, const QueryFieldMap<T, N> &map, Fn &&output) {
  * character '?'. Anything before this character is ignored
  * @param fn function called for each pair
  */
-template<typename Fn>
-CXX20_REQUIRES(std::invocable<Fn, std::string, std::string>)
+template<std::invocable<std::string, std::string> Fn>
 std::size_t parse_query_enum_kv(std::string_view vpath, Fn &&fn) {
     if (vpath.empty()) return 0;
     vpath = vpath.substr(std::min(vpath.length()-1, vpath.find('?'))+1);

@@ -2,30 +2,31 @@
 
 #include "character_io.h"
 
+#include <cassert>
 namespace coroserver {
 
 ChunkedStream::ChunkedStream(std::shared_ptr<IStream> proxied, bool allow_read, bool allow_write)
 :AbstractProxyStream(std::move(proxied))
-,_write_awt(*this)
 , _eof_written (!allow_write)
-, _read_awt(*this)
 ,_rd_state (allow_read?ReadState::number:ReadState::eof)
 {
-
+    coro::target_member_fn_activation<&ChunkedStream::join_read>(_read_fut_target, this);
+    coro::target_member_fn_activation<&ChunkedStream::join_write>(_write_fut_target, this);
 
 }
 
 coro::future<std::string_view> ChunkedStream::read() {
     auto buff = read_putback_buffer();
-    if (!buff.empty() || _rd_state == ReadState::eof) return coro::future<std::string_view>::set_value(buff);
+    if (!buff.empty() || _rd_state == ReadState::eof) return buff;
     return [&](coro::promise<std::string_view> p) {
         _read_result = std::move(p);
-        _read_awt << [&]{return _proxied->read();};
+        _read_fut << [&]{return _proxied->read();};
+        _read_fut.register_target(_read_fut_target);
     };
 
 }
 
-coro::suspend_point<void> ChunkedStream::join_read(coro::future<std::string_view> &f) noexcept {
+void ChunkedStream::join_read(coro::future<std::string_view> *f) noexcept {
 
     auto error = []{
             throw std::runtime_error("Invalid chunk format");
@@ -36,7 +37,7 @@ coro::suspend_point<void> ChunkedStream::join_read(coro::future<std::string_view
     };
 
     try {
-        std::string_view buff = f.value();
+        std::string_view buff = *f;
         if (buff.empty()) {
             _rd_state = ReadState::eof;
             _read_result(buff);
@@ -51,7 +52,8 @@ coro::suspend_point<void> ChunkedStream::join_read(coro::future<std::string_view
                         std::string_view out = result.substr(0,_chunk_size);
                         _proxied->put_back(result.substr(out.size()));
                         _chunk_size-=out.size();
-                        return _read_result(out);
+                        _read_result(out);
+                        return;
                     } else {
                         _rd_state = ReadState::r1;
                     }break;
@@ -111,7 +113,8 @@ coro::suspend_point<void> ChunkedStream::join_read(coro::future<std::string_view
                 case ReadState::eof: {
                         std::string_view pb(buff.data()+std::distance(beg, itr), std::distance(itr,end));
                         _proxied->put_back(pb);
-                        return _read_result();
+                        _read_result();
+                        return;
                 }
                 default:
                     error();
@@ -120,15 +123,16 @@ coro::suspend_point<void> ChunkedStream::join_read(coro::future<std::string_view
             }
         }
 
-        if (_rd_state == ReadState::eof) return _read_result();
+        if (_rd_state == ReadState::eof) {
+            _read_result();
+            return;
+        }
 
-        _read_awt << [&]{return _proxied->read();};
-        return {};
-
-
+        _read_fut << [&]{return _proxied->read();};
+        _read_fut.register_target(_read_fut_target);
 
     } catch (...) {
-        return _read_result(std::current_exception());
+        _read_result.reject();
     }
 }
 
@@ -143,32 +147,33 @@ static void hex2str(std::size_t sz, std::string &out) {
 }
 
 coro::future<bool> ChunkedStream::write(std::string_view buffer) {
-    if (_eof_written) return coro::future<bool>::set_value(false);
+    if (_eof_written) return false;
     assert(_data_to_write.empty() && "Write is still pending");
     _data_to_write = buffer;
     hex2str(buffer.size(), _new_chunk_write);
     _new_chunk_write.append("\r\n");
     return [&](coro::promise<bool> p) {
         _write_result = std::move(p);
-        _write_awt << [&]{return _proxied->write(_new_chunk_write);};
+        _write_fut << [&]{return _proxied->write(_new_chunk_write);};
+        _write_fut.register_target(_write_fut_target);
     };
 }
 
-coro::suspend_point<void> ChunkedStream::join_write(coro::future<bool> &f) noexcept {
+void ChunkedStream::join_write(coro::future<bool> *f) noexcept {
     try {
-        bool res = f.value();
+        bool res = *f;
         if (res && !_data_to_write.empty()) {
             _new_chunk_write.clear();
             _new_chunk_write.append("\r\n");
             auto d = _data_to_write;
             _data_to_write = {};
-            _write_awt << [&]{return _proxied->write(d);};
-            return {};
+            _write_fut << [&]{return _proxied->write(d);};
+            _write_fut.register_target(_write_fut_target);
         } else {
-            return _write_result(res);
+            _write_result(res);
         }
     } catch (...) {
-        return _write_result(std::current_exception());
+        _write_result.reject();
     }
 }
 
@@ -177,55 +182,11 @@ coro::future<bool> ChunkedStream::write_eof() {
     _new_chunk_write.append("0\r\n\r\n");
     return [&](coro::promise<bool> p) {
         _write_result = std::move(p);
-        _write_awt << [&]{return _proxied->write(_new_chunk_write);};
+        _write_fut << [&]{return _proxied->write(_new_chunk_write);};
+        _write_fut.register_target(_write_fut_target);
     };
 }
-#if 0
-coro::generator<std::string_view> ChunkedStream::start_reader() {
-    std::size_t chunk_size = 0;
-    bool next_chunk = false;
-    unsigned int hex_table[32] = {
-          //0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
-            0,10,11,12,13,14,15,16, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0
-    };
 
-    auto error = []{
-            throw std::runtime_error("Invalid chunk format");
-    };
-
-    while (true) {
-        if (chunk_size) {
-            std::string_view buff = co_await _proxied->read();
-            std::string_view res = buff.substr(0,chunk_size);
-            _proxied->put_back(buff.substr(res.size()));
-            chunk_size-=res.size();
-            co_yield res;
-        } else {
-            CharacterReader<Stream> rd(_proxied);
-            if (next_chunk) {
-                if ('\r' != co_await rd) error();
-                if ('\n' != co_await rd) error();
-            }
-            int c = co_await rd;
-            while (std::isxdigit(c)){
-                chunk_size = chunk_size * 16 + hex_table[c & 0x1F];
-                c = co_await rd;
-            }
-            if (c != '\r') error();
-            c = co_await rd;
-            if (c != '\n') error();
-            next_chunk = true;
-            if (!chunk_size) {
-                _eof_reached = true;
-                while (true) {
-                    co_yield std::string_view();
-                }
-            }
-        }
-    }
-}
-#endif
 Stream ChunkedStream::read(Stream target) {
     return Stream(std::make_shared<ChunkedStream>(target.getStreamDevice(), true, false));
 }

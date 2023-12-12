@@ -98,7 +98,7 @@ public:
      * for convience you can use makeStaticLookupTable()
     */
     template<std::size_t c>
-    CXX20_REQUIRES((c == Count))
+    requires (c == Count)
     constexpr StaticLookupTable(const Item (&items)[c]) {
         int order[Count];
         for (int i = 0; i < Count; i++) {

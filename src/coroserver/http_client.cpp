@@ -22,7 +22,7 @@ Client::Client(Config cfg, StaticHeaders hdrs)
 }
 
 
-coro::future<ClientRequestParams> Client::open(Method method,std::string_view url) {
+coro::lazy_future<ClientRequestParams> Client::open(Method method,std::string_view url) {
     ConnectionFactory *fact = nullptr;
     if (url.compare(0, 7, "http://") == 0) {
         fact = &_cfg.http;
@@ -60,18 +60,28 @@ coro::future<ClientRequestParams> Client::open(Method method,std::string_view ur
         host = host_part;
     }
 
-    Stream s = co_await (*fact)(host);
 
-    co_return InitByFn([&]{return ClientRequestParams {
-        std::move(s),
-        method,
-        host,
-        path,
-        _cfg.user_agent,
-        auth,
-        _hdrs,
-        _cfg.ver
-    };});
+    auto coro = [](Client *_this,
+                   ConnectionFactory *fact,
+                   Method method,
+                   std::string host,
+                   std::string path,
+                   std::string auth) ->coro::lazy_future<ClientRequestParams>{
+        Stream s = co_await (*fact)(host);
+
+        co_return ClientRequestParams{
+                      std::move(s),
+                      method,
+                      std::move(host),
+                      std::move(path),
+                      _this->_cfg.user_agent,
+                      std::move(auth),
+                      _this->_hdrs,
+                      _this->_cfg.ver
+        };
+    };
+
+    return coro(this, fact, method, std::string(host),std::string(path),std::string(auth));
 }
 
 }

@@ -42,8 +42,9 @@ public:
 
 protected:
 //write part
-    coro::suspend_point<void> join_write(coro::future<bool> &f) noexcept;
-    coro::call_fn_future_awaiter<&ChunkedStream::join_write> _write_awt;
+    void join_write(coro::future<bool> *f) noexcept;
+    coro::future<bool> _write_fut;
+    coro::future<bool>::target_type _write_fut_target;
     std::string_view _data_to_write;
     std::string _new_chunk_write;
     coro::promise<bool> _write_result;
@@ -51,8 +52,9 @@ protected:
 
 //read part
     enum class ReadState {r1,n1,number,r2,n2,check_empty,data,r3,n3,eof};
-    coro::suspend_point<void> join_read(coro::future<std::string_view> &f) noexcept;
-    coro::call_fn_future_awaiter<&ChunkedStream::join_read> _read_awt;
+    void join_read(coro::future<std::string_view> *f) noexcept;
+    coro::future<std::string_view> _read_fut;
+    coro::future<std::string_view>::target_type _read_fut_target;
     coro::promise<std::string_view> _read_result;
     ReadState _rd_state = ReadState::number;
     std::size_t _chunk_size = 0;

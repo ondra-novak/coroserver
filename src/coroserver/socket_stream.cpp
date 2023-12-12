@@ -22,6 +22,7 @@ bool SocketStream::read_begin(std::string_view &buff) {
         if (buff.size() == _read_buffer.size()) {
             _new_buffer_size = _new_buffer_size*3/2;
         }
+        _cntr.read+=r;
         return true;
     } else if (r<0) {
         int e = errno;
@@ -93,6 +94,7 @@ void SocketStream::write_begin() {
         r = ::send(_socket, _write_buffer.data(), _write_buffer.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
         if (r > 0) {
             auto sub = _write_buffer.substr(r);
+            _cntr.write+=r;
             if (sub.empty()) {
                 _write_promise(true);
                 return ;

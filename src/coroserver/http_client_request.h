@@ -20,9 +20,9 @@ struct ClientRequestParams {
     ///method of request
     Method method;
     ///host of request
-    std::string_view host;
+    std::string host;
     ///path of request
-    std::string_view path;
+    std::string path;
     ///user agent
     std::string_view user_agent = {};
     ///authorization, used if not empty, must be already in header form
@@ -138,7 +138,7 @@ public:
      * function begin_body with the argument
      */
 
-    coro::future<Stream> begin_body();
+    coro::lazy_future<Stream> begin_body();
 
     ///Sends headers and begin sending of the body
     /**
@@ -158,20 +158,20 @@ public:
      *
      *
      */
-    coro::future<Stream> begin_body(std::size_t content_length);
+    coro::lazy_future<Stream> begin_body(std::size_t content_length);
 
 
     ///Send request or finish the body and read response.
     /**
      * @return response stream. Function also sets response headers and status code
      */
-    coro::future<Stream> send();
+    coro::lazy_future<Stream> send();
     ///Send request with body
     /**
      * @param body body to send.
      * @return response stream. Function also sets response headers and status code
      */
-    coro::future<Stream> send(std::string_view body);
+    coro::lazy_future<Stream> send(std::string_view body);
 
 
     ///Retrieve response status code
@@ -235,11 +235,16 @@ protected:
     void prepare_header(Method method, std::string_view path);
     void owr_hdr(std::string_view hdr);
 
-    coro::suspend_point<void> after_send_headers(coro::future<bool> &res) noexcept;
-    coro::suspend_point<void> receive_response(coro::future<std::string_view> &res) noexcept;
+    coro::any_target<> _target;
+    coro::any_target<> _lazy_target;
+
+    coro::future<std::string_view> _read_fut;
+    coro::future<bool> _write_fut;
+
+
+    void after_send_headers(coro::future<bool> *res) noexcept;
+    void receive_response(coro::future<std::string_view> *res) noexcept;
     unsigned int _rcvstatus = 0;
-    coro::call_fn_future_awaiter<&ClientRequest::after_send_headers> _after_send_headers_awt;
-    coro::call_fn_future_awaiter<&ClientRequest::receive_response> _receive_response_awt;
     coro::promise<Stream> _stream_promise;
     Command _command = Command::none;
     std::string_view _body_to_write;
@@ -249,7 +254,7 @@ protected:
     coro::future<bool> send_headers();
     void prepare_body_stream();
     void prepare_response_stream();
-    coro::suspend_point<void> after_receive_headers();
+    void after_receive_headers();
 
 
 };

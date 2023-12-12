@@ -35,7 +35,7 @@ template<typename Stream>
 class CharacterReader {
 public:
     ///construct reader
-    CharacterReader(Stream s):_s(s) {}
+    CharacterReader(Stream s):_s(std::move(s)) {}
     ///object cannot be copies
     CharacterReader(const CharacterReader &other)= delete;
     ///object ca be moved

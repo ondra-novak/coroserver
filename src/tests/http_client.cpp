@@ -3,6 +3,7 @@
 
 
 #include "../coroserver/http_client.h"
+#include "../coroserver/stream_utils.h"
 
 using namespace coroserver;
 
@@ -16,8 +17,8 @@ coro::async<void> test_create_request() {
     Stream body = co_await request.begin_body(3);
     co_await body.write("abc");
     Stream response = co_await request.send();
-    std::string res;
-    co_await response.read_block(res, 10);
+    BlockReader<Stream> bs(response);
+    auto res = co_await bs.read(10);
     CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 3\r\n\r\nabc");
     CHECK_EQUAL(res,"xyz");
 }
@@ -30,8 +31,8 @@ coro::async<void> test_create_empty_request() {
     http::ClientRequest request({s,http::Method::DELETE, "www.example.com", "/test/path"});
     request("User-Agent","Test");
     Stream response = co_await request.send();
-    std::string res;
-    co_await response.read_block(res, 10);
+    BlockReader<Stream> bs(response);
+    auto res = co_await bs.read(10);
     CHECK_EQUAL(out,"DELETE /test/path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 0\r\n\r\n");
     CHECK_EQUAL(res,"xyz");
 }
@@ -43,8 +44,8 @@ coro::async<void> test_GET_request() {
     http::ClientRequest request({s,http::Method::GET, "www.example.com", "/test/path"});
     request("User-Agent","Test");
     Stream response = co_await request.send();
-    std::string res;
-    co_await response.read_block(res, 10);
+    BlockReader<Stream> bs(response);
+    auto res = co_await bs.read(10);
     CHECK_EQUAL(out,"GET /test/path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Test\r\n\r\n");
     CHECK_EQUAL(res,"xyz");
 
@@ -62,10 +63,10 @@ coro::async<void> test_request_100_cont() {
     CHECK_EQUAL(request.get_status(),100);
     co_await body.write("abc");
     Stream response = co_await request.send();
-    std::string res;
-    co_await response.read_block(res, 10);
+    BlockReader<Stream> bs(response);
+    auto res = co_await bs.read(10);
     CHECK_EQUAL(request.get_status(),202);
-    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nExpect: 100-continue\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 3\r\n\r\nabc");
+    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 3\r\nExpect: 100-continue\r\n\r\nabc");
     CHECK_EQUAL(res,"xyz");
 }
 
@@ -80,9 +81,9 @@ coro::async<void> test_request_100_cont_error() {
     Stream body = co_await request.begin_body(3);
     CHECK_EQUAL(request.get_status(),403);
     Stream response = co_await request.send();
-    std::string res;
-    co_await response.read_block(res, 10);
-    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nExpect: 100-continue\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 3\r\n\r\n");
+    BlockReader<Stream> bs(response);
+    auto res = co_await bs.read(10);
+    CHECK_EQUAL(out,"POST /test/path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Test\r\nContent-Length: 3\r\nExpect: 100-continue\r\n\r\n");
     CHECK_EQUAL(res,"xyz");
 }
 
@@ -90,9 +91,8 @@ coro::async<void> test_client_1() {
     std::string out;
     http::Client client({"TestClient", [&](std::string_view host){
         CHECK_EQUAL(host, "www.example.com:123");
-        return coro::future<Stream>::set_value(
-                TestStream<100>::create({"HTTP/1.1 403 Error\r\nContent-Length: 3\r\n\r\nxyz"}, &out)
-        );
+        return TestStream<100>::create({"HTTP/1.1 403 Error\r\nContent-Length: 3\r\n\r\nxyz"}, &out);
+
     },nullptr});
 
     http::ClientRequestParams params = co_await client.open(http::Method::GET, "http://www.example.com:123/path/file?query=value");

@@ -74,7 +74,7 @@ public:
      * @param url url. Url can contain protocol, host, path. The host can contain authorization
      * @return ClientRequestParams
      */
-    coro::future<ClientRequestParams> open(Method method, std::string_view url);
+    coro::lazy_future<ClientRequestParams> open(Method method, std::string_view url);
 
 protected:
 

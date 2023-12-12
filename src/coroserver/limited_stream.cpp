@@ -15,17 +15,18 @@ coroserver::LimitedStream::LimitedStream(std::shared_ptr<IStream> proxied,
 :AbstractProxyStream(std::move(proxied))
 ,_limit_read(limit_read)
 ,_limit_write(limit_write)
-,_read_awt(*this)
 {
+    coro::target_member_fn_activation<&LimitedStream::join_read>(_read_fut_target, this);
 
 }
 
 coro::future<std::string_view> LimitedStream::read() {
     auto buff = read_putback_buffer();
-    if (!buff.empty() || !_limit_read) return coro::future<std::string_view>::set_value(buff);
+    if (!buff.empty() || !_limit_read) return buff;
     return [&](auto promise) {
         _read_result = std::move(promise);
-        _read_awt << [&]{return _proxied->read();}; //continue by join
+        _read_fut << [&]{return _proxied->read();}; //continue by join
+        _read_fut.register_target(_read_fut_target);
     };
 }
 
@@ -46,23 +47,23 @@ LimitedStream::~LimitedStream() {
     if (_limit_read || _limit_write) _proxied->shutdown();
 }
 
-coro::suspend_point<void> LimitedStream::join_read(coro::future<std::string_view> &fut) noexcept {
+void LimitedStream::join_read(coro::future<std::string_view> *fut) noexcept {
     try {
         std::string_view data = *fut;
         auto ret = data.substr(0, _limit_read);
         _proxied->put_back(data.substr(ret.size()));
         _limit_read -= ret.size();
-        return _read_result(ret);
+        _read_result(ret);
     } catch (...) {
-        return _read_result(std::current_exception());
+        _read_result.reject();
     }
 
 }
 
 coro::future<bool> LimitedStream::write(std::string_view buffer) {
-    if (buffer.empty()) return coro::future<bool>::set_value(true);
+    if (buffer.empty()) return true;
     auto b = buffer.substr(0, _limit_write);
-    if (b.empty()) return coro::future<bool>::set_value(false);
+    if (b.empty()) return false;
     _limit_write-=b.size();
     return _proxied->write(b);
 }
@@ -81,7 +82,7 @@ coro::future<bool> LimitedStream::write_eof() {
             co_return ret;
         })();
     } else {
-        return coro::future<bool>::set_value(true);
+        return true;
     }
 }
 

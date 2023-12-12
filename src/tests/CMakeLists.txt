@@ -16,7 +16,7 @@ set(testFiles
 #    prefixmap.cpp
 #    named_enum.cpp
 #    query.cpp
-#    http_client.cpp
+    http_client.cpp
 #    mt_stream.cpp
 #    shared_lockable_ptr.cpp
 #    message_stream.cpp

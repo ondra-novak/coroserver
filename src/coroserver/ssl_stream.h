@@ -12,9 +12,8 @@
 
 #include "stream.h"
 #include <openssl/ssl.h>
-#include <cocls/mutex.h>
-#include <cocls/coro_storage.h>
-#include <cocls/generator.h>
+#include <functional>
+#include <coro.h>
 namespace coroserver {
 
 namespace ssl {
@@ -47,7 +46,7 @@ public:
      * @param ssl_error (optional) function called when exception is thrown from the accept function (for logging)
      * @return
      */
-    static coro::generator<_Stream> accept(coro::generator<_Stream> gen, Context ctx, coro::function<void()> ssl_error = {});
+    static coro::generator<_Stream> accept(coro::generator<_Stream> gen, Context ctx, std::function<void()> ssl_error = {});
 
 protected:
 
@@ -56,7 +55,7 @@ protected:
     void connect_mode(const std::string &hostname, const Certificate &client_cert);
     void accept_mode();
     void accept_mode(const Certificate &server_cert);
-    std::mutex _mx;
+    std::recursive_mutex _mx;
 
 
     enum State {
@@ -72,13 +71,21 @@ protected:
     State _state = not_established;
 
     std::array<char, 16384> _rdbuff;
-    std::vector<char> _wrbuff;
+    std::string_view _wrbuff;
+    std::vector<char> _encrypted_write_buffer;
+
+
+    coro::promise<std::string_view> _read_result;
+    coro::promise<bool> _write_result;
 
     coro::mutex _rdmx;
     coro::mutex _wrmx;
+    coro::mutex _handshake;
 
-    coro::reusable_storage _rdstor;
-    coro::reusable_storage _wrstor;
+
+
+//    coro::reusable_storage _rdstor;
+//    coro::reusable_storage _wrstor;
 
 
     ///special result from run_ssl_io - operation complete, return retval
@@ -86,10 +93,58 @@ protected:
     ///special result from run_ssl_io - repeat function call
     static constexpr int _run_ssl_result_retry = 2;
 
+    enum class Op{
+        read,
+        write,
+        establish_read,
+        establish_write,
+    };
 
 
-    template<typename Ret, typename Fn>
-    coro::with_allocator<coro::reusable_storage, coro::async<Ret> > run_ssl_io(coro::reusable_storage &, Fn fn, Ret failRet);
+  //  template<typename Ret, typename Fn>
+  //  coro::with_allocator<coro::reusable_storage, coro::async<Ret> > run_ssl_io(coro::reusable_storage &, Fn fn, Ret failRet);
+
+    void read_begin();
+    void write_begin();
+    void write_eof_begin();
+    void begin_ssl();
+    void establish_begin();
+    bool flush_output(coro::mutex::target_type &target);
+
+    template<std::invocable<> Fn>
+    bool handle_ssl_error(int r, coro::mutex::target_type &target, Fn &&zero_fn);
+
+    // contains target activated ater unlock of IO operation during reading
+    coro::mutex::target_type _reader_unlock_target;
+    // contains target activated ater unlock of IO operation during writing
+    coro::mutex::target_type _writer_unlock_target;
+    // contains target activated ater unlock of IO operation during handshake
+    coro::mutex::target_type _handshake_unlock_target;
+    // contains target activated ater unlock of IO operation during handshake
+    coro::mutex::target_type _shutdown_unlock_target;
+
+    // if async IO ends with exception, it is stored there
+    std::exception_ptr _error_state;
+    // if async IO ends with timeout, this flag is true
+    bool _read_timeout = false;
+
+    // stores ownership of a lock for reading IO
+    coro::mutex::ownership _read_ownership;
+    // stores target for reading IO
+    coro::future<std::string_view>::target_type _read_fut_target;
+    // stores future for reading IO
+    coro::future<std::string_view> _read_fut;
+
+    // stores ownership of a lock for writing IO
+    coro::mutex::ownership _write_ownership;
+    // stores target for writing IO
+    coro::future<bool>::target_type _write_fut_target;
+    // stores future for writing IO
+    coro::future<bool> _write_fut;
+
+    // stores ownership of a lock, while handshake is performed
+    coro::mutex::ownership _handshake_ownership;
+
 
 };
 
