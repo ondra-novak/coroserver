@@ -6,6 +6,7 @@ set(testFiles
     compile_test.cpp
     peername.cpp
     server_and_connect.cpp
+    ssl_tcp_test.cpp
 #    read_until.cpp
 #    chartest.cpp
 #    json.cpp

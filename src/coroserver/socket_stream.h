@@ -19,9 +19,42 @@ namespace coroserver {
 class ContextIOImpl;
 
 
+enum SocketStreamPurpose {
+    ///Socket is used for interactive session (such a telnet) - this is default
+    /**
+     * This option can save network bandwith by collecting small packets, however
+     * response latency can be highter
+     * In this case, TCP_QUICKACK is enabled and TCP_NODELAY is disabled
+     *
+     */
+    interactive,
+    ///Socket is used for streaming
+    /**
+     * This option reduces count of ACKS however it expects using of a buffered
+     * write
+     *
+     * In this case, TCP_QUICKACK is disabled and TCP_NODELAY is enabled
+     */
+    streaming,
+    ///Socket is used realtime communication
+    /**
+     * This option is best for latency, but also takes wide bandwith
+     *
+     * In this case, TCP_QUICKACK is enabled and TCP_NODELAY is enabled
+     */
+    realtime,
+    ///Socket is used for notification
+    /**
+     * This option greatly saves a network bandwith, it delays acks and enables
+     * Nagle. However the latency is the hightest
+     */
+    notification,
+};
+
 class SocketStream: public AbstractStreamWithMetadata {
 public:
     SocketStream(AsyncSocket socket, PeerName peer, TimeoutSettings tms);
+
     virtual coro::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
     virtual bool is_read_timeout() const override;
@@ -31,7 +64,14 @@ public:
     virtual Counters get_counters() const noexcept override;
     virtual PeerName get_peer_name() const override;
 
+    static Stream create(AsyncSocket socket, PeerName peer, TimeoutSettings tms);
+    virtual ~SocketStream();
+
+
+
+
 protected:
+
     AsyncSocket _socket;
     Counters _cntr;
     PeerName _peer;
@@ -45,6 +85,7 @@ protected:
 
     std::vector<char> _read_buffer;
     std::string_view _write_buffer;
+    std::atomic_flag _nagle_state;
 
     bool _is_eof = false;
     bool _is_closed = false;
@@ -55,6 +96,8 @@ protected:
     bool read_begin(std::string_view &buff);
     void read_completion(coro::future<bool> *f) noexcept;
     void write_completion(coro::future<bool> *f) noexcept;
+    void enable_nagle();
+    void disable_nagle();
 };
 
 }

@@ -233,7 +233,7 @@ public:
 protected:
     Stream _s;
     std::array<char, buffer_size>  _buffer;
-    std::size_t _pos;
+    std::size_t _pos = 0;
 };
 
 template<typename Stream>

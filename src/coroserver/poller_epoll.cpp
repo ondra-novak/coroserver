@@ -336,7 +336,6 @@ void Poller_epoll::close(SocketHandle handle) {
     shutdown(handle);
     std::lock_guard _(_mx);
     mclosing_map.erase(handle);
-    close_socket(handle);
 
 }
 

@@ -27,7 +27,7 @@ using coroserver::PeerName;
 namespace coroserver {
 
 
-class ContextIOImpl: public IAsyncSupport {
+class ContextIOImpl: public IAsyncSupport, public std::enable_shared_from_this<ContextIOImpl> {
 public:
 
     using AcceptResult = std::pair<SocketHandle, PeerName>;

@@ -66,6 +66,9 @@ void ContextIOImpl::shutdown(SocketHandle handle) {
 }
 void ContextIOImpl::close(SocketHandle handle)   {
     _disp->close(handle);
+    ::close(handle);
+    /* c
+    */
 }
 
 void ContextIOImpl::stop() {
@@ -146,8 +149,7 @@ static coro::generator<Stream> listen_generator(AsyncSocket socket,
         int s = ::accept4(socket, reinterpret_cast<sockaddr *>(&addr), &slen,
                 SOCK_NONBLOCK|SOCK_CLOEXEC);
         if (s>=0) {
-            co_yield Stream (
-                    std::make_shared<SocketStream>(
+            co_yield Stream (SocketStream::create(
                             socket.set_socket_handle(s),
                             PeerName::from_sockaddr(&addr).set_group_id(group_id),
                             tmcfg));
@@ -283,7 +285,7 @@ coro::future<Stream> ContextIO::connect(std::vector<PeerName> list, int timeout_
             //but if we don't have stream
             if (!connected.has_value()) {
                 //create it now
-                connected = Stream(std::make_shared<SocketStream>(std::move(*nfo.socket), nfo.peer, tms));
+                connected = SocketStream::create(std::move(*nfo.socket), nfo.peer, tms);
                 //and stop other attempts
                 stop.request_stop();
             }

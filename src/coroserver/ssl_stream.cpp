@@ -18,13 +18,16 @@ Stream::Stream(_Stream target, Context ctx):AbstractProxyStream(target.getStream
     BIO_set_mem_eof_return(_write_data, -1);
     SSL_set_bio(_ssl, _read_data, _write_data);
 
-    coro::target_simple_activation(_reader_unlock_target, [&](coro::mutex::ownership){
+    coro::target_simple_activation(_reader_unlock_target, [&](coro::mutex::ownership own){
+        own.reset();
         read_begin();
     });
-    coro::target_simple_activation(_writer_unlock_target, [&](coro::mutex::ownership){
+    coro::target_simple_activation(_writer_unlock_target, [&](coro::mutex::ownership own){
+        own.reset();
         write_begin();
     });
-    coro::target_simple_activation(_handshake_unlock_target, [&](coro::mutex::ownership){
+    coro::target_simple_activation(_handshake_unlock_target, [&](coro::mutex::ownership own){
+        own.reset();
         establish_begin();
     });
     coro::target_simple_activation(_read_fut_target, [&](coro::future<std::string_view> *f){
@@ -141,6 +144,7 @@ void Stream::read_begin() {
         }
         while (true) {
             if (_state == closed || _read_timeout) {
+                if (_error_state) std::rethrow_exception(_error_state);
                 ntf = _read_result();
                 break;
             }
@@ -182,6 +186,7 @@ void Stream::write_begin() {
         }
         while (true) {
             if (_state == closing || _state == closed) {
+                if (_error_state) std::rethrow_exception(_error_state);
                 ntf = _write_result(false);
                 break;
             }
@@ -194,7 +199,6 @@ void Stream::write_begin() {
             if (r > 0) {
                 _wrbuff = _wrbuff.substr(r);
                 if (flush_output(_writer_unlock_target)) return;
-                write_begin();
             } else {
                 if (handle_ssl_error(r, _writer_unlock_target, [&]{
                     _state = closed;
@@ -216,21 +220,24 @@ void Stream::begin_ssl() {
 }
 
 void Stream::establish_begin() {
-    std::lock_guard lk(_mx);
+    std::unique_lock lk(_mx);
     try {
         while (true) {
             if (_state != not_established) {
+                lk.unlock();
                 _handshake_ownership.reset();
                 break;
             }
             auto r = SSL_do_handshake(_ssl);
             if (r > 0) {
                 _state = established;
+                lk.unlock();
                 _handshake_ownership.reset();
                 break;
             } else {
                 if (handle_ssl_error(r, _handshake_unlock_target, [&]{
                     _state = closed;
+                    lk.unlock();
                     _handshake_ownership.reset();
                 })) return;
             }
@@ -262,19 +269,22 @@ void Stream::write_eof_begin() {
         while (true) {
             if (_state == closing || _state == closed) {
                 ntf = _write_result(false);
-                break;
+                return;
             }
+            coro::target_simple_activation(_writer_unlock_target, [&](coro::mutex::ownership){
+                write_eof_begin();
+            });
             int r = SSL_shutdown(_ssl);
             if (r > 0) {
                 _state = closed;
                 ntf = _write_result(true);
+                break;
             } else if (r == 0) {
                 _state = closing;
+                if (flush_output(_writer_unlock_target)) return;
                 ntf = _write_result(true);
+                break;
             } else {
-                coro::target_simple_activation(_writer_unlock_target, [&](coro::mutex::ownership){
-                    write_eof_begin();
-                });
                 if (handle_ssl_error(r, _writer_unlock_target, [&]{
                     _state = closed;
                     ntf = _write_result(false);
@@ -351,7 +361,10 @@ void Stream::accept_mode(const Certificate &server_cert) {
 }
 
 Stream::~Stream() {
-
+    _state = closed;
+    _read_ownership.reset();
+    _write_ownership.reset();
+    _handshake_ownership.reset();
 }
 
 coro::generator<_Stream> Stream::accept(coro::generator<_Stream> gen, Context ctx, std::function<void()> ssl_error) {
