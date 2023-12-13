@@ -55,7 +55,7 @@ protected:
     void connect_mode(const std::string &hostname, const Certificate &client_cert);
     void accept_mode();
     void accept_mode(const Certificate &server_cert);
-    std::recursive_mutex _mx;
+    std::mutex _mx;
 
 
     enum State {
@@ -104,15 +104,17 @@ protected:
   //  template<typename Ret, typename Fn>
   //  coro::with_allocator<coro::reusable_storage, coro::async<Ret> > run_ssl_io(coro::reusable_storage &, Fn fn, Ret failRet);
 
-    void read_begin();
-    void write_begin();
+    bool read_begin();
+    bool write_begin();
     void write_eof_begin();
     void begin_ssl();
     void establish_begin();
-    bool flush_output(coro::mutex::target_type &target);
+    bool flush_output(std::unique_lock<std::mutex> &lk, coro::mutex::target_type &target);
+    void complete_write();
+    void complete_read();
 
     template<std::invocable<> Fn>
-    bool handle_ssl_error(int r, coro::mutex::target_type &target, Fn &&zero_fn);
+    bool handle_ssl_error(std::unique_lock<std::mutex> &lk, int r, coro::mutex::target_type &target, Fn &&zero_fn);
 
     // contains target activated ater unlock of IO operation during reading
     coro::mutex::target_type _reader_unlock_target;
