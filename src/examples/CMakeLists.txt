@@ -13,4 +13,4 @@ link_libraries(
 #add_executable(simple_secure_web_server simple_secure_web_server.cpp)
 #add_executable(websocket_server websocket_server.cpp)
 #add_executable(websocket_client websocket_client.cpp)
-#add_executable(https_client https_client.cpp)
+add_executable(https_client https_client.cpp)

@@ -49,7 +49,9 @@ protected:
                 _result(sub);
                 return;
             }
-            _buffer.reserve(_sz);
+            if (_sz < static_cast<std::size_t>(-65536)) {
+                _buffer.reserve(_sz);
+            }
             _buffer.resize(data.size());
             std::copy(data.begin(), data.end(), _buffer.begin());
             coro::target_simple_activation(_target, [&](auto){on_read_other();});
@@ -62,20 +64,22 @@ protected:
 
     void on_read_other() {
         try {
-            std::string_view data = _read_fut;
-            auto remain = _sz - _buffer.size();
-            auto b = data.substr(0, remain);
-            auto c = data.substr(b.size());
-            _s.put_back(c);
-            auto curpos = _buffer.size();
-            _buffer.resize(curpos+b.size());
-            std::copy(b.begin(), b.end(), _buffer.begin()+curpos);
-            if (_buffer.size() == _sz || data.empty()) {
-                _result(_buffer.data(), _buffer.size());
-                return;
+            while (true) {
+                std::string_view data = _read_fut;
+                auto remain = _sz - _buffer.size();
+                auto b = data.substr(0, remain);
+                auto c = data.substr(b.size());
+                _s.put_back(c);
+                auto curpos = _buffer.size();
+                _buffer.resize(curpos+b.size());
+                std::copy(b.begin(), b.end(), _buffer.begin()+curpos);
+                if (_buffer.size() == _sz || data.empty()) {
+                    _result(_buffer.data(), _buffer.size());
+                    return;
+                }
+                _read_fut << [&]{return _s.read();};
+                if (_read_fut.register_target_async(_target)) return;
             }
-            _read_fut << [&]{return _s.read();};
-            _read_fut.register_target(_target);
         } catch (...) {
             _result.reject();
         }
@@ -83,6 +87,9 @@ protected:
 
 
 };
+
+template<typename Stream>
+BlockReader(Stream s) -> BlockReader<Stream>;
 
 
 

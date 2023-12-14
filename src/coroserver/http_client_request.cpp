@@ -314,10 +314,10 @@ coro::lazy_future<Stream> ClientRequest::send() {
 coro::lazy_future<Stream> ClientRequest::send(std::string_view body) {
     if (!_req_sent) {
         if (_has_te) throw std::logic_error("Invalid request state: Transfer Encoding cannot be used when send(<body>) is called");
+        _body_to_write = body;
+        content_length(body.size());
         return _lazy_target.on_activate<coro::lazy_future<Stream>::promise_target_type>(
                 [&](auto promise) {
-                    content_length(body.size());
-                    _body_to_write = body;
                     _command = Command::sendRequest;
                     _stream_promise = std::move(promise);
                     _write_fut << [&]{return send_headers();};;
