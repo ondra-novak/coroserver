@@ -6,7 +6,7 @@ namespace http {
 
 std::string_view Server::error_handler_prefix ( "error_");
 
-IHandler::Ret Server::send_error_page(ServerRequest &req) {
+void Server::send_error_page(ServerRequest &req, HandlerReturn &ret) {
     //lock the lock
     std::shared_lock lk(_mx);
     //retrieve status
@@ -48,9 +48,10 @@ IHandler::Ret Server::send_error_page(ServerRequest &req) {
                 "</body>"
                 "</html>";
         //send the stream
-        return [&]{return req.send(text);};
+        ret.emplace<coro::future<bool> >([&]{return req.send(text);});
+        return;
     }
-    return h.call(req, req.get_path());
+    h(req, req.get_path(), ret);
 }
 
 void Router::set_handler(std::string_view path, Handler h) {
@@ -83,15 +84,15 @@ void Router::set_handler(std::string_view path, std::initializer_list<Method> me
     }
 }
 
-std::size_t Router::call_handler(ServerRequest &req, IHandler::Ret &fut) {
+std::size_t Router::call_handler(ServerRequest &req, HandlerReturn &fut) {
     return call_handler(req, req.get_path(), fut);
 }
 
-std::size_t Router::call_handler(ServerRequest &req, std::string_view vpath, IHandler::Ret &fut) {
+std::size_t Router::call_handler(ServerRequest &req, std::string_view vpath, HandlerReturn &fut) {
     return call_handler(req, req.get_method(), vpath, fut);
 }
 
-std::size_t Router::call_handler(ServerRequest &req, Method method, std::string_view path, IHandler::Ret &fut) {
+std::size_t Router::call_handler(ServerRequest &req, Method method, std::string_view path, HandlerReturn &fut) {
     if (path.empty()) return 1;
     //try to find all matching endpoint
     auto hfnd = _endpoints.find(path);
@@ -121,10 +122,19 @@ std::size_t Router::call_handler(ServerRequest &req, Method method, std::string_
             }
         }
         //call handler
-        fut << [&]{return h.call(req, vpath);};
+        h(req, vpath, fut);
+
+        bool is_ready = std::visit([&](auto &x){
+            if constexpr(std::is_same_v<std::decay_t<decltype(x)>, std::monostate>) {
+                return true;
+            } else {
+                return !x.is_pending();
+            }
+        }, fut);
+
         //explore result
         //if the result is not ready  (continued asynchronously) or is touched (modified state)
-        if (!fut.ready() || !req.untouched()) {
+        if (!is_ready || !req.untouched()) {
             //we assume that handler processed or being processing the request
             //future is set, return
             return 0;
@@ -137,7 +147,7 @@ std::size_t Router::call_handler(ServerRequest &req, Method method, std::string_
 
 }
 
-void Server::select_handler(ServerRequest &req, IHandler::Ret &fut) {
+void Server::select_handler(ServerRequest &req, HandlerReturn &fut) {
     //everything under shared lock
     std::shared_lock lk(_mx);
 
@@ -171,12 +181,13 @@ void Server::select_handler(ServerRequest &req, IHandler::Ret &fut) {
     //unlock the lock, as send_error_page is need it
     lk.unlock();
     //generate error page
-    fut << [&]{return send_error_page(req);};
+    send_error_page(req, fut);
+}
+
+}
+
+
 
 }
 
 
-
-}
-
-}

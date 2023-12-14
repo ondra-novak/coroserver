@@ -19,7 +19,7 @@ int main() {
     std::cout << "Press enter to stop server:" << std::endl;
     std::cin.get();
     ctx.stop();
-    fin.join();
+    fin.wait();
     return 0;
 }
 

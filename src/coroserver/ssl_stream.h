@@ -48,6 +48,21 @@ public:
      */
     static coro::generator<_Stream> accept(coro::generator<_Stream> gen, Context ctx, std::function<void()> ssl_error = {});
 
+    ///when EOF is detected without proper shutdown, this can be reported as error
+    /**
+     * default is false
+     *
+     * When this value is true, then EOF state is passed to SSL library and can
+     * be reported as error "ssl3_read_n:unexpected eof while reading". The
+     * only valid way to send EOF through the SSL connection is to
+     * shutdown session (SSL_Shutdown)
+     *
+     * When this value is false, closed connection withou SSL_Shutdown is
+     * also considered as valid state and EOF is reported to the frontend
+     *
+     */
+    static bool eof_without_shudown_is_error;
+
 protected:
 
     void connect_mode();

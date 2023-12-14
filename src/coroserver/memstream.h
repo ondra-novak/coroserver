@@ -60,7 +60,7 @@ public:
     virtual coro::future<bool> write(std::string_view buffer) override;
     virtual coro::future<bool> write_eof() override;
     virtual void set_timeouts(const TimeoutSettings &tm) override;
-    virtual coro::suspend_point<void> shutdown() override;
+    virtual void shutdown() override;
     virtual bool is_read_timeout() const override;
     virtual Counters get_counters() const noexcept override;
 

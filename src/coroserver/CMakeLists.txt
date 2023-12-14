@@ -6,21 +6,21 @@ add_library(coroserver
 	socket_stream.cpp
 	io_context.cpp
 	poller_epoll.cpp
-#   memstream.cpp
+   memstream.cpp
    chunked_stream.cpp
    limited_stream.cpp
 #   json/json.cpp
     http_common.cpp
-#   http_server_request.cpp
-#   http_server.cpp
-#   http_static_page.cpp
-#   websocket.cpp
-#   websocket_stream.cpp
+   http_server_request.cpp
+   http_server.cpp
+   http_static_page.cpp
+   websocket.cpp
+   websocket_stream.cpp
 #   http_ws_server.cpp
 #   http_ws_client.cpp
    ssl_common.cpp
    ssl_stream.cpp
-#   ssl_http_support.cpp
+   ssl_http_support.cpp
    http_client_request.cpp
    http_client.cpp
 #   pipe.cpp

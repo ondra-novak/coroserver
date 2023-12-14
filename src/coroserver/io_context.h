@@ -217,7 +217,7 @@ public:
 
 public:
     template<std::invocable<Stream> Fn>
-    coro::lazy_future<void> tcp_server(Fn &&main_fn, std::vector<PeerName> lsn_peers,
+    coro::future<void> tcp_server(Fn &&main_fn, std::vector<PeerName> lsn_peers,
             std::stop_token stoptoken = {},
             TimeoutSettings tms = {defaultTimeout, defaultTimeout}) {
         auto gen = accept(std::move(lsn_peers),stoptoken, tms);

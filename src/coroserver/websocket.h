@@ -345,15 +345,19 @@ public:
 protected:
 
 
-    coro::suspend_point<void> read_next(std::string_view &data, coro::promise<Message &> &prom);
+    void read_next(coro::future<std::string_view> *fut);
 
     Stream _s;
     Parser _parser;
-    coro::future_conv<&Reader::read_next> _awt;
     Message msg;
+    coro::future<std::string_view> _read_fut;
+    coro::future<std::string_view>::target_type _read_fut_target;
+    coro::promise<Message &> _read_prom;
 
 };
 
+
+#if 0
 ///Construct a generator (not real coroutine, it is a class) which writes message to websocket's output stream
 /** Object is MT Safe
  *
@@ -381,7 +385,7 @@ public:
      * @note By sending the message of the type Type::connClose, the stream is marked
      *  as closed.
      */
-    coro::suspend_point<bool> operator()(const Message &msg);
+    bool operator()(const Message &msg);
     ///write message, register a promise for signal completion
     /**
      * @param msg message to send
@@ -393,7 +397,7 @@ public:
      * @retval true message enqueued and will be sent
      * @retval false stream has been closed, no more messages can be send (message has
      */
-    coro::suspend_point<bool> operator()(const Message &msg, coro::promise<void> sync);
+    bool operator()(const Message &msg, coro::promise<void> sync);
 
     ///Returns true, if writing is possible
     operator bool () const {
@@ -434,13 +438,13 @@ public:
     coro::future<void> sync_for_idle();
 
     ~Writer() {
-        assert(!_pending && "Destroying object with pending operation. Use sync_for_idle() to remove this message");
+        //assert(!_pending && "Destroying object with pending operation. Use sync_for_idle() to remove this message");
     }
 
 
 
 protected:
-    coro::suspend_point<void> finish_write(coro::future<bool> &val) noexcept;
+    void finish_write(coro::future<bool> &val) noexcept;
 
 
     Stream _s;
@@ -450,14 +454,15 @@ protected:
     coro::promise<void> _cleanup;
     mutable std::mutex _mx;
     Builder _builder;
-    coro::call_fn_future_awaiter<&Writer::finish_write> _awt;
     bool _closed = false;
     bool _pending = false;
 
-    coro::suspend_point<bool> do_write(const Message &msg, std::unique_lock<std::mutex> &lk);
-    coro::suspend_point<void> flush(std::unique_lock<std::mutex> &lk);
+    bool do_write(const Message &msg, std::unique_lock<std::mutex> &lk);
+    void flush(std::unique_lock<std::mutex> &lk);
+
 };
 
+#endif
 }
 
 }

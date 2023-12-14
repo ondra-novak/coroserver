@@ -12,6 +12,7 @@
 #include "http_common.h"
 
 #include <coro.h>
+#include <concepts>
 
 
 namespace coroserver {
@@ -36,7 +37,7 @@ public:
      * this status. In all cases, keep_alive is disabled, you should disconnect the stream
      * right after response.
      */
-    coro::future<bool> load();
+    coro::lazy_future<bool> load();
 
     ///retrieve method
     Method get_method() const {return _method;}
@@ -181,30 +182,7 @@ public:
      *
      * You should avoid to call function by multiple times
      */
-    coro::future<Stream> get_body();
-    ///Sends response (status code is set to 200 in case, that status code is not set)
-    /**
-     * @param body body to send as string. Note that underlying string must remain
-     * valid until the function is complete. Otherwise, convert content to string in
-     * the argument
-     *
-     *
-     * @return future for completion
-     *
-     * @code
-     * coro::asyn<void> coro(ServerRequest &req) {
-     *      std::string_view text("text to send");
-     *      co_await req.send(text);
-     * }
-     *
-     * coro::future<void> not_coro(ServerRequest &req) {
-     *      std::string_view text("text to send");
-     *      return req.send(std::string(text));
-     * }
-     * @endcode
-     *
-     */
-    coro::future<bool> send(std::string_view body);
+    coro::lazy_future<Stream> get_body();
     ///Send response and retrieve stream to send response body
     coro::future<Stream> send();
     ///Send response prepared in content of std::ostringstream
@@ -230,11 +208,12 @@ public:
      * }
      * @endcode
      */
-    coro::future<bool> send(std::string &&body) {
-        _user_buffer = std::move(body);
-        return send(std::string_view(_user_buffer));
-    }
+    coro::future<bool> send(std::string &&body);
 
+    coro::future<bool> send_empty() {
+        return send(std::string());
+    }
+#if 0
     ///Send C-like string
     /**
      * @param x string to send. Note that C-like strings are always
@@ -248,11 +227,11 @@ public:
     coro::future<bool> send(const char *x) {
         return send(std::string_view(x));
     }
-
+#endif
     ///Send file
     /**
      * @param path pathname to file to send
-     * @param use_chunked set true to use chunked format (otherwise it is used content-length)
+     * @param use_chunked set true to use chunked format (otherwise it uses content-length)
      * @note it is possible to set headers before. You should set
      * Content-Type, catching, last-modified, etc
      * @return a future
@@ -310,6 +289,8 @@ public:
         }
     }
 
+    using StringLambda = decltype([](std::string_view){});
+
     ///Allows to log to server's log container
     /**
      * @param fn function which accepts one argument (possible auto) which
@@ -319,8 +300,7 @@ public:
      * for one level up or down.
      * If the logger is not defined, function is not called
      */
-    template<typename Fn>
-    CXX20_REQUIRES(std::invocable<Fn, decltype([](std::string_view){})>)
+    template<std::invocable< StringLambda > Fn>
     void log_message(Fn &&fn, int serverity = 0) {
         if (_logger.log_fn && _logger.min_serverity < serverity) {
             _logger.serverity = serverity;
@@ -339,6 +319,15 @@ public:
      */
     std::string _user_buffer;
 protected:
+
+    using ReadFuture = coro::future<std::string_view>;
+    using WriteFuture = coro::future<bool>;
+    using StreamFuture = coro::future<Stream>;
+    using ReadTarget = ReadFuture::target_type;
+    using WriteTarget = WriteFuture::target_type;
+    using StreamTarget = StreamFuture::target_type;
+    using LazyLoadTarget = coro::lazy_future<bool>::promise_target_type;
+    using LazyGetStreamTarget = coro::lazy_future<Stream>::promise_target_type;
 
     struct OutputHdrs {
         bool _has_ctxtp;
@@ -383,34 +372,29 @@ protected:
     Logger _logger;
 
 
-    coro::suspend_point<void> load_coro(std::string_view &data, coro::promise<bool> &res);
-    coro::future_conv<&ServerRequest::load_coro> _load_awt;
+    coro::any_target<> _target;
+    coro::any_promise _promise;
+    ReadFuture _read_fut;
+    WriteFuture _write_fut;
+
+
+
     unsigned int _search_hdr_state = 0;
-
-    Stream get_body_coro(bool &res);
-    coro::future_conv<&ServerRequest::get_body_coro> _get_body_awt;
-
-
-    coro::future<bool> discard_body_intr();
-
-    coro::suspend_point<void> discard_body_coro(std::string_view &data, coro::promise<bool> &res);
-    coro::future_conv<&ServerRequest::discard_body_coro> _discard_body_awt;
-
-    coro::suspend_point<void> send_resp(bool &, coro::promise<Stream> &res);
-    coro::future_conv<&ServerRequest::send_resp> _send_resp_awt;
-
-    coro::suspend_point<void> send_resp_body(Stream &s, coro::promise<bool> &res);
-    coro::future_conv<&ServerRequest::send_resp_body> _send_resp_body_awt;
     std::string_view _send_body_data;
 
-    static bool future_forward(bool &b) {return b;}
-    coro::future_conv<future_forward> _forward_awt;
+    void load_cycle();
+
+
+
+
 
 
 
     std::string_view prepare_output_headers();
-
-
+    template<auto cont>
+    void send_discard_body();
+    void send_continue();
+    void send_body_continue();
 
 
 

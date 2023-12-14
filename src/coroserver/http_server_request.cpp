@@ -20,47 +20,61 @@ ServerRequest::ServerRequest(Stream s, bool secure)
     :_cur_stream(std::move(s))
     ,_secure(secure)
     ,_body_stream(nullptr)
-    ,_load_awt(this)
-    ,_get_body_awt(this)
-    ,_discard_body_awt(this)
-    ,_send_resp_awt(this)
-    ,_send_resp_body_awt(this)
     {}
 
 ServerRequest::~ServerRequest() {
 }
 
-coro::future<bool> ServerRequest::load() {
-    _status_code = 0;
-    _status_message = {};
-    _search_hdr_state = 0;
-    _body_processed = false;
-    _headers_sent = false;
-    _header_data.clear();
-    _header_data.reserve(256);
-    _output_headers.clear();
-    _output_headers.reserve(256);
-    _output_headers.resize(status_response_max_len);
-    _output_headers_summary = {};
-    _url_cache.clear();
-    return _load_awt << [&]{return _cur_stream.read();};
+coro::lazy_future<bool> ServerRequest::load() {
+    return _target.on_activate<LazyLoadTarget>([&](auto promise) {
+        _promise = std::move(promise);
+        _status_code = 0;
+        _status_message = {};
+        _search_hdr_state = 0;
+        _body_processed = false;
+        _headers_sent = false;
+        _header_data.clear();
+        _header_data.reserve(256);
+        _output_headers.clear();
+        _output_headers.reserve(256);
+        _output_headers.resize(status_response_max_len);
+        _output_headers_summary = {};
+        _url_cache.clear();
+
+        auto &t = _target.as<ReadTarget>();
+        coro::target_simple_activation(t,[&](auto){load_cycle();});
+        _read_fut << [&]{return _cur_stream.read();};
+        _read_fut.register_target(t);
+    });
+
 }
 
-coro::suspend_point<void> ServerRequest::load_coro(std::string_view &data, coro::promise<bool> &res) {
-    if (data.empty()) return res(false);
-    for (std::size_t cnt = data.size(), i = 0; i < cnt; i++) {
-        char c= data[i];
-        _header_data.push_back(c);
-        if (search_hdr_sep(_search_hdr_state,c)) {
-            _cur_stream.put_back(data.substr(i+1));
-            _header_data.resize(_header_data.size()-search_hdr_sep.length());
-            bool b = parse_request({_header_data.data(), _header_data.size()});
-            if (!b) _keep_alive = false;
-            return res(b);
+void ServerRequest::load_cycle() {
+    try {
+        std::string_view data = _read_fut;
+        if (data.empty()) {
+            _promise.get<bool>()(false);
+            return;
         }
+        for (std::size_t cnt = data.size(), i = 0; i < cnt; i++) {
+            char c= data[i];
+            _header_data.push_back(c);
+            if (search_hdr_sep(_search_hdr_state,c)) {
+                _cur_stream.put_back(data.substr(i+1));
+                _header_data.resize(_header_data.size()-search_hdr_sep.length());
+                bool b = parse_request({_header_data.data(), _header_data.size()});
+                if (!b) _keep_alive = false;
+                _promise.get<bool>()(true);
+                return;
+            }
+        }
+        _read_fut << [&]{return _cur_stream.read();};
+        _read_fut.register_target(_target.as<ReadTarget>());
+        return;
+
+    } catch (...) {
+        _promise.get<bool>().reject();
     }
-    _load_awt(std::move(res)) << [&]{return _cur_stream.read();};
-    return {};
 }
 
 
@@ -354,46 +368,118 @@ void ServerRequest::content_type_from_extension(const std::string_view &path) {
     }
 }
 
-coro::suspend_point<void> ServerRequest::send_resp_body(Stream &s, coro::promise<bool> &res) {
-    _forward_awt(std::move(res)) << [&]{return s.write(_send_body_data);};
-    return {};
-}
 
-
-coro::future<bool> ServerRequest::send(std::string_view body) {
-    _send_body_data = body;
+coro::future<bool> ServerRequest::send(std::string &&body) {
+    _user_buffer = std::move(body);
+    _send_body_data = _user_buffer;
     add_header(strtable::hdr_content_length, body.size());
-    return _send_resp_body_awt << [&]{return send();};
-    //return send_coro(_coro_storage, body);
+    return [&](auto prom) {
+        _promise = std::move(prom);
+        if (_has_body && !_expect_100_continue) {
+            _read_fut << [&]{return _body_stream.read();};
+            _read_fut.register_target(
+                    _target.on_activate<ReadTarget>(
+                            [&](auto) {
+                send_discard_body<&ServerRequest::send_body_continue>();
+            }));
+            return;
+        }
+        send_body_continue();
+    };
 }
 
 coro::future<bool> ServerRequest::send(std::ostringstream &body) {
-    _user_buffer = body.str();
-    return send(std::string_view(_user_buffer));
+    return send(body.str());
 }
 
-coro::suspend_point<void> ServerRequest::send_resp(bool &st, coro::promise<Stream> &res) {
-    if (!st) {
-        return res(LimitedStream::write(_cur_stream, 0));
+template<auto cont>
+void ServerRequest::send_discard_body() {
+    try {
+        std::string_view data = _read_fut;
+        if (data.empty()) {
+            (this->*cont)();
+        } else {
+            _read_fut << [&]{return _body_stream.read();};
+            _read_fut.register_target(_target.as<ReadTarget>());
+        }
+    } catch (...) {
+        _promise.get<Stream>().reject();
     }
+}
+
+void ServerRequest::send_continue() {
     if (!_headers_sent) {
         _headers_sent = true;
-        _send_resp_awt(std::move(res)) << [&]{return _cur_stream.write(prepare_output_headers());};
-    } else {
-        if (_output_headers_summary._has_te && _output_headers_summary._has_te_chunked) {
-            return res(ChunkedStream::write(_cur_stream));
-        } else if (_output_headers_summary._has_ctlen) {
-            return res(LimitedStream::write(_cur_stream, _output_headers_summary._ctlen));
-        } else {
-            return res(_cur_stream);
-        }
+        _write_fut << [&]{return _cur_stream.write(prepare_output_headers());};
+        _write_fut.register_target(_target.on_activate<WriteTarget>(
+                [&](auto f) {
+                    try {
+                        bool b = f;
+                        auto &res = _promise.get<Stream>();
+                        if (!b) {
+                            res(LimitedStream::write(_cur_stream, 0));
+                        } else {
+                            if (_output_headers_summary._has_te && _output_headers_summary._has_te_chunked) {
+                                res(ChunkedStream::write(_cur_stream));
+                            } else if (_output_headers_summary._has_ctlen) {
+                                res(LimitedStream::write(_cur_stream, _output_headers_summary._ctlen));
+                            } else {
+                                res(_cur_stream);
+                            }
+                        }
+                    } catch (...) {
+                        _promise.get<Stream>().reject();
+                    }
+                }
+        ));
     }
-    return {};
 }
 
+void ServerRequest::send_body_continue() {
+    if (!_headers_sent) {
+        _headers_sent = true;
+        _write_fut << [&]{return _cur_stream.write(prepare_output_headers());};
+        _write_fut.register_target(_target.on_activate<WriteTarget>(
+                [&](auto f) {
+                    try {
+                        bool b = f;
+                        auto &res = _promise.get<bool>();
+                        if (!b) {
+                            res(false);
+                        } else {
+                            _write_fut << [&]{return _cur_stream.write(_send_body_data);};
+                            _write_fut.register_target(_target.on_activate<WriteTarget>(
+                                    [&](auto f) {
+                                            auto &res = _promise.get<bool>();
+                                            try {
+                                                res(f->get());
+                                            } catch (...) {
+                                                res.reject();
+                                            }
+                            }));
+                        }
+                    } catch (...) {
+                        _promise.get<Stream>().reject();
+                    }
+                }
+        ));
+    }
+}
 
 coro::future<Stream> ServerRequest::send() {
-    return _send_resp_awt << [&]{return discard_body_intr();};
+    return [&](auto prom) {
+        _promise = std::move(prom);
+        if (_has_body && !_expect_100_continue) {
+            _read_fut << [&]{return _body_stream.read();};
+            _read_fut.register_target(
+                    _target.on_activate<ReadTarget>(
+                            [&](auto) {
+                send_discard_body<&ServerRequest::send_continue>();
+            }));
+            return;
+        }
+        send_continue();
+    };
 }
 
 std::string_view ServerRequest::prepare_output_headers() {
@@ -443,29 +529,42 @@ std::string_view ServerRequest::prepare_output_headers() {
 
 }
 
-coro::future<bool> ServerRequest::discard_body_intr() {
-    if (!_has_body || _expect_100_continue) {
+
+coro::lazy_future<Stream> ServerRequest::get_body() {
+    return _target.on_activate<LazyGetStreamTarget>([&](auto promise) {
+        if (!_has_body) {
+            promise(LimitedStream::read(_cur_stream, 0));
+            return;
+        }
         _has_body = false;
-        _expect_100_continue = false;
-        return coro::future<bool>::set_value(true);
-    } else {
-        return _discard_body_awt << [&]{return _body_stream.read();};
-    }
-
+        if (_expect_100_continue) {
+            _expect_100_continue = false;
+            auto iter = _output_headers.begin();
+            auto ver = strVer[_version];
+            std::string_view txt(" 100 Continue\r\n\r\n");
+            iter = std::copy(ver.begin(), ver.end(), iter);
+            iter = std::copy(txt.begin(), txt.end(), iter);
+            std::string_view out(_output_headers.data(), std::distance(_output_headers.begin(), iter));
+            _promise = std::move(promise);
+            _write_fut << [&]{return _cur_stream.write(out);};
+            _write_fut.register_target(_target.on_activate<WriteTarget>([&](auto f){
+                try {
+                    bool b = *f;
+                    if (b) _promise.get<Stream>()(_body_stream);
+                    else _promise.get<Stream>()(LimitedStream::read(_cur_stream, 0));
+                } catch (...) {
+                    _promise.get<Stream>().reject();
+                }
+            }));
+            return;
+        }
+        promise(_body_stream);
+    });
 }
-
-
-coro::suspend_point<void> ServerRequest::discard_body_coro(std::string_view &data, coro::promise<bool> &res) {
-    if (data.empty()) return res(true);
-    _discard_body_awt(std::move(res)) << [&]{return _body_stream.read();};
-    return {};
-
-}
-
 
 coro::future<bool> ServerRequest::send_file(const std::string &path, bool use_chunked) {
     std::ifstream f(path);
-    if (!f) return coro::future<bool>::set_value(false);
+    if (!f) return false;
     if (!use_chunked) {
         f.seekg(0,std::ios::end);
         auto sz = f.tellg();
@@ -473,37 +572,6 @@ coro::future<bool> ServerRequest::send_file(const std::string &path, bool use_ch
         add_header(strtable::hdr_content_length, std::size_t(sz));
     }
     return send_stream(std::move(f));
-}
-
-
-
-Stream ServerRequest::get_body_coro(bool &res) {
-    if (res) {
-        return _body_stream;
-    } else {
-        return Stream(LimitedStream::read(_cur_stream,0));
-    }
-}
-
-
-coro::future<Stream> ServerRequest::get_body() {
-    if (!_has_body) {
-        return coro::future<Stream>::set_value(LimitedStream::read(_cur_stream, 0));
-    }
-    if (_expect_100_continue) {
-        auto iter = _output_headers.begin();
-        auto ver = strVer[_version];
-        std::string_view txt(" 100 Continue\r\n\r\n");
-        iter = std::copy(ver.begin(), ver.end(), iter);
-        iter = std::copy(txt.begin(), txt.end(), iter);
-        std::string_view out(_output_headers.data(), std::distance(_output_headers.begin(), iter));
-        return _get_body_awt << [&]{
-            return _cur_stream.write(out);
-        };
-    }
-    return coro::future<Stream>::set_value(_body_stream);
-
-
 }
 
 

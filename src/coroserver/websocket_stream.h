@@ -48,7 +48,7 @@ public:
     Stream() = default;
 
 
-    coro::suspend_point<bool> write(const Message &msg);
+    void write(const Message &msg);
 
     ///Read from websocket
     /**
@@ -85,12 +85,12 @@ public:
     State get_state() const;
 
     ///close the stream explicitly
-    coro::suspend_point<bool> close() {
+    void close() {
         return write(Message{{},Type::connClose,Base::closeNormal});
     }
 
     ///close the stream explicitly
-    coro::suspend_point<bool> close(std::uint16_t code) {
+    void close(std::uint16_t code) {
         return write(Message{{},Type::connClose,code});
     }
 

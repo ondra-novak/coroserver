@@ -31,14 +31,19 @@ public:
      * @param device stream device
      */
     MTStreamWriter(std::shared_ptr<IStream> device)
-        :stream(std::move(device))
-        ,_awt(*this) {}
+        :stream(std::move(device)) {
+        init();
+    }
 
     ///Construct the object
     /**
      * @param s stream
      */
-    MTStreamWriter(Stream s):MTStreamWriter(s.getStreamDevice()) {}
+    MTStreamWriter(Stream s):MTStreamWriter(s.getStreamDevice()) {
+        init();
+    }
+
+    using FnPrototype = decltype([](char){});
 
     ///Write using a function
     /**
@@ -52,9 +57,8 @@ public:
      * @retval false write is impossible
      * @exception any any exception captured during recent flush
      */
-    template<typename Fn>
-    CXX20_REQUIRES(std::invocable<Fn, decltype([](char){})>)
-    coro::suspend_point<bool> operator()(Fn &&fn) {
+    template<std::invocable<FnPrototype> Fn>
+    bool operator()(Fn &&fn) {
         std::unique_lock lk(_mx);
         if (_e) std::rethrow_exception(_e);
         if (_closed) return false;
@@ -62,24 +66,22 @@ public:
         if (_pending) return true;
         _pending = true;
         std::swap(_prepared,_pending_write);
-        auto out = coro::suspend_point<bool>(on_flush(),true);
-        lk.unlock();
-        _awt << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
-        return out;
+        on_flush(lk);
+        _write_fut << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
+        _write_fut.register_target(_write_fut_target);
+        return true;
     }
 
 
     ///write prepared message
     /**
      * @param obj data to write
-     * @return suspend point which carries boolean flag. Suspend point
-     * can be used for co_await
      *
      * @retval true data written to buffer
      * @retval false write is impossible
      * @exception any any exception captured during recent flush
      */
-    coro::suspend_point<bool> operator()(std::string_view txt) {
+    bool operator()(std::string_view txt) {
         return (*this)([txt](auto wr){
             for (auto y:txt) wr(y);
         });
@@ -176,8 +178,9 @@ public:
         _write_eof = true;
         p = _pending;
         lk.unlock();
-        if (!p) _awt << [&]{return stream->write_eof();};
-        return true;
+        _write_fut << [&]{return stream->write_eof();};
+        _write_fut.register_target(_write_fut_target);
+        return p;
     }
 
     ///Destroyes the object. Ensure, that there is no pending operation
@@ -186,7 +189,7 @@ public:
      * wait_for_idle() to synchronize with this state
      */
     ~MTStreamWriter() {
-        assert(!_pending && "Destroying object with pending operation. Use wait_for_idle() to avoid this assert");
+//        assert(!_pending && "Destroying object with pending operation. Use wait_for_idle() to avoid this assert");
     }
 
     auto getStreamDevice() const {
@@ -206,7 +209,25 @@ public:
     }
 
 protected:
-    coro::suspend_point<void> finish_write(coro::future<bool> &val) noexcept {
+    std::shared_ptr<IStream> stream;
+    mutable std::mutex _mx;
+    std::vector<char> _prepared;
+    std::vector<char> _pending_write;
+    std::vector<std::pair<bool,coro::promise<void> > > _waiting;
+    bool _closed = false;
+    bool _pending = false;
+    bool _write_eof = false;
+    bool _destroy_on_done = false;
+    std::exception_ptr _e;
+    coro::future<bool> _write_fut;
+    coro::future<bool>::target_type _write_fut_target;
+
+
+
+    void init() {
+        coro::target_member_fn_activation<&MTStreamWriter::finish_write>(_write_fut_target, this);
+    }
+    void finish_write(coro::future<bool> *val) noexcept {
         std::unique_lock lk(_mx);
         try {
             _pending_write.clear();
@@ -214,68 +235,67 @@ protected:
             if (_closed) {
                 _prepared.clear();
                 _pending = false;
-                return on_idle();
+                on_idle(lk);
             } else if (_prepared.empty()) {
                 _pending = false;
-                return on_idle();
+                on_idle(lk);
             } else {
                 std::swap(_pending_write,_prepared);
-                coro::suspend_point<void> out = on_flush();
-                lk.unlock();
-                _awt << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
-                return out;
+                on_flush(lk); //unlock the lock
+                _write_fut << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
+                _write_fut.register_target(_write_fut_target);
             }
         } catch (...) {
             _e = std::current_exception();
             _prepared.clear();
             _pending = false;
             _closed = true;
-            return on_idle();
+            on_idle(lk);
+        }
+        if (_destroy_on_done) {
+            lk.unlock();
+            delete this;
         }
     }
 
 
-    std::shared_ptr<IStream> stream;
-    mutable std::mutex _mx;
-    std::vector<char> _prepared;
-    std::vector<char> _pending_write;
-    std::vector<std::pair<bool,coro::promise<void> > > _waiting;
-    coro::call_fn_future_awaiter<&MTStreamWriter::finish_write> _awt;
-    bool _closed = false;
-    bool _pending = false;
-    bool _write_eof = false;
-    std::exception_ptr _e;
-
-    coro::suspend_point<void> on_idle() {
-        //on_idle flushes all waiting promises
-        coro::suspend_point<void> out;
-        for (auto &x: _waiting) out << x.second();
-        _waiting.clear();
-        return out;
+    void on_idle(std::unique_lock<std::mutex> &lk) {
+        auto ntf = reinterpret_cast<coro::promise<void>::pending_notify *>(
+                alloca(sizeof(coro::promise<void>::pending_notify)*_waiting.size()));
+        std::size_t cnt = 0;
+        for (auto &x: _waiting) {
+            std::construct_at(ntf+cnt,x.second());
+            ++cnt;
+        }
+        lk.unlock();
+        for (std::size_t i = 0; i<cnt; ++i) {
+            std::destroy_at(ntf+i);
+        }
     }
-    coro::suspend_point<void> on_flush() {
-        //flush only on_flush promises
-        coro::suspend_point<void> out;
+    void on_flush(std::unique_lock<std::mutex> &lk) {
+        auto ntf = reinterpret_cast<coro::promise<void>::pending_notify *>(
+                alloca(sizeof(coro::promise<void>::pending_notify)*_waiting.size()));
+        std::size_t cnt = 0;
         _waiting.erase(std::remove_if(_waiting.begin(), _waiting.end(),[&](auto &p){
             if (p.first) return false;
-            out << p.second();
+            std::construct_at(ntf+cnt, p.second());
             return true;
         }), _waiting.end());
-        return out;
+        lk.unlock();
+        for (std::size_t i = 0; i<cnt; ++i) {
+            std::destroy_at(ntf+i);
+        }
     }
 
-    coro::suspend_point<void> on_destroy(coro::future<void> &) noexcept {
-        _destroy_awt.~call_fn_future_awaiter();
-        delete this;
-        return {};
-    }
-    union {
-        coro::call_fn_future_awaiter<&MTStreamWriter::on_destroy> _destroy_awt;
-    };
 
     void destroy() {
-        std::construct_at(&_destroy_awt, *this);
-        _destroy_awt << [&]{return this->wait_for_idle();};
+        std::unique_lock lk(_mx);
+        if (_pending) {
+            _destroy_on_done = true;
+        } else {
+            lk.unlock();
+            delete this;
+        }
     }
 
     struct Deleter {
@@ -287,253 +307,6 @@ protected:
 
 
 };
-
-namespace _details {
-
-class MTWriteStreamInstance: public AbstractStream {
-public:
-    MTWriteStreamInstance(std::shared_ptr<IStream> device)
-        :_writer(device),_awt(*this) {}
-    virtual coro::future<bool> write(std::string_view buffer) override {
-        return coro::future<bool>::set_value(_writer(buffer));
-    }
-    virtual coro::future<bool> write_eof() override {
-        return coro::future<bool>::set_value(_writer.write_eof());
-    }
-    virtual TimeoutSettings get_timeouts() override {
-        return _writer.getStreamDevice()->get_timeouts();
-    }
-    virtual coro::future<std::string_view> read() override {
-        return coro::future<std::string_view>::set_value(read_putback_buffer());
-    }
-    virtual IStream::Counters get_counters() const noexcept override{
-        return IStream::Counters{0,_writer.getStreamDevice()->get_counters().write};
-    }
-    virtual PeerName get_peer_name() const override {return {};}
-    virtual bool is_read_timeout() const override {return false;}
-    virtual void set_timeouts(const TimeoutSettings &tm) override {
-        _writer.getStreamDevice()->set_timeouts({
-            _writer.getStreamDevice()->get_timeouts().read_timeout_ms,
-            tm.write_timeout_ms
-        });
-    }
-    virtual coro::suspend_point<void> shutdown() override {
-        return _writer.getStreamDevice()->shutdown();
-    }
-
-    void destroy() {
-        _awt << [&]{return _writer.wait_for_idle();};
-    }
-
-protected:
-    MTStreamWriter _writer;
-    coro::suspend_point<void> on_idle(coro::future<void> &) noexcept {
-        delete this;
-        return {};
-    }
-    coro::call_fn_future_awaiter<&MTWriteStreamInstance::on_idle> _awt;
-};
-
-struct MTWriteStreamDeleter {
-    void operator()(MTWriteStreamInstance *inst) {
-        inst->destroy();
-    };
-};
-
-}
-
-///Creates output stream from given stream, which is MT Safe for multiple writes
-/**
- * Returned stream can be written by multiple threads. On top of it,
- * write functions are always synchronous.
- *
- * @param s
- * @return
- */
-Stream createMTSafeOutputStream(Stream s) {
-    return Stream(std::shared_ptr<IStream>(new _details::MTWriteStreamInstance(s.getStreamDevice()), _details::MTWriteStreamDeleter{}));
-}
-
-
-///This class helps with multithreaded reading from a stream
-/**
- * The class implements a lock with ability to read stream through
- * a process function, which is called repeatedly to collect as much
- * data as it needs. Other thread can also perform this operation,
- * while it the operation will be suspended until the currently pending
- * operation is finished
- */
-class ReadFromStreamMT {
-public:
-
-
-    using ProcessResult = std::optional<std::string_view>;
-    ///Read and process input
-    /**
-     * @param s stream to read
-     * @param fn function which processes the input. The result of the function
-     * is ProcessResult which is std::optional<std::string_view>. If the result
-     * is empty (it is mean, has_value() is false), then reading continues. If
-     * the result is a string_view (even empty), the reading stops and result
-     * is used to push_back the data. Function can be called with empty buffer
-     * to indicate prematurely end of reading. Even in this case the
-     * return value is used, however reading will stop in all cases
-     *
-     * @retval true read successful
-     * @retval false reached end of stream or timeout
-     */
-    template<typename ProcessFn>
-    CXX20_REQUIRES(std::same_as<decltype(std::declval<ProcessFn>()(std::declval<std::string_view>())), ProcessResult>)
-    coro::future<bool>  operator()(const Stream &s, ProcessFn &&fn) {
-        return read_mt(_storage, std::forward<ProcessFn>(fn));
-    }
-
-    ///Access to mutex.
-    auto lock() {
-        return _mx.lock();
-    }
-
-    template<typename Iterator>
-    coro::future<bool> read_until(const Stream &s,
-            Iterator &&write_iter,
-            std::string_view pattern,
-            std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        if (pattern.empty()) return read_block(s,std::forward<Iterator>(write_iter), limit);
-        if (limit == 0) return coro::future<bool>::set_value(true);
-        return (*this)([
-                        write_iter = std::move(write_iter),
-                        kmp = search_kmp<0>(pattern),
-                        state = 0U,
-                        limit,
-                        count = std::size_t(0)](std::string_view data) mutable ->ProcessResult {
-            for(std::size_t i = 0, cnt = data.size(); i<cnt;++i) {
-                char c = data[i];
-                *write_iter = c;
-                ++write_iter;
-                if (kmp(state, c) || ++count == limit) {
-                    return data.substr(i+1);
-                }
-            }
-            return {};
-        });
-    }
-
-    template<typename Iterator>
-    coro::future<bool> read_block(const Stream &s,
-            Iterator &&write_iter,
-            std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        if (limit == 0) return coro::future<bool>::set_value(true);
-        return (*this)([
-                        write_iter = std::move(write_iter),
-                        limit,
-                        count = std::size_t(0)](std::string_view data) mutable ->ProcessResult {
-
-            for(std::size_t i = 0, cnt = data.size(); i<cnt;++i) {
-                char c = data[i];
-                *write_iter = c;
-                ++write_iter;
-                if (++count == limit) {
-                    return data.substr(i+1);
-                }
-            }
-
-
-        });
-    }
-
-
-protected:
-
-    template<typename ProcessFn, typename Allocator>
-    coro::with_allocator<Allocator, coro::async<bool> > read_mt(Stream s, ProcessFn fn) {
-        auto own = co_await _mx.lock();
-        std::string_view txt;
-        do {
-            txt = co_await s.read();
-            ProcessResult res = fn(txt);
-            if (!res.has_value()) {
-                s.put_back(*res);
-                co_return true;
-            }
-        } while (!txt.empty());
-        co_return false;
-    }
-
-    coro::mutex _mx;
-    coro::reusable_storage_mtsafe _storage;
-
-};
-
-///Stream which can be read and write by multiple threads
-class StreamMT {
-    class Internal {
-    public:
-        Internal(Stream s):_writer(s) {}
-
-        coro::async<void> destroy() {
-            coro::future<void> f = _writer.wait_for_idle();
-            auto ownership = co_await _reader.lock();
-            co_await f;
-            co_await ownership.release();
-            delete this;
-            co_return;
-        }
-
-        MTStreamWriter _writer;
-        ReadFromStreamMT _reader;
-    };
-
-public:
-    StreamMT(Stream s)
-        :_ptr(new Internal(s), Deleter{}) {}
-
-    template<typename ProcessFn>
-    coro::future<bool>  read(const Stream &s, ProcessFn &&fn) {
-        return _ptr->_reader(s,std::forward<ProcessFn>(fn));
-    }
-    template<typename Iterator>
-    coro::future<bool> read_until(const Stream &s,
-            Iterator &&write_iter,
-            std::string_view pattern,
-            std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        return _ptr->_reader.read_until(s,std::forward<Iterator>(write_iter), pattern,limit);
-    }
-    template<typename Iterator>
-    coro::future<bool> read_block(const Stream &s,
-            Iterator &&write_iter,
-            std::size_t limit = std::numeric_limits<std::size_t>::max()) {
-        return _ptr->_reader.read_block(s,std::forward<Iterator>(write_iter), limit);
-    }
-
-
-    bool write(const std::string_view &text) {
-        return _ptr->_writer(text);
-    }
-    bool write_eof() {
-        return _ptr->_writer.write_eof();
-    }
-    std::size_t get_buffered_size() const {
-        return _ptr->_writer.get_buffered_size();
-    }
-    coro::future<void> wait_for_flush() {
-        return _ptr->_writer.wait_for_flush();
-    }
-    coro::future<void> wait_for_idle() {
-        return _ptr->_writer.wait_for_idle();
-    }
-
-protected:
-
-
-    std::shared_ptr<Internal> _ptr;
-
-    struct Deleter {
-        void operator()(Internal *x) {
-            x->destroy().detach();
-        }
-    };
-};
-
 
 }
 

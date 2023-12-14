@@ -11,24 +11,26 @@ public:
     :_s(s)
     ,_reader(cfg.need_fragmented)
     ,_writer(s)
-    ,_builder(cfg.client)
-    ,_awt(*this)
-    ,_awt_destroy(*this) {}
+    ,_builder(cfg.client) {
+        _target.on_activate<coro::future<std::string_view>::target_type>([&](auto fut){on_read(fut);});
+    }
+    ~InternalState() {}
 
-    coro::suspend_point<bool> write(const Message &msg) {
-        return _writer([&](auto fn){
+    void write(const Message &msg) {
+        _writer([&](auto fn){
             _builder(msg, std::forward<decltype(fn)>(fn));
         });
     }
 
     coro::future<Message> read() {
-        if (_closed) return coro::future<Message>::set_value(Message{{},Type::connClose, Base::closeNoStatus});
+        if (_closed) return Message{{},Type::connClose, Base::closeNoStatus};
         return [&](auto p) {
             if (_reader.is_complete()) {
                 _reader.reset();
             }
             _read_promise = std::move(p);
-            _awt << [&]{return _s.read();};
+            new(&_read_fut) auto(_s.read());
+            _read_fut.register_target(_target.as<coro::future<std::string_view>::target_type>());
         };
     }
 
@@ -44,13 +46,6 @@ public:
         return State::closing;
     }
 
-    void destroy() {
-        //write close message
-        write({{},Type::connClose,Base::closeNormal});
-        //sync to idle, then destroy
-        _awt_destroy << [&]{return _writer.wait_for_idle();};
-    }
-
     coro::future<void> wait_for_flush() {
         return _writer.wait_for_flush();
     }
@@ -61,20 +56,23 @@ public:
 
 protected:
 
-    coro::suspend_point<void> on_read(coro::future<std::string_view> &fut) noexcept { // @suppress("No return")
+    void on_read(coro::future<std::string_view> *fut) noexcept { // @suppress("No return")
         try {
             std::string_view data = *fut;
+            std::destroy_at(fut);
             if (data.empty()) {
+
                 if (_ping_sent) {
                     Message m{"Ping timeout", Type::connClose, Base::closeAbnormal};
                     write(m);
-                    return _read_promise(m);
+                    _read_promise(m);
                 } else {
                     _ping_sent = true;
                     write({{}, Type::ping});
-                    _awt << [&]{return _s.read();};
-                    return {};
+                    new (&_read_fut) auto(_s.read());
+                    _read_fut.register_target(_target.as<coro::future<std::string_view>::target_type>());
                 }
+                return;
             }
             _ping_sent = false;
             while (_reader.push_data(data)) {
@@ -85,41 +83,41 @@ protected:
                     case Type::connClose:
                         _closed = true;
                         write({{}, Type::connClose, Base::closeNormal});
-                        return _read_promise(m);
+                        _read_promise(m);
+                        return;
                     case Type::ping:
                         write({m.payload, Type::pong});
                         break;
                     default:
-                        return _read_promise(m);
+                        _read_promise(m);
+                        return;
                 }
                 _reader.reset();
                 data = _s.read_nb();
             }
-            _awt << [&]{return _s.read();};
-            return {};
+            new(&_read_fut) auto(_s.read());
+            _read_fut.register_target(_target.as<coro::future<std::string_view>::target_type>());
         } catch (...) {
-            return _read_promise(std::current_exception());
+            std::destroy_at(&_read_fut);
+            _read_promise.reject();
         }
     }
-
-    coro::suspend_point<void> destroy_self(coro::future<void> &) noexcept {
-        //now we know, that writer is idle
-        //we can destroy object
-        delete this;
-        //no suspend point
-        return {};
-    }
-
 
     _Stream _s;
     Parser _reader;
     MTStreamWriter _writer;
     Builder _builder;
     coro::promise<Message> _read_promise;
-    coro::call_fn_future_awaiter<&InternalState::on_read> _awt;
-    coro::call_fn_future_awaiter<&InternalState::destroy_self> _awt_destroy;
+    union {
+        coro::future<std::string_view> _read_fut;
+        coro::future<void> _on_idle_fut;
+    };
+    coro::any_target<> _target;
     bool _ping_sent = false;
     bool _closed = false;
+
+    void destroy();
+    friend Stream::Deleter;
 };
 
 struct Stream::Deleter {
@@ -129,7 +127,7 @@ struct Stream::Deleter {
 };
 
 
-coro::suspend_point<bool> Stream::write(const Message &msg) {
+void Stream::write(const Message &msg) {
     return _ptr->write(msg);
 }
 
@@ -163,6 +161,19 @@ std::shared_ptr<Stream::InternalState> Stream::create(_Stream &s, Cfg &cfg) {
     return std::shared_ptr<InternalState>(new InternalState(s, cfg), Deleter());
 }
 
+void Stream::InternalState::destroy() {
+    new(&_on_idle_fut) auto(_writer.wait_for_idle());
+    _on_idle_fut.register_target(_target.on_activate<coro::future<void>::target_type>(
+            [&](auto fut){
+        std::destroy_at(fut);
+        delete this;
+    }));
+
+
+
 }
+
+}
+
 
 }

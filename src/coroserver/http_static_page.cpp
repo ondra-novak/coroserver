@@ -28,7 +28,7 @@ coro::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view 
         auto splt = split_path(path);
         std::string_view part = splt();
         while (!part.empty()) {
-            if (part == "..") return coro::future<bool>::set_value();
+            if (part == "..") return false;
             if (part != ".") {
                 p/=part;
                 addindex = false;
@@ -41,7 +41,7 @@ coro::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view 
     std::error_code ec;
     auto wt = std::filesystem::last_write_time(p, ec);
     if (ec) {
-        return coro::future<bool>::set_value();
+        return false;
     }
 
     auto etag = "\""+ std::to_string(
@@ -60,7 +60,7 @@ coro::future<bool> StaticPage::operator ()(ServerRequest &req, std::string_view 
     std::string fp=p;
 
     std::ifstream in(fp);
-    if (!in) return coro::future<bool>::set_value(false);
+    if (!in) return false;
 
     in.seekg(0, std::ios::end);
     auto sz = in.tellg();

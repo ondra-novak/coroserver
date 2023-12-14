@@ -132,50 +132,69 @@ bool Parser::finalize() {
 }
 
 
-Reader::Reader(Stream s, bool need_fragmented):_s(s), _parser(need_fragmented),_awt(this) {
+Reader::Reader(Stream s, bool need_fragmented):_s(s), _parser(need_fragmented) {
+    coro::target_simple_activation(_read_fut_target, [&](auto fut){
+        read_next(fut);
+    });
 }
 
 coro::future<Message &> Reader::operator ()() {
     if (_parser.is_complete()) _parser.reset();
-    return _awt << [&]{return _s.read();};
+    return [&](auto promise) {
+        _read_prom = std::move(promise);
+        _read_fut << [&]{return _s.read();};
+        _read_fut.register_target(_read_fut_target);
+    };
 }
 
-coro::suspend_point<void> Reader::read_next(std::string_view &data,  coro::promise<Message &> &prom) {
+void Reader::read_next(coro::future<std::string_view> *fut) {
+    try {
 
-    if (data.empty()) return prom(coro::drop);
+        std::string_view data = *fut;
+        if (data.empty()) {
+            _read_prom.drop();
+            return;
+        }
 
-    bool r = _parser.push_data(data);
-    if (r) {
-        _s.put_back(_parser.get_unused_data());
-        msg = _parser.get_message();
-        return prom(msg);
-    } else {
-        _awt(std::move(prom)) << [&]{return _s.read();};
-        return {};
+        bool r = _parser.push_data(data);
+        if (r) {
+            _s.put_back(_parser.get_unused_data());
+            msg = _parser.get_message();
+            _read_prom(msg);
+        } else {
+            _read_fut << [&]{return _s.read();};
+            _read_fut.register_target(_read_fut_target);
+        }
+    }catch (...) {
+        _read_prom.reject();
     }
+
+
 }
 
-Writer::Writer(Stream s, bool client):_s(s), _builder(client),_awt(*this) {
+#if 0
+
+Writer::Writer(Stream s, bool client):_s(s), _builder(client) {
 }
 
-coro::suspend_point<bool> Writer::operator()(const Message &msg) {
+bool Writer::operator()(const Message &msg) {
     std::unique_lock lk(_mx);
     if (_closed) return false;
     return do_write(msg, lk);
 }
 
-coro::suspend_point<bool> Writer::operator()(const Message &msg, coro::promise<void> sync) {
+bool Writer::operator()(const Message &msg, coro::promise<void> sync) {
     std::unique_lock lk(_mx);
     if (_closed) {
         lk.unlock();
-        return {sync(), false};
+        sync();
+        return false;
     }
     _waiting.push_back(std::move(sync));
     return do_write(msg, lk);
 }
 
-coro::suspend_point<void> Writer::flush(std::unique_lock<std::mutex> &lk) {
-    coro::suspend_point<void> out;;
+void Writer::flush(std::unique_lock<std::mutex> &lk) {
     for (auto &p: _waiting) out << p();
     _waiting.clear();
     _pending = true;
@@ -225,6 +244,7 @@ coro::suspend_point<void> Writer::finish_write(coro::future<bool> &val) noexcept
 
 }
 
+#endif
 }
 
 }

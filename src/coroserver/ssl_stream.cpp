@@ -8,6 +8,7 @@ namespace coroserver {
 
 namespace ssl {
 
+bool Stream::eof_without_shudown_is_error = false;
 
 Stream::Stream(_Stream target, Context ctx):AbstractProxyStream(target.getStreamDevice()) {
     _ssl = SSL_new(ctx);
@@ -147,6 +148,9 @@ bool Stream::read_begin() {
             if (r > 0) {
                 ntf = _read_result(_rdbuff.data(), r);
                 break;
+            } else if (r == 0 && eof_without_shudown_is_error == false) {
+                _state = closed;
+                ntf = _read_result();
             } else {
                 if (handle_ssl_error(lk, r, _reader_unlock_target, [&]{
                         _state = closed;

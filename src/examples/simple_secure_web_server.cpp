@@ -72,8 +72,8 @@ int main() {
     ssl::Context sslctx = ssl::Context::init_server();
     sslctx.set_certificate(cert);
 
-    auto secure_addrs = PeerName::lookup(":10000","");
-    auto addrs = PeerName::lookup(":10001","");
+    auto secure_addrs = PeerName::lookup(":10001","");
+    auto addrs = PeerName::lookup(":10000","");
     std::transform(secure_addrs.begin(), secure_addrs.end(), std::back_inserter(addrs), [](const PeerName &p){
         return PeerName(p).set_group_id(1);
     });
@@ -88,7 +88,7 @@ int main() {
     std::cout << "Press enter to stop server:" << std::endl;
     std::cin.get();
     ioctx.stop();
-    fin.join();
+    fin.get();
     return 0;
 }
 

@@ -21,117 +21,105 @@ namespace ssl {
 
 namespace http {
 
-class IHandler {
-public:
 
-    class Ret: public coro::future<void> {
-    public:
-        using coro::future<void>::future;
-        template<typename Fn>
-        CXX20_REQUIRES(((std::is_integral_v<typename decltype(std::declval<Fn>()())::value_type>
-                        && sizeof(typename decltype(std::declval<Fn>()())::value_type) <= sizeof(void *))
-                        || std::is_void_v<typename decltype(std::declval<Fn>()())::value_type>))
-        Ret(Fn &&fn) {
-            new(this) auto(fn());
-        }
-        template<typename Fn>
-        CXX20_REQUIRES(((std::is_integral_v<typename decltype(std::declval<Fn>()())::value_type>
-                        && sizeof(typename decltype(std::declval<Fn>()())::value_type) <= sizeof(void *))
-                        || std::is_void_v<typename decltype(std::declval<Fn>()())::value_type>))
-        void operator<<(Fn &&fn) {
-            this->~Ret();
-            try {
-                new(this) auto(fn());
-            } catch (...) {
-                new(this) auto([]()->coro::future<void>{return coro::future<void>::set_exception(std::current_exception());});
-            }
+using HandlerReturn = std::variant<
+        std::monostate,
+        coro::future<void>,
+        coro::future<bool>
+>;
+
+class HandlerAwaiter {
+
+    struct always_ready: std::suspend_never {
+        bool await_suspend(std::coroutine_handle<>)  {
+            return false;
         }
     };
 
-    virtual Ret call(ServerRequest &req, std::string_view vpath) const noexcept= 0;
-    virtual ~IHandler() = default;
-};
-
-///Defines of http handler
-/**
- * The http handler can be any lambda function, which acceptes one or two arguments.
- * It always accepts ServerRequest & as first argument and optionally can accept std::string_view
- * vpath as second argument. In this case, vpath contains relative path of request to
- * handler's path.
- *
- * The function should return one of three variants of return value. It can return void, in
- * case, that request was handled synchronously, it can return future<void> in case
- * that request can be processed asynchronously, or it can return future<bool> for the
- * same reason, however the value is ignored. This allows to return directly result of
- * req.send() operation, especially when it is last operation of the handler (so the
- * handler don't need to be coroutine)
- */
-class Handler {
+    using AWT = std::variant<always_ready, coro::future<void>::value_awaiter, coro::future<bool>::value_awaiter>;
 public:
-    constexpr Handler() = default;
 
-    template<typename Fn>
-    CXX20_REQUIRES(std::invocable<Fn, ServerRequest &, std::string_view>)
-    Handler(Fn &&fn) {
-        class Impl: public IHandler {
-        public:
-            Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
-            virtual Ret call(ServerRequest &req, std::string_view vpath) const noexcept {
-                using RetVal = decltype(_fn(req, vpath));
-                try {
-                    if constexpr(std::is_void_v<RetVal>) {
-                        _fn(req, vpath);
-                        return [&]{return coro::future<void>::set_value();};
-                    } else {
-                        return Ret([&]{return _fn(req, vpath);});
-                    }
-                } catch (...) {
-                    return [&]{return coro::future<void>::set_exception(std::current_exception());};
-                }
-            }
-        protected:
-            Fn _fn;
-        };
-        _ptr = std::make_shared<Impl>(std::forward<Fn>(fn));
+    bool await_ready() const {
+        return std::visit([&](auto &x){
+           return x.await_ready();
+        },_awt);
+    }
+    auto await_suspend(std::coroutine_handle<> h) {
+        return std::visit([&](auto &x) -> bool{
+            return x.await_suspend(h);
+        },_awt);
     }
 
-    template<typename Fn>
-    CXX20_REQUIRES(std::invocable<Fn, ServerRequest &>)
-    Handler(Fn &&fn) {
-        class Impl: public IHandler {
-        public:
-            Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
-            virtual Ret call(ServerRequest &req, std::string_view ) const noexcept {
-                using RetVal = decltype(_fn(req));
-                try {
-                    if constexpr(std::is_void_v<RetVal>) {
-                        _fn(req);
-                        return [&]{return coro::future<void>::set_value();};
-                    } else {
-                        return Ret([&]{return _fn(req);});
-                    }
-                } catch (...) {
-                    return [&]{return coro::future<void>::set_exception(std::current_exception());};
-                }
-            }
-        protected:
-            Fn _fn;
-        };
-        _ptr = std::make_shared<Impl>(std::forward<Fn>(fn));
+    void await_resume() const {
+        return std::visit([&](auto &x){
+            x.await_resume();
+        },_awt);
     }
 
-    operator bool() const {return _ptr != nullptr;}
-
-    IHandler::Ret call(ServerRequest &req, std::string_view vpath) const {
-        return _ptr->call(req, vpath);
-    }
-
-
-
+    HandlerAwaiter(HandlerReturn &r):_awt(std::visit([&](auto &x)->AWT{
+        if constexpr(std::is_same_v<std::decay_t<decltype(x)>, std::monostate>) {
+            return always_ready();
+        } else {
+            return x.operator co_await();
+        }
+    },r)) {}
+    HandlerAwaiter(const HandlerAwaiter &) = default;
+    HandlerAwaiter &operator=(const HandlerAwaiter &) = delete;
 
 protected:
-    std::shared_ptr<const IHandler> _ptr;
+    AWT _awt;
+
 };
+
+class Handler {
+public:
+
+    template<std::invocable<ServerRequest &, std::string_view> Fn>
+    Handler(Fn &&fn);
+    Handler() = default;
+
+    void operator()(ServerRequest &req, std::string_view vpath, HandlerReturn &ret) const noexcept {
+        _ptr->call(req, vpath, ret);
+    }
+
+    explicit operator bool() const {return _ptr != nullptr;}
+
+protected:
+
+    class IHandler {
+    public:
+        virtual void call(ServerRequest &req, std::string_view vpath, HandlerReturn &ret) const noexcept = 0;
+        virtual ~IHandler() = default;
+    };
+
+    std::shared_ptr<IHandler> _ptr;
+
+};
+
+template<std::invocable<ServerRequest &, std::string_view> Fn>
+Handler::Handler(Fn &&fn) {
+
+    class Impl: public IHandler {
+    public:
+        Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
+        virtual void call(ServerRequest &req, std::string_view vpath, HandlerReturn &ret) const noexcept {
+            using RetT = decltype(_fn(req,vpath));
+            if constexpr(std::is_same_v<RetT, coro::future<void> >) {
+                ret.emplace<coro::future<void> >([&]{return _fn(req,vpath);});
+            } else if constexpr(std::is_same_v<RetT, coro::future<bool> >) {
+                ret.emplace<coro::future<bool> >([&]{return _fn(req,vpath);});
+            } else {
+                _fn(req,vpath);
+                ret.emplace<std::monostate>();
+            }
+        }
+    protected:
+        std::decay_t<Fn> _fn;
+    };
+    _ptr = std::make_shared<Impl>(std::forward<Fn>(fn));
+}
+
+
 
 enum class TraceEvent {
     ///request is opened for an connection
@@ -242,7 +230,7 @@ public:
      * @retval 1 handler was not found
      * @retval >1 found handler, but for different method. The value contains bitmask of all found methods (bit 0 is always set)
      */
-    std::size_t call_handler(ServerRequest &req, IHandler::Ret &fut);
+    std::size_t call_handler(ServerRequest &req, HandlerReturn &fut);
     ///Calls handler for given request
     /**
      * @param req request
@@ -252,7 +240,7 @@ public:
      * @retval 1 handler was not found (or handler rejected the request)
      * @retval >1 found handler, but for different method. The value contains bitmask of all found methods (bit 0 is always set)
      */
-    std::size_t call_handler(ServerRequest &req, std::string_view vpath, IHandler::Ret &fut);
+    std::size_t call_handler(ServerRequest &req, std::string_view vpath, HandlerReturn &fut);
     ///Calls handler for given request
     /**
      * @param req request
@@ -264,7 +252,7 @@ public:
      * @retval 1 handler was not found (or handler rejected the request)
      * @retval >1 found handler, but for different method. The value contains bitmask of all found methods (bit 0 is always set)
      */
-    std::size_t call_handler(ServerRequest &req, Method methodOverride, std::string_view vpath, IHandler::Ret &fut);
+    std::size_t call_handler(ServerRequest &req, Method methodOverride, std::string_view vpath, HandlerReturn &fut);
 
 protected:
     PrefixMap<MethodMap> _endpoints;
@@ -323,8 +311,7 @@ public:
      * a value. You should wait for this future to ensure, that server is
      * clean up to be destroyed.
      */
-    template<typename Tracer>
-    CXX20_REQUIRES(std::invocable<Tracer, TraceEvent, ServerRequest &>)
+    template<std::invocable<TraceEvent, ServerRequest &> Tracer>
     coro::future<void> start(coro::generator<Stream> tcp_server, Tracer tracer) {
         return [&](coro::promise<void> prom) {
             _exit_promise = std::move(prom);
@@ -397,15 +384,18 @@ protected:
     }
 
     void unlock() {
-        if ((--_requests) == 0) _exit_promise();
+        if ((--_requests) == 0)
+            _exit_promise();
     }
 
 
     template<typename Tracer>
     coro::async<void> serve_gen(coro::generator<Stream> tcp_server, Tracer tracer) {
         std::lock_guard _(*this);
-        while (co_await tcp_server.next()) {
-            serve_req_coro(std::move(tcp_server.value()), tracer).detach();
+        auto v = tcp_server();
+        while (co_await v.has_value()) {
+            serve_req_coro(std::move(v.get()), tracer).detach();
+            v = tcp_server();
         }
         co_return;
     }
@@ -436,14 +426,14 @@ protected:
             //load requests from the stream - return false if error
             while (co_await req.load()) {
                 //future to await handler
-                IHandler::Ret fut;
+                HandlerReturn fut;
                 try {
                     //report that request has been loaded
                     tracer(TraceEvent::load, req);
                     //select matching handler and call it, set future with result
                     select_handler(req, fut);
                     //await for future
-                    co_await fut;
+                    co_await HandlerAwaiter(fut);
                     //handler can optionally not send the request
                     //if the request is error page
                     //if headers was sent - so request is complete
@@ -482,7 +472,8 @@ protected:
                 }
                 //we are here, when request is processed, but response was not sent
                 //so explore status and generate error page
-                co_await send_error_page(req);
+                send_error_page(req, fut);
+                co_await HandlerAwaiter(fut);
                 //report finish request
                 tracer(TraceEvent::finish, req);
                 //if keep alive isn't active
@@ -500,7 +491,9 @@ protected:
                 //this is considered as load.
                 tracer(TraceEvent::load, req);
                 //send error page
-                co_await send_error_page(req);
+                HandlerReturn fut;
+                send_error_page(req, fut);
+                co_await HandlerAwaiter(fut);
                 //and report finish
                 tracer(TraceEvent::finish, req);
                 //keep alive is impossible here
@@ -516,8 +509,8 @@ protected:
         }
     }
 
-    IHandler::Ret send_error_page(ServerRequest &req);
-    void select_handler(ServerRequest &req, IHandler::Ret &fut);
+    void send_error_page(ServerRequest &req, HandlerReturn &fut);
+    void select_handler(ServerRequest &req, HandlerReturn &fut);
 };
 
 template<typename Output>

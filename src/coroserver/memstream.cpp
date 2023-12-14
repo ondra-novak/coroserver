@@ -15,7 +15,7 @@ PeerName MemStream::get_peer_name() const {
 coro::future<std::string_view> MemStream::read() {
     std::string_view data = read_putback_buffer();
     _cntr.read+=data.size();
-    return coro::future<std::string_view>::set_value(data);
+    return data;
 }
 
 std::string_view MemStream::read_nb() {
@@ -23,15 +23,15 @@ std::string_view MemStream::read_nb() {
 }
 
 coro::future<bool> MemStream::write(std::string_view buffer) {
-    if (_write_closed) return coro::future<bool>::set_value(false);
+    if (_write_closed) return false;
     _cntr.write+=buffer.size();
     std::copy(buffer.begin(), buffer.end(), std::back_inserter(_output_buff));
-    return coro::future<bool>::set_value(true);
+    return true;
 }
 
 coro::future<bool> MemStream::write_eof() {
     bool x = std::exchange(_write_closed, true);
-    return coro::future<bool>::set_value(!x);
+    return !x;
 }
 
 void MemStream::set_timeouts(const TimeoutSettings &tm) {
@@ -50,8 +50,8 @@ Stream MemStream::create(std::vector<char> input) {
     return Stream(std::make_shared<MemStream>(std::move(input)));
 }
 
-coro::suspend_point<void> MemStream::shutdown() {
-    return {};
+void MemStream::shutdown() {
+
 }
 
 std::string_view MemStream::get_output(Stream s) {
