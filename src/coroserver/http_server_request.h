@@ -374,15 +374,14 @@ protected:
 
     coro::any_target<> _target;
     coro::any_promise _promise;
-    ReadFuture _read_fut;
-    WriteFuture _write_fut;
+    coro::variant_future<std::string_view, bool> _fut;
 
 
 
     unsigned int _search_hdr_state = 0;
     std::string_view _send_body_data;
 
-    void load_cycle();
+    void load_cycle(ReadFuture *f);
 
 
 
@@ -392,7 +391,7 @@ protected:
 
     std::string_view prepare_output_headers();
     template<auto cont>
-    void send_discard_body();
+    void send_discard_body(ReadFuture *f);
     void send_continue();
     void send_body_continue();
 

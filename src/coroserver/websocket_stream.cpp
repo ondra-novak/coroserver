@@ -12,7 +12,7 @@ public:
     ,_reader(cfg.need_fragmented)
     ,_writer(s)
     ,_builder(cfg.client) {
-        _target.on_activate<coro::future<std::string_view>::target_type>([&](auto fut){on_read(fut);});
+        _target.init_as<coro::future<std::string_view>::target_type>([&](auto fut){on_read(fut);});
     }
     ~InternalState() {}
 
@@ -29,8 +29,9 @@ public:
                 _reader.reset();
             }
             _read_promise = std::move(p);
-            new(&_read_fut) auto(_s.read());
-            _read_fut.register_target(_target.as<coro::future<std::string_view>::target_type>());
+            auto &f = _fut.as<std::string_view>();
+            f << [&]{return _s.read();};
+            f.register_target(_target.call([&](auto fut){on_read(fut);}));
         };
     }
 
@@ -66,39 +67,38 @@ protected:
                     Message m{"Ping timeout", Type::connClose, Base::closeAbnormal};
                     write(m);
                     _read_promise(m);
+                    return;
                 } else {
                     _ping_sent = true;
                     write({{}, Type::ping});
-                    new (&_read_fut) auto(_s.read());
-                    _read_fut.register_target(_target.as<coro::future<std::string_view>::target_type>());
                 }
-                return;
-            }
-            _ping_sent = false;
-            while (_reader.push_data(data)) {
-                _s.put_back(_reader.get_unused_data());
-                Message m = _reader.get_message();
-                switch (m.type) {
-                    case Type::pong: break;
-                    case Type::connClose:
-                        _closed = true;
-                        write({{}, Type::connClose, Base::closeNormal});
-                        _read_promise(m);
-                        return;
-                    case Type::ping:
-                        write({m.payload, Type::pong});
-                        break;
-                    default:
-                        _read_promise(m);
-                        return;
+            } else {
+                _ping_sent = false;
+                while (_reader.push_data(data)) {
+                    _s.put_back(_reader.get_unused_data());
+                    Message m = _reader.get_message();
+                    switch (m.type) {
+                        case Type::pong: break;
+                        case Type::connClose:
+                            _closed = true;
+                            write({{}, Type::connClose, Base::closeNormal});
+                            _read_promise(m);
+                            return;
+                        case Type::ping:
+                            write({m.payload, Type::pong});
+                            break;
+                        default:
+                            _read_promise(m);
+                            return;
+                    }
+                    _reader.reset();
+                    data = _s.read_nb();
                 }
-                _reader.reset();
-                data = _s.read_nb();
             }
-            new(&_read_fut) auto(_s.read());
-            _read_fut.register_target(_target.as<coro::future<std::string_view>::target_type>());
+            auto &f = _fut.as<std::string_view>();
+            f << [&]{return _s.read();};
+            f.register_target(_target.call([&](auto fut){on_read(fut);}));
         } catch (...) {
-            std::destroy_at(&_read_fut);
             _read_promise.reject();
         }
     }
@@ -108,10 +108,7 @@ protected:
     MTStreamWriter _writer;
     Builder _builder;
     coro::promise<Message> _read_promise;
-    union {
-        coro::future<std::string_view> _read_fut;
-        coro::future<void> _on_idle_fut;
-    };
+    coro::variant_future<std::string_view, void> _fut;
     coro::any_target<> _target;
     bool _ping_sent = false;
     bool _closed = false;
@@ -162,12 +159,9 @@ std::shared_ptr<Stream::InternalState> Stream::create(_Stream &s, Cfg &cfg) {
 }
 
 void Stream::InternalState::destroy() {
-    new(&_on_idle_fut) auto(_writer.wait_for_idle());
-    _on_idle_fut.register_target(_target.on_activate<coro::future<void>::target_type>(
-            [&](auto fut){
-        std::destroy_at(fut);
-        delete this;
-    }));
+    auto &f = _fut.as<void>();
+    f << [&]{return _writer.wait_for_idle();};
+    f.register_target(_target.call([&](auto ){delete this;}));
 
 
 

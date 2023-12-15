@@ -26,7 +26,7 @@ ServerRequest::~ServerRequest() {
 }
 
 coro::lazy_future<bool> ServerRequest::load() {
-    return _target.on_activate<LazyLoadTarget>([&](auto promise) {
+    return _target.init_as<LazyLoadTarget>([&](auto promise) {
         _promise = std::move(promise);
         _status_code = 0;
         _status_message = {};
@@ -41,19 +41,18 @@ coro::lazy_future<bool> ServerRequest::load() {
         _output_headers_summary = {};
         _url_cache.clear();
 
-        auto &t = _target.as<ReadTarget>();
-        coro::target_simple_activation(t,[&](auto){load_cycle();});
-        _read_fut << [&]{return _cur_stream.read();};
-        _read_fut.register_target(t);
+        auto &f = _fut.as<std::string_view>();
+        f << [&]{return _cur_stream.read();};
+        f.register_target(_target.call([&](auto *f){load_cycle(f);}));
     });
 
 }
 
-void ServerRequest::load_cycle() {
+void ServerRequest::load_cycle(ReadFuture *f) {
     try {
-        std::string_view data = _read_fut;
+        std::string_view data = *f;
         if (data.empty()) {
-            _promise.get<bool>()(false);
+            _promise.as<bool>()(false);
             return;
         }
         for (std::size_t cnt = data.size(), i = 0; i < cnt; i++) {
@@ -64,16 +63,16 @@ void ServerRequest::load_cycle() {
                 _header_data.resize(_header_data.size()-search_hdr_sep.length());
                 bool b = parse_request({_header_data.data(), _header_data.size()});
                 if (!b) _keep_alive = false;
-                _promise.get<bool>()(true);
+                _promise.as<bool>()(true);
                 return;
             }
         }
-        _read_fut << [&]{return _cur_stream.read();};
-        _read_fut.register_target(_target.as<ReadTarget>());
+        *f << [&]{return _cur_stream.read();};
+        f->register_target(_target.call([&](auto *f){load_cycle(f);}));
         return;
 
     } catch (...) {
-        _promise.get<bool>().reject();
+        _promise.as<bool>().reject();
     }
 }
 
@@ -376,11 +375,10 @@ coro::future<bool> ServerRequest::send(std::string &&body) {
     return [&](auto prom) {
         _promise = std::move(prom);
         if (_has_body && !_expect_100_continue) {
-            _read_fut << [&]{return _body_stream.read();};
-            _read_fut.register_target(
-                    _target.on_activate<ReadTarget>(
-                            [&](auto) {
-                send_discard_body<&ServerRequest::send_body_continue>();
+            auto &f = _fut.as<std::string_view>();
+            f << [&]{return _body_stream.read();};
+            f.register_target(_target.call([&](auto f) {
+                send_discard_body<&ServerRequest::send_body_continue>(f);
             }));
             return;
         }
@@ -393,29 +391,30 @@ coro::future<bool> ServerRequest::send(std::ostringstream &body) {
 }
 
 template<auto cont>
-void ServerRequest::send_discard_body() {
+void ServerRequest::send_discard_body(ReadFuture *f) {
     try {
-        std::string_view data = _read_fut;
+        std::string_view data = *f;
         if (data.empty()) {
             (this->*cont)();
         } else {
-            _read_fut << [&]{return _body_stream.read();};
-            _read_fut.register_target(_target.as<ReadTarget>());
+            *f << [&]{return _body_stream.read();};
+            f->register_target(_target);
         }
     } catch (...) {
-        _promise.get<Stream>().reject();
+        _promise.as<Stream>().reject();
     }
 }
 
 void ServerRequest::send_continue() {
     if (!_headers_sent) {
         _headers_sent = true;
-        _write_fut << [&]{return _cur_stream.write(prepare_output_headers());};
-        _write_fut.register_target(_target.on_activate<WriteTarget>(
+        auto &f = _fut.as<bool>();
+        f << [&]{return _cur_stream.write(prepare_output_headers());};
+        f.register_target(_target.call(
                 [&](auto f) {
                     try {
                         bool b = f;
-                        auto &res = _promise.get<Stream>();
+                        auto &res = _promise.as<Stream>();
                         if (!b) {
                             res(LimitedStream::write(_cur_stream, 0));
                         } else {
@@ -428,7 +427,7 @@ void ServerRequest::send_continue() {
                             }
                         }
                     } catch (...) {
-                        _promise.get<Stream>().reject();
+                        _promise.as<Stream>().reject();
                     }
                 }
         ));
@@ -438,19 +437,20 @@ void ServerRequest::send_continue() {
 void ServerRequest::send_body_continue() {
     if (!_headers_sent) {
         _headers_sent = true;
-        _write_fut << [&]{return _cur_stream.write(prepare_output_headers());};
-        _write_fut.register_target(_target.on_activate<WriteTarget>(
+        auto &f = _fut.as<bool>();
+        f << [&]{return _cur_stream.write(prepare_output_headers());};
+        f.register_target(_target.call(
                 [&](auto f) {
                     try {
-                        bool b = f;
-                        auto &res = _promise.get<bool>();
+                        bool b = *f;
+                        auto &res = _promise.as<bool>();
                         if (!b) {
                             res(false);
                         } else {
-                            _write_fut << [&]{return _cur_stream.write(_send_body_data);};
-                            _write_fut.register_target(_target.on_activate<WriteTarget>(
+                            *f << [&]{return _cur_stream.write(_send_body_data);};
+                            f->register_target(_target.call(
                                     [&](auto f) {
-                                            auto &res = _promise.get<bool>();
+                                            auto &res = _promise.as<bool>();
                                             try {
                                                 res(f->get());
                                             } catch (...) {
@@ -459,7 +459,7 @@ void ServerRequest::send_body_continue() {
                             }));
                         }
                     } catch (...) {
-                        _promise.get<Stream>().reject();
+                        _promise.as<Stream>().reject();
                     }
                 }
         ));
@@ -470,11 +470,12 @@ coro::future<Stream> ServerRequest::send() {
     return [&](auto prom) {
         _promise = std::move(prom);
         if (_has_body && !_expect_100_continue) {
-            _read_fut << [&]{return _body_stream.read();};
-            _read_fut.register_target(
-                    _target.on_activate<ReadTarget>(
-                            [&](auto) {
-                send_discard_body<&ServerRequest::send_continue>();
+            auto &f = _fut.as<std::string_view>();
+            f << [&]{return _body_stream.read();};
+            f.register_target(
+                    _target.call(
+                            [&](auto f) {
+                send_discard_body<&ServerRequest::send_continue>(f);
             }));
             return;
         }
@@ -531,7 +532,7 @@ std::string_view ServerRequest::prepare_output_headers() {
 
 
 coro::lazy_future<Stream> ServerRequest::get_body() {
-    return _target.on_activate<LazyGetStreamTarget>([&](auto promise) {
+    return _target.init_as<LazyGetStreamTarget>([&](auto promise) {
         if (!_has_body) {
             promise(LimitedStream::read(_cur_stream, 0));
             return;
@@ -546,14 +547,15 @@ coro::lazy_future<Stream> ServerRequest::get_body() {
             iter = std::copy(txt.begin(), txt.end(), iter);
             std::string_view out(_output_headers.data(), std::distance(_output_headers.begin(), iter));
             _promise = std::move(promise);
-            _write_fut << [&]{return _cur_stream.write(out);};
-            _write_fut.register_target(_target.on_activate<WriteTarget>([&](auto f){
+            auto &f = _fut.as<bool>();
+            f << [&]{return _cur_stream.write(out);};
+            f.register_target(_target.call([&](auto f){
                 try {
                     bool b = *f;
-                    if (b) _promise.get<Stream>()(_body_stream);
-                    else _promise.get<Stream>()(LimitedStream::read(_cur_stream, 0));
+                    if (b) _promise.as<Stream>()(_body_stream);
+                    else _promise.as<Stream>()(LimitedStream::read(_cur_stream, 0));
                 } catch (...) {
-                    _promise.get<Stream>().reject();
+                    _promise.as<Stream>().reject();
                 }
             }));
             return;
