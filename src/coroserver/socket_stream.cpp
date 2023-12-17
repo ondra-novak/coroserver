@@ -215,10 +215,11 @@ static bool discard_read(int socket) {
 }
 
 static coro::async<void> shutdown_slow(AsyncSocket sock) {
+    auto max_wait = std::chrono::system_clock::now()+std::chrono::seconds(30);
     //if there still some data
-    while (get_siocoutq(sock) > 0) {
+    while (get_siocoutq(sock) > 0 && max_wait > std::chrono::system_clock::now()) {
         //wait for
-        auto p = sock.io_wait(AsyncOperation::read, std::chrono::milliseconds(100));
+        auto p = sock.io_wait(AsyncOperation::read, std::chrono::milliseconds(500));
         //co_await and check status - no value mean, we can no longer wait
         if (co_await !p)
             break;

@@ -16,15 +16,15 @@ add_library(coroserver
    http_static_page.cpp
    websocket.cpp
    websocket_stream.cpp
-#   http_ws_server.cpp
-#   http_ws_client.cpp
+   http_ws_server.cpp
+   http_ws_client.cpp
    ssl_common.cpp
    ssl_stream.cpp
    ssl_http_support.cpp
    http_client_request.cpp
    http_client.cpp
 #   pipe.cpp
-#   signal.cpp
+   signal.cpp
 #   message_stream.cpp
 #   umq_peer.cpp
     

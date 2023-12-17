@@ -19,117 +19,58 @@ namespace ws {
 
 ///The class performs websocket servers's handshake.
 /**
- * To perform the handshake, the class requires an open
- * http::ServerRequest object from a client
- * The class explore the request, and sends apropriate response
- * to the client. If the headers in the request meet
- * the requirements for a valid WebSocket handshake,
- * the class creates a WebSocket stream as ws::Stream.
- * If the headers are invalid, the class reports error and no
- * response is sent to the client.
+ * @code
+ *    coroserver::ws::Stream s = co_await coroserver::ws::Server::accept(request);
+ * @endcode
  *
- * The class is designed to be used asynchronously within a coroutine,
- * and it automatically persists the its instance (state) during
- * the handshake process. The only thing you need to do is
- * to co_await the result of the Server::accept method.
- *
- * However, if you're not using coroutines, you will need to
- * manually create and maintain the state during the handshake
- * process. You need to "call" the state (as function) to
- * initiate the handshake and keepi the state
- * alive until the handshake is complete.
- *
- * Alternatively, you can use the wait() function to perform
- * synchronous waiting.
- *
- * It's important to note that this object is not reusable
- * and should be destroyed after the handshake is complete.
+ * Object acts as coro::future<> returning websocket stream
  *
  */
 
-class Server {
+class Server: public coro::future<Stream> {
 public:
 
-    ///Create state object to begin websocket's handshake
+    ///Accept websocket connection
     /**
-    * Creates a new object for responding the WebSocket handshake with a client.
-    * The constructor takes several parameters:
-    *
-    * @param out A reference to a variable of type `ws::Stream`
-    *        that receives the opened WebSocket stream
-    *        if the handshake is successful.
-    * @param req The request object to be used for the handshake.
-    *         The request must be opened with a `GET` . After the
-    *         handshake is complete, this object can be dropped
-    *         as it is no longer needed.
-    * @param tm The WebSocket stream timeouts, where the read timeout
-    *          defines the ping interval and the write timeout defines
-    *          the period after which the WebSocket stream is considered
-    *          disconnected if it is stuck on writing.
-    * @param need_fragmented A boolean flag indicating whether
-    *         you need to receive fragmented messages
-    *         (e.g., in streaming scenarios) or if you want
-    *         to combine all fragments into one message.
-    *
-    * The constructor returns a new object that can be used to continue
-    * the handshake process by calling other methods defined on the interface.
-    *
-    * @note The state object created by this constructor should
-    * be kept alive during the entire handshake process.
-    * After the handshake is complete, the object should be destroyed.
-    */
-    static Server accept(Stream &out,http::ServerRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false) {
-        return Server(out,req, tm, need_fragmented);
-    }
-
-    ///"Call" the state, which initiates the handshake
-    /**
-     * @return a future object. which eventually resolves with result
-     * of the handshake operation
-     * @retval true handshake successful, you can start to use websocket stream
-     * @retval false handshake failed, stream is not defined, you need to
-     * check request
-     */
-    coro::future<bool> operator()();
-
-    ///Allows to co_await on the state.
-    /**
-     * The current coroutine is suspended and it is eventually resumed
-     * when handshake is finished.
+     * @param req HTTP server request (untouched)
+     * @param tm  timeouts set to final stream
+     * @param need_fragmented specify true, if you need fragmented messages. It disables
+     *   concatelating of continuous frames. Default is false, so messages will not
+     *   be fragmented.
+     * @return return object, which acts as coro::future. You can co_await on it. The
+     * function returns websocket stream, if the request is accepted. If the request
+     * cannot be accepted (invalid request), the exception coro::broken_promise_exception is
+     * thrown
      *
-     * @retval true handshake successful, you can start to use websocket stream
-     * @retval false handshake failed, stream is not defined, you need to
-     * check server's response stored in the http::ClientRequest object passed
-     * as argument in the constructor
+     *
+     * @exception coro::broken_promise_exception - invalid request
      */
-    coro::future_awaiter<bool> operator co_await() {
-        return [&]{return (*this)();};
+    static Server accept(http::ServerRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false) {
+        return Server(req, tm, need_fragmented);
     }
 
-    bool wait() {
-        return operator()().wait();
-    }
 
 protected:
 
-    Server(Stream &out,
-           http::ServerRequest &req,
+    Server(http::ServerRequest &req,
            TimeoutSettings tm = {60000,60000},
            bool need_fragmented = false)
-        :_out(out)
-        ,_need_fragmented(need_fragmented)
-        ,_tm(tm)
-        ,_req(req)
-        ,_awt(*this){}
+        :_result(coro::future<Stream>::get_promise())
+    {
+        init(req, tm, need_fragmented);
+    }
 
-    Stream &_out;
+
+    coro::promise<Stream> _result;
+    coro::future<_Stream> _fut;
+    coro::any_target<> _target;
+
     bool _need_fragmented;
-    TimeoutSettings _tm;
-    http::ServerRequest &_req;
-    coro::suspend_point<void> on_response_sent(coro::future<_Stream> &s) noexcept;
+    TimeoutSettings _tms;
 
-    coro::promise<bool> _result;
-    coro::call_fn_future_awaiter<&Server::on_response_sent> _awt;
+    void init(http::ServerRequest &req, TimeoutSettings tm, bool need_fragmented);
+
+
 };
 
 

@@ -45,31 +45,32 @@ public:
 
     using FnPrototype = decltype([](char){});
 
-    ///Write using a function
-    /**
-     * @param fn a function, possible lambda function with one argument
-     * (possible auto argument), the argument is function, which accepts
-     * a character to write into a buffer
-     * @return suspend point which carries boolean flag. Suspend point
-     * can be used for co_await
-     *
-     * @retval true data written to buffer
-     * @retval false write is impossible
-     * @exception any any exception captured during recent flush
-     */
+
+
     template<std::invocable<FnPrototype> Fn>
-    bool operator()(Fn &&fn) {
+    coro::lazy_future<bool> write(Fn &&fn) {
         std::unique_lock lk(_mx);
         if (_e) std::rethrow_exception(_e);
         if (_closed) return false;
         fn([&](char c){_prepared.push_back(c);});
-        if (_pending) return true;
+        if (_pending) {
+            lk.release(); //release mutex in locked state - we handle it as lazy target
+            return _lazy_write_target2;
+        }
         _pending = true;
         std::swap(_prepared,_pending_write);
-        on_flush(lk);
+        if (_pending_write.empty()) {
+            return !_closed;
+        }
         _write_fut << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
-        _write_fut.register_target(_write_fut_target);
-        return true;
+        if (_write_fut.register_target_async(_write_fut_target)) {
+            lk.release(); //release mutex in locked state - we handle it as lazy target
+            return _lazy_write_target1;
+        }
+        _pending = false;
+        _pending_write.clear();
+        _closed = !_write_fut.get();
+        return !_closed;
     }
 
 
@@ -81,8 +82,8 @@ public:
      * @retval false write is impossible
      * @exception any any exception captured during recent flush
      */
-    bool operator()(std::string_view txt) {
-        return (*this)([txt](auto wr){
+    coro::lazy_future<bool> write(std::string_view txt) {
+        return write([&](auto wr){
             for (auto y:txt) wr(y);
         });
     }
@@ -107,49 +108,6 @@ public:
         return _prepared.size() + _pending_write.size();
     }
 
-    ///Creates a synchronization future, which becomes resolved, when the object is idle
-    /**
-     * Writing to the stream is done at background. This function helps to synchronize
-     * with idle state of the object, where there is no pending write operation.
-     *
-     * You can use this function before the object is destroyed to ensure, that nothing
-     * is using this object. However you also need to ensure, that there is no
-     * other thread with pushing data to it.
-     *
-     * @note to speed up operation, you should also shutdown the stream
-     *
-     * @note Function is not check for close state. It can still resolve the future
-     * even if the stream is still open, the only condition is finishing all pending
-     * operation
-     *
-     * @note In compare to wait_for_flush(), this operation doesn't resolve
-     * the future, when there is non-empty buffer waiting to be written
-     */
-    coro::future<void> wait_for_idle() {
-        return [&](auto promise) {
-            std::lock_guard _(_mx);
-            _waiting.push_back({true, std::move(promise)});
-        };
-    }
-
-    ///Creates a synchronization future. which becomes resolved, when after a flush operation is performed
-    /**
-     * You can use this future to slow down writes which can inflate the internal buffer
-     * The future allows to wait until the buffer is internally flushed. The flush
-     * operation is handled automatically, but it can be delayed when the
-     * speed of the network is low.
-     * @return future
-     *
-     * @note In compare to wait_for_idle(), this operation resolves the future
-     * after the data are sent, but before the write is complete.
-     */
-    coro::future<void> wait_for_flush() {
-        return [&](auto promise) {
-            std::lock_guard _(_mx);
-            _waiting.push_back({false, std::move(promise)});
-        };
-    }
-
     ///Close output, the stream will receive closed status
     /** This function doesn't writes anything to the output, it
      * just sets closing state. Any pending and buffered data will
@@ -166,22 +124,30 @@ public:
      * request is buffered and eof is written when all pending writes
      * are complete.
      *
-     * @retval true buffered
-     * @retval false failed, the stream is already closed
-     * @note function also closes the stream
+     * @return function returns discardable future. The future always returns false as the
+     * stream is closed and no futher writes are posible. You can co_await future to
+     * ensure, that internal buffers are emptied
      */
-    bool write_eof() {
-        bool p;
+    coro::lazy_future<bool> write_eof() {
         std::unique_lock lk(_mx);
-        if (_closed) return false;
+        if (_pending) {
+            _write_eof = true;
+            _closed = true;
+            lk.release();
+            return _lazy_write_target2;
+        }
+        if (_closed) {
+            return false;
+        }
         _closed = true;
-        _write_eof = true;
-        p = _pending;
-        lk.unlock();
         _write_fut << [&]{return stream->write_eof();};
-        _write_fut.register_target(_write_fut_target);
-        return p;
+        if (_write_fut.register_target_async(_write_fut_target)) {
+            lk.release();
+            return _lazy_write_target1;
+        }
+        return false;
     }
+
 
     ///Destroyes the object. Ensure, that there is no pending operation
     /**
@@ -213,7 +179,8 @@ protected:
     mutable std::mutex _mx;
     std::vector<char> _prepared;
     std::vector<char> _pending_write;
-    std::vector<std::pair<bool,coro::promise<void> > > _waiting;
+    std::vector<coro::promise<bool> > _flush1_ntf;
+    std::vector<coro::promise<bool> > _flush2_ntf;
     bool _closed = false;
     bool _pending = false;
     bool _write_eof = false;
@@ -221,27 +188,61 @@ protected:
     std::exception_ptr _e;
     coro::future<bool> _write_fut;
     coro::future<bool>::target_type _write_fut_target;
+    coro::lazy_future<bool>::promise_target_type _lazy_write_target1;
+    coro::lazy_future<bool>::promise_target_type _lazy_write_target2;
 
 
 
     void init() {
         coro::target_member_fn_activation<&MTStreamWriter::finish_write>(_write_fut_target, this);
+        coro::target_simple_activation(_lazy_write_target1, [&](auto promise){
+            if (promise) _flush1_ntf.push_back(std::move(promise));
+            _mx.unlock();
+        });
+        coro::target_simple_activation(_lazy_write_target2, [&](auto promise){
+            if (promise) _flush2_ntf.push_back(std::move(promise));
+            _mx.unlock();
+        });
     }
+
+    template<typename X, typename ... Ranges>
+    static void notify_flush(std::unique_lock<std::mutex> &lk, X &&val, Ranges && ... rngs) {
+        using PROM = coro::promise<bool>::pending_notify;
+        std::size_t sz = (0 + ... +std::distance(rngs.begin(), rngs.end()));
+        auto ntf = reinterpret_cast<PROM *>(alloca(sizeof(PROM)*sz));
+        int n = 0;
+
+        auto fill = [&](auto &r) {
+            for (auto &p: r) {
+                std::construct_at(ntf+n, p(val));
+                ++n;
+            }
+            r.clear();
+        };
+        (fill(rngs),...);
+        lk.unlock();
+        for (int i = 0; i < n; ++i) {
+            std::destroy_at(ntf+i);
+        }
+    }
+
     void finish_write(coro::future<bool> *val) noexcept {
         std::unique_lock lk(_mx);
         try {
             _pending_write.clear();
-            _closed = !*val;
+            _closed = !val->get();
             if (_closed) {
                 _prepared.clear();
                 _pending = false;
-                on_idle(lk);
+                 notify_flush(lk, true, _flush1_ntf, _flush2_ntf);
+
             } else if (_prepared.empty()) {
                 _pending = false;
-                on_idle(lk);
+                notify_flush(lk, true, _flush1_ntf, _flush2_ntf);
             } else {
                 std::swap(_pending_write,_prepared);
-                on_flush(lk); //unlock the lock
+                std::swap(_flush1_ntf, _flush2_ntf);
+                notify_flush(lk, true, _flush2_ntf);
                 _write_fut << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
                 _write_fut.register_target(_write_fut_target);
             }
@@ -250,43 +251,13 @@ protected:
             _prepared.clear();
             _pending = false;
             _closed = true;
-            on_idle(lk);
+            notify_flush(lk, _e, _flush1_ntf, _flush2_ntf);
         }
         if (_destroy_on_done) {
             lk.unlock();
             delete this;
         }
     }
-
-
-    void on_idle(std::unique_lock<std::mutex> &lk) {
-        auto ntf = reinterpret_cast<coro::promise<void>::pending_notify *>(
-                alloca(sizeof(coro::promise<void>::pending_notify)*_waiting.size()));
-        std::size_t cnt = 0;
-        for (auto &x: _waiting) {
-            std::construct_at(ntf+cnt,x.second());
-            ++cnt;
-        }
-        lk.unlock();
-        for (std::size_t i = 0; i<cnt; ++i) {
-            std::destroy_at(ntf+i);
-        }
-    }
-    void on_flush(std::unique_lock<std::mutex> &lk) {
-        auto ntf = reinterpret_cast<coro::promise<void>::pending_notify *>(
-                alloca(sizeof(coro::promise<void>::pending_notify)*_waiting.size()));
-        std::size_t cnt = 0;
-        _waiting.erase(std::remove_if(_waiting.begin(), _waiting.end(),[&](auto &p){
-            if (p.first) return false;
-            std::construct_at(ntf+cnt, p.second());
-            return true;
-        }), _waiting.end());
-        lk.unlock();
-        for (std::size_t i = 0; i<cnt; ++i) {
-            std::destroy_at(ntf+i);
-        }
-    }
-
 
     void destroy() {
         std::unique_lock lk(_mx);

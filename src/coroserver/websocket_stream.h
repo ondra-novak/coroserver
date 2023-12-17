@@ -48,7 +48,19 @@ public:
     Stream() = default;
 
 
-    void write(const Message &msg);
+    ///Send a message to websocket
+    /**
+     * @param msg message to send. Content is copied to internal buffer.
+     * @return optional (discardable) future. If the future is awaited, it resolves
+     * once the message is passed to the kernel for the delivery. The value contains
+     * status of the operation. The future can be
+     * discarded, in this case,no such awaiting is done. In all cases, this
+     * function is MT safe, multiple threads can write to the websocket connection.
+     *
+     * @retval true successfully sent
+     * @retval false failed to send, the stream is closed
+     */
+    coro::lazy_future<bool> send(const Message &msg);
 
     ///Read from websocket
     /**
@@ -69,7 +81,7 @@ public:
      *
      * @note Function IS NOT MT SAFE.
      */
-    coro::future<Message> read();
+    coro::future<Message> receive();
 
     std::size_t get_buffered_size() const;
 
@@ -85,18 +97,20 @@ public:
     State get_state() const;
 
     ///close the stream explicitly
-    void close() {
-        return write(Message{{},Type::connClose,Base::closeNormal});
+    /**
+     * @return see send()
+     */
+    coro::lazy_future<bool> close() {
+        return close(ws::Base::closeNormal);
     }
 
     ///close the stream explicitly
-    void close(std::uint16_t code) {
-        return write(Message{{},Type::connClose,code});
-    }
+    /**
+     * @param code error code
+     * @return see send()
+     */
+    coro::lazy_future<bool> close(std::uint16_t code);
 
-    coro::future<void> wait_for_flush();
-
-    coro::future<void> wait_for_idle();
 
 protected:
 

@@ -76,6 +76,8 @@ public:
 
     template<std::invocable<ServerRequest &, std::string_view> Fn>
     Handler(Fn &&fn);
+    template<std::invocable<ServerRequest &> Fn>
+    Handler(Fn &&fn);
     Handler() = default;
 
     void operator()(ServerRequest &req, std::string_view vpath, HandlerReturn &ret) const noexcept {
@@ -110,6 +112,29 @@ Handler::Handler(Fn &&fn) {
                 ret.emplace<coro::future<bool> >([&]{return _fn(req,vpath);});
             } else {
                 _fn(req,vpath);
+                ret.emplace<std::monostate>();
+            }
+        }
+    protected:
+        std::decay_t<Fn> _fn;
+    };
+    _ptr = std::make_shared<Impl>(std::forward<Fn>(fn));
+}
+
+template<std::invocable<ServerRequest &> Fn>
+Handler::Handler(Fn &&fn) {
+
+    class Impl: public IHandler {
+    public:
+        Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
+        virtual void call(ServerRequest &req, std::string_view , HandlerReturn &ret) const noexcept {
+            using RetT = decltype(_fn(req));
+            if constexpr(std::is_same_v<RetT, coro::future<void> >) {
+                ret.emplace<coro::future<void> >([&]{return _fn(req);});
+            } else if constexpr(std::is_same_v<RetT, coro::future<bool> >) {
+                ret.emplace<coro::future<bool> >([&]{return _fn(req);});
+            } else {
+                _fn(req);
                 ret.emplace<std::monostate>();
             }
         }

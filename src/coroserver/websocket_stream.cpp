@@ -16,8 +16,8 @@ public:
     }
     ~InternalState() {}
 
-    void write(const Message &msg) {
-        _writer([&](auto fn){
+    coro::lazy_future<bool> write(const Message &msg) {
+        return _writer.write([&](auto fn){
             _builder(msg, std::forward<decltype(fn)>(fn));
         });
     }
@@ -47,12 +47,15 @@ public:
         return State::closing;
     }
 
-    coro::future<void> wait_for_flush() {
-        return _writer.wait_for_flush();
-    }
-
-    coro::future<void> wait_for_idle() {
-        return _writer.wait_for_idle();
+    coro::lazy_future<bool> close(std::uint16_t code) {
+        if (get_state() == State::open) {
+            write({{}, Type::connClose, code});
+            return _writer.write_eof();
+        } else if (_writer) {
+            return _writer.write_eof();
+        } else {
+            return false;
+        }
     }
 
 protected:
@@ -60,7 +63,6 @@ protected:
     void on_read(coro::future<std::string_view> *fut) noexcept { // @suppress("No return")
         try {
             std::string_view data = *fut;
-            std::destroy_at(fut);
             if (data.empty()) {
 
                 if (_ping_sent) {
@@ -124,12 +126,12 @@ struct Stream::Deleter {
 };
 
 
-void Stream::write(const Message &msg) {
+coro::lazy_future<bool> Stream::send(const Message &msg) {
     return _ptr->write(msg);
 }
 
 
-coro::future<Message> Stream::read() {
+coro::future<Message> Stream::receive() {
     return _ptr->read();
 }
 
@@ -146,21 +148,23 @@ std::size_t Stream::get_buffered_size() const {
 
 Stream::Stream(_Stream s, Cfg cfg):_ptr(create(s, cfg)) {}
 
-coro::future<void> Stream::wait_for_flush() {
-    return _ptr->wait_for_flush();
-}
-
-coro::future<void> Stream::wait_for_idle() {
-    return _ptr->wait_for_idle();
-}
 
 std::shared_ptr<Stream::InternalState> Stream::create(_Stream &s, Cfg &cfg) {
     return std::shared_ptr<InternalState>(new InternalState(s, cfg), Deleter());
 }
 
+coro::lazy_future<bool> Stream::close(std::uint16_t code) {
+    return _ptr->close(code);
+}
+
 void Stream::InternalState::destroy() {
+    auto lzf = close(Base::closeNormal);
+    if (!lzf.is_pending()) {
+        delete this;
+        return;
+    }
     auto &f = _fut.as<void>();
-    f << [&]{return _writer.wait_for_idle();};
+    f << [&]{return static_cast<coro::future<void> >(lzf);};
     f.register_target(_target.call([&](auto ){delete this;}));
 
 

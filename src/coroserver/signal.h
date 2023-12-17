@@ -10,68 +10,19 @@
 
 
 
-#include "stream.h"
-#include "async_support.h"
 
-#include <cocls/future.h>
-#include <vector>
+#include <coro.h>
 
 namespace coroserver {
 
-///Creates asynchronous signal handler
-/**This object is attached to global signal handler provided by
- * coroserver library. You can use it to co_await on signal through
- * the operator(). You can co_await on multiple signals at once
- *
- * The implementation install the signal handler to the awaited signals
- * only (other signals are not touched).
- *
- */
-class SignalHandler {
-public:
-    ///Constructs the object
-    /**
-     * @param ioctx io context or asynchronou support object
-     */
-    SignalHandler(AsyncSupport ioctx);
-    ///Destroy object
-    /**
-     * Destruction of object causes that awaiting is canceled. Awaiting
-     * coroutines receives exception await_canceled_exception
-     */
-    ~SignalHandler();
-
-    ///Await on signal
-    /**
-     * @param signal signal to await
-     * @return future which can be co_awaited
-     * @exception coro::await_canceled_exception - object has been destroyed
-     * without catching a signal
-     */
-    coro::future<void> operator()(int signal);
-    ///Await on many signals
-    /**
-     * @param signals signals to await
-     * @return future which can be co_awaited
-     * @exception coro::await_canceled_exception - object has been destroyed
-     * without catching a signal
-     */
-    coro::future<void> operator()(std::initializer_list<int > signals);
+using HandlerID = const void *;
 
 
-protected:
-    Stream _signal_stream;
-    using Promises = std::vector<std::shared_ptr<coro::promise<void> >  >;
-    std::unordered_map<int, Promises> _listeners;
-    std::mutex _mx;
+coro::future<unsigned int> signal(int signum, HandlerID id = {});
 
-    coro::suspend_point<void> on_signal(coro::future<std::string_view> &f) noexcept;
+coro::future<unsigned int> signal(std::initializer_list<int> signums, HandlerID id = {});
 
-    coro::call_fn_future_awaiter<&SignalHandler::on_signal> _awt;
-
-
-};
-
+coro::future<unsigned int>::pending_notify cancel_signal_await(HandlerID id);
 
 
 }

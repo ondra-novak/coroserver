@@ -1,9 +1,8 @@
 #include <coroserver/http_client.h>
 #include <coroserver/http_ws_client.h>
 #include <coroserver/signal.h>
-#include <coroserver/pipe.h>
-#include <cocls/queue.h>
-#include <cocls/callback_awaiter.h>
+//#include <coroserver/pipe.h>
+#include <coro.h>
 #include <iostream>
 #include <csignal>
 
@@ -12,16 +11,16 @@ using namespace coroserver;
 using QueueMessage = std::variant<std::monostate, std::string>;
 
 coro::async<void> reader(ws::Stream stream, coro::queue<QueueMessage> &q) {
-    auto f = stream.read();
+    auto f = stream.receive();
     while (co_await f.has_value()) {
-        const auto &msg = *f;
+        const auto &msg = f.get();
         if (msg.type == ws::Type::text) {
             std::cout << msg.payload << std::endl;
         }
         if (msg.type == ws::Type::connClose) {
             break;
         }
-        f << [&]{return stream.read();};
+        f << [&]{return stream.receive();};
     }
     std::cout << "Connection closed" << std::endl;
     q.push(std::monostate());
@@ -32,19 +31,17 @@ coro::async<void> client(ContextIO ctx, coro::queue<QueueMessage> &data) {
     http::Client httpc(ctx, "userver/20");
     http::ClientRequest req (co_await httpc.open(http::Method::GET, "http://127.0.0.1:10000/ws"));
 
-        ws::Stream s;
-        if (co_await ws::Client::connect(s, req)) {
-            auto t = reader(s,data).start();
-            for(;;) {
-                QueueMessage msg= std::move(co_await data.pop());
-                if (std::holds_alternative<std::monostate>(msg)) break;
-                co_await s.write(ws::Message{std::get<std::string>(msg), ws::Type::text});
-            }
-
-        } else {
-            std::cerr << "Error to connect localhost:10000 /" << req.get_status() << std::endl;
+    try {
+        ws::Stream s = co_await ws::Client::connect(req);
+        auto t = reader(s,data).start();
+        for(;;) {
+            QueueMessage msg= std::move(co_await data.pop());
+            if (std::holds_alternative<std::monostate>(msg)) break;
+            co_await s.send(ws::Message{std::get<std::string>(msg), ws::Type::text});
         }
-
+    } catch (coro::broken_promise_exception &e) {
+            std::cerr << "Error to connect localhost:10000 /" << req.get_status() << std::endl;
+    }
 }
 
 constexpr coroserver::search_kmp new_line("\n");

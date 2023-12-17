@@ -41,32 +41,33 @@ static void generate_key_and_digest(std::string &key, std::string &digest) {
 
 }
 
-coro::future<bool> Client::operator()() {
-    return [&](auto promise) {
-        _result= std::move(promise);
-        std::string key;
-        generate_key_and_digest(key, _digest);
-        _req(http::strtable::hdr_upgrade,http::strtable::val_websocket);
-        _req(http::strtable::hdr_connection,http::strtable::val_upgrade);
-        _req("Sec-WebSocket-Key", key);
-        _req("Sec-WebSocket-Version", 13);
-        _awt << [&]{return _req.send();};
-    };
-}
 
-coro::suspend_point<void> Client::after_send(coro::future<_Stream> &f) noexcept {
-    try {
-        _Stream s(std::move(*f));
-        if (_req.get_status() == 101 && _req["Sec-WebSocket-Accept"] == std::string_view(_digest)) {
-            s.set_timeouts(_tm);
-            _out = Stream(std::move(s),{true, _need_fragmented});
-            return _result(true);
-        } else {
-            return _result(false);
+Client::Client(http::ClientRequest &req, TimeoutSettings tm,bool need_fragmented)
+: _tm(tm), _need_fragmented(need_fragmented) {
+
+    _result= get_promise();
+    std::string key;
+    generate_key_and_digest(key, _digest);
+    req(http::strtable::hdr_upgrade,http::strtable::val_websocket);
+    req(http::strtable::hdr_connection,http::strtable::val_upgrade);
+    req("Sec-WebSocket-Key", key);
+    req("Sec-WebSocket-Version", 13);
+    _fut  = req.send();
+    _fut.register_target(_target.call([this, &req](auto fut){
+        try {
+            _Stream s(std::move(fut->get()));
+            if (req.get_status() == 101 && req["Sec-WebSocket-Accept"] == std::string_view(_digest)) {
+                s.set_timeouts(_tm);
+                return _result(std::move(s),Stream::Cfg{true, _need_fragmented});
+            } else {
+                return _result.drop();
+            }
+        } catch (...) {
+            return _result.reject();
         }
-    } catch (...) {
-        return _result(std::current_exception());
-    }
+
+    }));
+
 }
 
 

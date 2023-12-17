@@ -371,7 +371,7 @@ void ServerRequest::content_type_from_extension(const std::string_view &path) {
 coro::future<bool> ServerRequest::send(std::string &&body) {
     _user_buffer = std::move(body);
     _send_body_data = _user_buffer;
-    add_header(strtable::hdr_content_length, body.size());
+    add_header(strtable::hdr_content_length, _send_body_data.size());
     return [&](auto prom) {
         _promise = std::move(prom);
         if (_has_body && !_expect_100_continue) {

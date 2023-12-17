@@ -12,7 +12,7 @@
 #include "async_support.h"
 #include "defs.h"
 #include "stream.h"
-#include <cocls/generator.h>
+#include <coro.h>
 
 namespace coroserver {
 

@@ -5,7 +5,7 @@
 #include <coroserver/http_server_request.h>
 #include <coroserver/http_server.h>
 #include <coroserver/http_ws_server.h>
-#include <cocls/publisher.h>
+#include <coro.h>
 
 #include <variant>
 #include <vector>
@@ -73,55 +73,79 @@ forge_nick();
 </html>
 )html";
 
+using MyPublisher = coro::distributor<std::string, std::mutex>;
+using SubscriberID = MyPublisher::ID;
 
-using MyPublisher = coro::publisher<std::string>;
-using MySubscriber = coro::subscriber<std::string>;
-
-std::string to_id(const void *ptr) {
-    std::ostringstream s;
-    s << ptr;
-    return s.str();
-}
-
-coro::async<void> reader(ws::Stream stream, MyPublisher &publisher, const MySubscriber *instance) {
-    do {
-        const ws::Message &msg = co_await stream.read();
+/// reader - detached coroutine, which reads data and pushes them to distributor
+/**
+ * @param stream web socket stream
+ * @param publisher reference to distributor acting as publisher
+ * @param id identifier of the subscribtion
+ * @return asynchronous function (coroutine)
+ */
+coro::async<void> reader(ws::Stream stream, MyPublisher &publisher, SubscriberID id) {
+    //this is infinite cycle
+    while (true) {
+        //receive websocket message
+        const ws::Message &msg = co_await stream.receive();
+        //depend on type
         switch (msg.type) {
+            //if this text
             case ws::Type::text: {
+                //create string
                 std::string txt(msg.payload);
+                //publish string
                 publisher.publish(std::move(txt));
             }break;
+            //connection closed
             case ws::Type::connClose:
-                publisher.kick(instance);
+                //unsubscribe
+                publisher.drop(id);
+                //exit
                 co_return;
             default:
+                //ignore any other message
                 break;
 
         }
     }
-    while (true);
+
 }
 
+///writer - monitors published messages and sends them to websocket connectionb
+/**
+ * Automatically starts reader in detached mode
+ *
+ * @param s websocket connection
+ * @param publisher reference to shared publisher/distributor
+ * @return async function
+ */
 coro::async<void> writer(ws::Stream s, MyPublisher &publisher) {
-    MySubscriber sbs(publisher);
-    reader(s, publisher, &sbs).detach();
-    while (co_await sbs.next()) {
-       std::string msg (std::move(sbs.value()));
-       if (!co_await s.write({msg, ws::Type::text})) {
-           break;
-       }
-    }
-
+    //create queue for published data (because
+    MyPublisher::queue<> q;
+    q.subscribe(publisher);
+    reader(s, publisher, &q).detach();
+    bool cont;
+    do {
+        auto msg = q.pop();
+        cont = co_await msg.has_value();
+        if (cont) {
+            std::string str = msg;
+            bool st = co_await s.send(ws::Message{str, ws::Type::text});
+            if (!st) {
+                cont = false;
+            }
+        }
+    } while (cont);
 }
 
 coro::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) {
-    ws::Stream s;
-    bool b = co_await ws::Server::accept(s, req);
-    if (b) {
+    try {
+        ws::Stream s = co_await ws::Server::accept(req);
         req.log_message("Opened websocket connection");
         co_await writer(std::move(s), publisher);
         req.log_message("Closed websocket connection");
-    } else {
+    } catch (const coro::broken_promise_exception &) {
         req.set_status(400);
     }
 }
@@ -133,7 +157,7 @@ int main(int, char **) {
     MyPublisher publisher;
 
     auto addrs = PeerName::lookup(":10000","");
-    ContextIO ctx = ContextIO::create(4);
+    ContextIO ctx = ContextIO::create(1);
     auto listener = ctx.accept(std::move(addrs));
     http::Server server;
 
@@ -141,12 +165,12 @@ int main(int, char **) {
         return ws_handler(req, publisher);
     });
 
-    server.set_handler("/", http::Method::GET, [&](http::ServerRequest &req, std::string_view vpath){
+    server.set_handler("/", http::Method::GET, [&](http::ServerRequest &req, std::string_view vpath) -> coro::future<bool> {
             if (vpath.empty()) {
                 req.content_type(http::ContentType::text_html_utf8);
-                return req.send(page);
+                return req.send(std::string(page));
             } else {
-                return coro::future<bool>::set_value(false);
+                return false;
             }
     });
     auto task = server.start(std::move(listener),http::DefaultLogger([](std::string_view line){
@@ -155,7 +179,7 @@ int main(int, char **) {
     std::cout << "Press enter to stop server:" << std::endl;
     std::cin.get();
     ctx.stop();
-    task.join();
+    task.wait();
 
     return 0;
 }

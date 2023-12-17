@@ -330,7 +330,6 @@ void Stream::write_eof_begin() {
 
 
 
-
 _Stream Stream::accept(_Stream s, Context ctx) {
     auto x = std::make_shared<Stream>(s, ctx);
     x->accept_mode();
@@ -391,10 +390,28 @@ void Stream::accept_mode(const Certificate &server_cert) {
 }
 
 Stream::~Stream() {
+    //if the connection is still established
+    //we need to shutdown this
+    //but we have no longer asynchronous features available (in destructor)
+    if (_state == established) {
+        //shutdown of the stream causes that all operations becomes non-blocking
+        _proxied->shutdown();
+        //lock and call SSL_shutdown
+        std::unique_lock lk(_mx);
+        SSL_shutdown(_ssl);
+        coro::mutex::target_type target;
+        coro::target_simple_activation(target, [](coro::mutex::ownership){});
+        //try to flush data to the stream in non-blocking mode
+        //if this fails, connection will be terminated in all cases
+        flush_output(lk, target);
+    }
+    //reset state to close
     _state = closed;
+    //reset any ownerships and release any possible awaiters
     _read_ownership.reset();
     _write_ownership.reset();
     _handshake_ownership.reset();
+    //we should be good
 }
 
 coro::generator<_Stream> Stream::accept(coro::generator<_Stream> gen, Context ctx, std::function<void()> ssl_error) {
