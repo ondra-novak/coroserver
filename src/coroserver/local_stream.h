@@ -1,12 +1,14 @@
 /*
- * socket_stream.h
+ * local_stream.h
  *
- *  Created on: 25. 3. 2023
+ *  Created on: 17. 12. 2023
  *      Author: ondra
  */
 
-#ifndef SRC_COROSERVER_SOCKET_STREAM_H_
-#define SRC_COROSERVER_SOCKET_STREAM_H_
+#ifndef SRC_COROSERVER_LOCAL_STREAM_H_
+#define SRC_COROSERVER_LOCAL_STREAM_H_
+
+
 
 #include "async_support.h"
 #include "defs.h"
@@ -16,12 +18,12 @@
 
 namespace coroserver {
 
-class ContextIOImpl;
+class ContextIO;
 
 
-class SocketStream: public AbstractStreamWithMetadata {
+class LocalStream: public AbstractStreamWithMetadata {
 public:
-    SocketStream(AsyncSocket socket, PeerName peer, TimeoutSettings tms);
+    LocalStream(AsyncSocket read_fd,  AsyncSocket write_fd, PeerName peer, TimeoutSettings tms);
 
     virtual coro::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
@@ -32,15 +34,13 @@ public:
     virtual Counters get_counters() const noexcept override;
     virtual PeerName get_peer_name() const override;
 
-    static Stream create(AsyncSocket socket, PeerName peer, TimeoutSettings tms);
-    virtual ~SocketStream();
-
 
 
 
 protected:
 
-    AsyncSocket _socket;
+    AsyncSocket _read_fd;
+    AsyncSocket _write_fd;
     Counters _cntr;
     PeerName _peer;
 
@@ -64,11 +64,18 @@ protected:
     bool read_begin(std::string_view &buff);
     void read_completion(coro::future<bool> *f) noexcept;
     void write_completion(coro::future<bool> *f) noexcept;
-    void enable_nagle();
-    void disable_nagle();
+
+    bool read_available() const;
+    bool write_available() const;
+
 };
+
+
 
 }
 
 
-#endif /* SRC_COROSERVER_SOCKET_STREAM_H_ */
+
+
+#endif /* SRC_COROSERVER_LOCAL_STREAM_H_ */
+

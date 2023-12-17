@@ -62,8 +62,7 @@ coro::future<std::string_view> SocketStream::read() {
     return [&](auto p) {
         disable_nagle();
         _read_promise = std::move(p);
-        _wait_read_result << [&]{return _socket.io_wait(AsyncOperation::read,
-                TimeoutSettings::from_duration(_tms.read_timeout_ms));};
+        _wait_read_result << [&]{return _socket.io_wait(AsyncOperation::read,_tms.read_timeout_tp());};
         _wait_read_result.register_target(_wait_read_target);
     };
 }
@@ -125,8 +124,7 @@ void SocketStream::write_begin() {
     if (r < 0) {
         int e = errno;
         if (e == EWOULDBLOCK|| e == EAGAIN) {
-            _wait_write_result << [&]{return _socket.io_wait(AsyncOperation::write,
-                    TimeoutSettings::from_duration(_tms.write_timeout_ms));};
+            _wait_write_result << [&]{return _socket.io_wait(AsyncOperation::write,_tms.write_timeout_tp());};
             _wait_write_result.register_target(_wait_write_target);
         } else if (e == EPIPE) {
             _is_closed = true;

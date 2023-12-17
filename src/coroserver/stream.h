@@ -17,12 +17,36 @@
 namespace coroserver {
 
 struct TimeoutSettings {
+    ///read timeout in milliseconds
     unsigned int read_timeout_ms = -1;
+    ///write timeout in milliseconds
     unsigned int write_timeout_ms = -1;
+    ///specifies timepoint, when IO operations expires for good.
+    /**
+     * This can be useful to mitigate some DoS attacts, such a Slowloris attach. You
+     * can specify a timeout in near future, when IO operation always timeouts, so you
+     * can't wait for IO operation after that point. This probably leads to closing the connection
+     * Default value is infinity time.
+     */
+    std::chrono::system_clock::time_point io_expiration = std::chrono::system_clock::time_point::max();
 
     static std::chrono::system_clock::time_point from_duration(unsigned int dur) {
-        if (dur == static_cast<unsigned int>(-1)) return std::chrono::system_clock::time_point::max();
-        else return std::chrono::system_clock::now()+std::chrono::milliseconds(dur);
+        if (dur == static_cast<unsigned int>(-1)) {
+            return std::chrono::system_clock::time_point::max();
+        } else {
+            return std::chrono::system_clock::now()+std::chrono::milliseconds(dur);
+        }
+    }
+
+    std::chrono::system_clock::time_point read_timeout_tp() const {
+        return std::min(io_expiration, from_duration(read_timeout_ms));
+    }
+    std::chrono::system_clock::time_point write_timeout_tp() const {
+        return std::min(io_expiration, from_duration(write_timeout_ms));
+    }
+
+    void set_expiration(unsigned int dur_ms) {
+        std::chrono::system_clock::now()+std::chrono::milliseconds(dur_ms);
     }
 };
 

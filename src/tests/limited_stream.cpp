@@ -1,6 +1,7 @@
 #include "check.h"
 #include "test_stream.h"
 #include <coroserver/limited_stream.h>
+#include <coroserver/stream_utils.h>
 
 
 void test1() {
@@ -11,9 +12,9 @@ void test1() {
     auto chs = coroserver::LimitedStream::write(s,16);
     chs.write("0123456789").wait();
     chs.write("A").wait();;
-    bool ret = chs.write("BCDEF").wait();
+    bool ret = chs.write("BCDEF").get();
     CHECK(ret);
-    ret = chs.write("GHIJ").wait();
+    ret = chs.write("GHIJ").get();
     CHECK(!ret);
     chs.write_eof().wait();;
     CHECK_EQUAL(result, expected);
@@ -26,7 +27,7 @@ void test2() {
     auto s = TestStream<100>::create({}, &result);
     auto chs = coroserver::LimitedStream::write(s,16);
     chs.write("0123456789").wait();
-    bool ret = chs.write_eof().wait();
+    bool ret = chs.write_eof().get();
     CHECK(ret);
 
     CHECK(result.compare(expected) == 0);
@@ -37,12 +38,12 @@ void test3() {
     auto s = TestStream<100>::create({"Hello", " World", " Extra data"});
     auto ls = coroserver::LimitedStream::read(s, 11);
 
-    std::string buff;
-    bool r = ls.read_block(buff, 15)().wait();
-    CHECK(!r);
+
+    coroserver::BlockReader blk(ls);
+    coroserver::BlockReader org_blk(s);
+    std::string_view buff = blk.read(15).get();
     CHECK_EQUAL(buff,"Hello World");
-    r = s.read_block(buff, 100)().wait();
-    CHECK(!r);
+    buff = org_blk.read(100).get();
     CHECK_EQUAL(buff," Extra data");
 }
 
@@ -50,15 +51,14 @@ void test4() {
     auto s = TestStream<100>::create({"Hello World Extra data"});
     auto ls = coroserver::LimitedStream::read(s, 11);
 
-    std::string buff;
-    bool r = ls.read_block(buff, 5)().wait();
-    CHECK(r);
+    std::string_view buff;
+    coroserver::BlockReader blk(ls);
+    coroserver::BlockReader org_blk(s);
+    buff =  blk.read(5).get();
     CHECK_EQUAL(buff,"Hello");
-    r = ls.read_block(buff, 15)().wait();
-    CHECK(!r);
+    buff = blk.read(15).get();
     CHECK_EQUAL(buff," World");
-    r = s.read_block(buff, 100)().wait();
-    CHECK(!r);
+    buff = org_blk.read(100).get();
     CHECK_EQUAL(buff," Extra data");
 }
 

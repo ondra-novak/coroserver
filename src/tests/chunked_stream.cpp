@@ -31,14 +31,14 @@ void test2() {
     auto chs = coroserver::ChunkedStream::read(s);
     std::string result;
     {
-        std::string_view buff = *chs.read();
+        std::string_view buff = chs.read();
         while (!buff.empty()) {
             result.append(buff);
-            buff = *chs.read();
+            buff = chs.read();
         }
     }
     CHECK_EQUAL(result, expected);
-    std::string_view extra = s.read().wait();
+    std::string_view extra = s.read();
     CHECK_EQUAL(extra, "ExtraData");
 }
 

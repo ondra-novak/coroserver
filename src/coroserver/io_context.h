@@ -115,6 +115,8 @@ public:
 
 
 
+
+
     ///Create accept generator
     /**
      * Accept generator opens one or more ports at given addresses,
@@ -198,21 +200,21 @@ public:
     }
 
 
-    protected:
+    ///create stream which serves as pipe
+    Stream create_pipe(TimeoutSettings tms = {});
+
+    ///create stream which is redirected to stdin and stdout
+    Stream create_stdio(TimeoutSettings tms = {});
+
+    ///open named pipe for reading
+    Stream read_named_pipe(const std::string &name, TimeoutSettings tms = {});
+
+    ///open named pipe for writing
+    Stream write_named_pipe(const std::string &name, TimeoutSettings tms = {});
+
+
+protected:
       std::shared_ptr<ContextIOImpl> _ptr;
-
-
-    ///Create accept generator
-    /**
-     * Accept generator listen new connections and returns them. You need to read
-     * the generator in cycle to accept new connections. See description of generator
-     * object. The generator can be stopped.
-     *
-     * @param list list of addresses to listen.
-     * @param token stop token
-     * @param tms timeouts for newly created streams
-     * @return generator
-     */
 
 
 public:

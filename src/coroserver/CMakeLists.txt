@@ -23,7 +23,7 @@ add_library(coroserver
    ssl_http_support.cpp
    http_client_request.cpp
    http_client.cpp
-#   pipe.cpp
+   local_stream.cpp
    signal.cpp
 #   message_stream.cpp
 #   umq_peer.cpp

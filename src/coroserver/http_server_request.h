@@ -378,7 +378,7 @@ protected:
 
 
 
-    unsigned int _search_hdr_state = 0;
+    kmp_search<char>_search_hdr_state;
     std::string_view _send_body_data;
 
     void load_cycle(ReadFuture *f);

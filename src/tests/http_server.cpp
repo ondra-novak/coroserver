@@ -2,6 +2,8 @@
 #include "test_stream.h"
 #include <coroserver/http_server_request.h>
 #include <coroserver/http_server.h>
+#include <coroserver/stream_utils.h>
+
 
 using namespace coroserver;
 using namespace coroserver::http;
@@ -90,10 +92,11 @@ coro::async<void> test_POST_body() {
     bool loaded = co_await req.load();
     CHECK(loaded);
     Stream body_stream = co_await req.get_body();
-    std::string b;
-    co_await body_stream.read_block(b, 1000);
+    coroserver::BlockReader blk(body_stream);
+    auto b = co_await blk(1000);
     CHECK_EQUAL(b, "0123456789ABCDEF\r\n");
-    co_await s.read_block(b, 1000);
+    coroserver::BlockReader blk2(s);
+    b = co_await blk2(1000);
     CHECK_EQUAL(b, "Extra data");
 }
 
@@ -108,10 +111,11 @@ coro::async<void> test_POST_body_chunked() {
     bool loaded = co_await req.load();
     CHECK(loaded);
     Stream body_stream = co_await req.get_body();
-    std::string b;
-    co_await body_stream.read_block(b, 1000);
+    coroserver::BlockReader blk(body_stream);
+    auto b = co_await blk(1000);
     CHECK_EQUAL(b, "0123456789ABCDEF\r\n");
-    co_await s.read_block(b, 1000);
+    coroserver::BlockReader blk2(s);
+    b = co_await blk2(1000);
     CHECK_EQUAL(b, "Extra data");
 }
 
@@ -141,8 +145,8 @@ coro::async<void> test_POST_body_expect_discard() {
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
     co_await req.send("Done");
     CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
-    std::string b;
-    co_await s.read_block(b, 1000);
+    coroserver::BlockReader blk(s);
+    auto b = co_await blk(1000);
     CHECK_EQUAL(b, "0123456789ABCDEF\r\nExtra data");
 
 }
@@ -158,8 +162,8 @@ coro::async<void> test_POST_body_discard() {
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
     co_await req.send("Done");
     CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
-    std::string b;
-    co_await s.read_block(b, 1000);
+    coroserver::BlockReader blk(s);
+    auto b = co_await blk(1000);
     CHECK_EQUAL(b, "Extra data");
 
 }
@@ -191,9 +195,9 @@ void test_server() {
     std::string out3;
     auto s3 = TestStream<50>::create({"POST /a/c HTTP/1.1\r\nHost: example.com\r\nContent-Length: 10\r\n\r\n0123456789GET /unknown HTTP/1.1\r\nHost: example.com\r\n\r\n",
                                 "POST /a/c HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 10\r\n\r\n0123456789"}, &out3);
-    server.serve_req(s1).join();
-    server.serve_req(s2).join();
-    server.serve_req(s3).join();
+    server.serve_req(s1).wait();
+    server.serve_req(s2).wait();
+    server.serve_req(s3).wait();
 
     CHECK_EQUAL(out1 , "HTTP/1.1 402 Payment Required\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\n"
                   "Content-Type: application/xhtml+xml\r\nContent-Length: 299\r\nServer: CoroServer 1.0 (C++20)\r\n"

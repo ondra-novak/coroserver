@@ -10,6 +10,8 @@ namespace coroserver {
 
 namespace http {
 
+constexpr kmp_pattern end_of_header("\r\n\r\n");
+
 
 ClientRequest::ClientRequest(ClientRequestParams &params)
     :_s(std::move(params.s))
@@ -18,7 +20,8 @@ ClientRequest::ClientRequest(ClientRequestParams &params)
     ,_auth(params.auth)
     ,_static_headers(std::move(params.headers))
     ,_method(params.method)
-    ,_request_version(params.ver) {
+    ,_request_version(params.ver)
+    ,_hdr_sep_search(end_of_header) {
         prepare_header(params.method, params.path);
 }
 
@@ -58,7 +61,7 @@ void ClientRequest::open(Method method, std::string_view path) {
     _body_to_write = {};
     _command = Command::none;
     _stream_promise.drop();
-    _rcvstatus = 0;
+    _hdr_sep_search.reset();
 
     prepare_header(method, path);
 }
@@ -202,7 +205,6 @@ coro::lazy_future<Stream> ClientRequest::begin_body() {
 
 }
 
-static constexpr search_kmp<4> end_of_header("\r\n\r\n");
 
 void ClientRequest::receive_response(coro::future<std::string_view> *res) noexcept {
     try {
@@ -210,7 +212,7 @@ void ClientRequest::receive_response(coro::future<std::string_view> *res) noexce
         if (data.empty()) throw ConnectionReset();
         for (std::size_t i = 0, cnt = data.size(); i < cnt; i++) {
             _response_headers_data.push_back(data[i]);
-            if (end_of_header(_rcvstatus, data[i])) {
+            if (_hdr_sep_search(data[i])) {
                 _response_headers_data.pop_back();
                 _response_headers_data.pop_back();
                 _s.put_back(data.substr(i+1));
@@ -372,7 +374,7 @@ void ClientRequest::after_send_headers(coro::future<bool> *res) noexcept {
             return;
         }
 
-        _rcvstatus = 0;
+        _hdr_sep_search.reset();
         _response_headers_data.clear();
 
         switch (_command) {

@@ -15,6 +15,7 @@
 #include <system_error>
 #include <coro.h>
 
+#include "local_stream.h"
 
 
 #include <unistd.h>
@@ -313,7 +314,64 @@ void ContextIO::stop() {
    _ptr->stop();
 }
 
+Stream ContextIO::create_pipe(TimeoutSettings tms) {
+    int fds[2];
+    int r = pipe2(fds, O_CLOEXEC | O_NONBLOCK);
+    if (r < 0) throw std::system_error(errno, std::system_category());
+    return Stream(std::make_shared<LocalStream>(
+            AsyncSocket(fds[0], _ptr),
+            AsyncSocket(fds[1], _ptr),
+            PeerName(),
+            tms));
+}
 
+Stream ContextIO::create_stdio(TimeoutSettings tms) {
+    int rdfd = fcntl(0, F_DUPFD_CLOEXEC, 0);
+    if (rdfd < 0) {
+        int e =errno;
+        throw std::system_error(e, std::system_category(), "failed to dup stdin");
+    }
+    int wrfd = fcntl(0, F_DUPFD_CLOEXEC, 1);
+    if (wrfd < 0) {
+        int e = errno;
+        ::close(rdfd);
+        throw std::system_error(e, std::system_category(), "failed to dup stdout");
+    }
+    return Stream(std::make_shared<LocalStream>(
+            AsyncSocket(rdfd, _ptr),
+            AsyncSocket(wrfd, _ptr),
+            PeerName(),
+            tms));
+
+}
+
+Stream ContextIO::read_named_pipe(const std::string &name, TimeoutSettings tms) {
+    int fd = ::open(name.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)  {
+        int e =errno;
+        throw std::system_error(e, std::system_category(), "failed to open named pipe: " + name);
+    }
+    return Stream(std::make_shared<LocalStream>(
+            AsyncSocket(fd, _ptr),
+            AsyncSocket(),
+            PeerName(),
+            tms));
+}
+
+
+
+Stream ContextIO::write_named_pipe(const std::string &name, TimeoutSettings tms) {
+    int fd = ::open(name.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)  {
+        int e =errno;
+        throw std::system_error(e, std::system_category(), "failed to open named pipe: " + name);
+    }
+    return Stream(std::make_shared<LocalStream>(
+            AsyncSocket(),
+            AsyncSocket(fd, _ptr),
+            PeerName(),
+            tms));
+}
 
 }
 

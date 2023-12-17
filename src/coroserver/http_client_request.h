@@ -243,8 +243,8 @@ protected:
 
 
     void after_send_headers(coro::future<bool> *res) noexcept;
-    void receive_response(coro::future<std::string_view> *res) noexcept;
-    unsigned int _rcvstatus = 0;
+	void receive_response(coro::future<std::string_view> *res) noexcept;
+    kmp_search<char> _hdr_sep_search;
     coro::promise<Stream> _stream_promise;
     Command _command = Command::none;
     std::string_view _body_to_write;

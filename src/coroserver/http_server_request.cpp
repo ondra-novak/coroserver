@@ -13,13 +13,14 @@ std::string ServerRequest::server_name = "CoroServer 1.0 (C++20)";
 
 static constexpr std::size_t status_response_max_len=64;
 
-static constexpr search_kmp search_hdr_sep("\r\n\r\n");
+constexpr kmp_pattern search_hdr_sep("\r\n\r\n");
 
 
 ServerRequest::ServerRequest(Stream s, bool secure)
     :_cur_stream(std::move(s))
     ,_secure(secure)
     ,_body_stream(nullptr)
+    ,_search_hdr_state(search_hdr_sep)
     {}
 
 ServerRequest::~ServerRequest() {
@@ -30,7 +31,7 @@ coro::lazy_future<bool> ServerRequest::load() {
         _promise = std::move(promise);
         _status_code = 0;
         _status_message = {};
-        _search_hdr_state = 0;
+        _search_hdr_state.reset();
         _body_processed = false;
         _headers_sent = false;
         _header_data.clear();
@@ -58,12 +59,12 @@ void ServerRequest::load_cycle(ReadFuture *f) {
         for (std::size_t cnt = data.size(), i = 0; i < cnt; i++) {
             char c= data[i];
             _header_data.push_back(c);
-            if (search_hdr_sep(_search_hdr_state,c)) {
+            if (_search_hdr_state(c)) {
                 _cur_stream.put_back(data.substr(i+1));
-                _header_data.resize(_header_data.size()-search_hdr_sep.length());
+                _header_data.resize(_header_data.size()-_search_hdr_state.size());
                 bool b = parse_request({_header_data.data(), _header_data.size()});
                 if (!b) _keep_alive = false;
-                _promise.as<bool>()(true);
+                _promise.as<bool>()(b);
                 return;
             }
         }
