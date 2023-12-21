@@ -12,54 +12,59 @@ namespace umq {
 
 class WsConnection: public IConnection  {
 public:
-    WsConnection(ws::Stream s):_s(std::move(s)),_awt(*this) {}
+    WsConnection(ws::Stream s):_s(std::move(s)) {
+        coro::target_member_fn_activation<&WsConnection::on_receive>(_target, this);
+    }
 
-    virtual coro::future<Message> receive() override;
-    virtual bool send(const Message &msg) override;
+    virtual coro::future<Message> receive() override {
+        return [&](auto promise) {
+            _result = std::move(promise);
+            _fut << [&]{return _s.receive();};
+            _fut.register_target(_target);
+        };
+    }
+
+    virtual coro::lazy_future<bool> send(const Message &msg) override {
+        switch (msg._type) {
+            case MessageType::close: return _s.close();
+            case MessageType::binary: return _s.send({msg._payload, ws::Type::binary});
+            case MessageType::text: return _s.send({msg._payload, ws::Type::text});
+        }
+    }
 
     static PConnection create(ws::Stream s) {
         return std::make_unique<WsConnection>(std::move(s));
     }
 
 protected:
-    coro::suspend_point<void> on_receive(coro::future<ws::Message> &f) noexcept;
     ws::Stream _s;
-    coro::call_fn_future_awaiter<&WsConnection::on_receive> _awt;
     coro::promise<Message> _result;
+    coro::future<ws::Message> _fut;
+    coro::future<ws::Message>::target_type _target;
+
+    void on_receive(coro::future<ws::Message> *fut) noexcept {
+        try {
+            const ws::Message &msg = *fut;
+            switch (msg.type) {
+                case ws::Type::connClose:
+                    _result(Message{MessageType::close, {}});
+                    return;
+                case ws::Type::text:
+                    _result(Message{MessageType::text, msg.payload});
+                    return;
+                case ws::Type::binary:
+                    _result(Message{MessageType::binary, msg.payload});
+                    return;
+                default:break;
+            }
+            _fut << [&]{return _s.receive();};
+            _fut.register_target(_target);
+        } catch (...) {
+            _result.reject();
+        }
+    }
 };
 
-inline coro::future<Message> WsConnection::receive() {
-    return [&](auto promise) {
-        _result = std::move(promise);
-        _awt << [&]{return _s.read();};
-    };
-}
-
-inline bool WsConnection::send(const Message &msg) {
-    switch (msg._type) {
-        case MessageType::close: return _s.close();
-        case MessageType::binary: return _s.write({msg._payload, ws::Type::binary});
-        case MessageType::text: return _s.write({msg._payload, ws::Type::text});
-    }
-    return true;
-}
-
-
-inline coro::suspend_point<void> WsConnection::on_receive(coro::future<ws::Message> &f) noexcept {
-    try {
-        const ws::Message &msg = *f;
-        switch (msg.type) {
-            case ws::Type::connClose: return _result(Message{MessageType::close, {}});
-            case ws::Type::text: return _result(Message{MessageType::text, msg.payload});
-            case ws::Type::binary: return _result(Message{MessageType::binary, msg.payload});
-            default:break;
-        }
-        _awt << [&]{return _s.read();};
-        return {};
-    } catch (...) {
-        return _result(std::current_exception());
-    }
-}
 
 
 

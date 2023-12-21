@@ -18,7 +18,7 @@
 
 namespace coroserver {
 
-class ContextIO;
+class Context;
 
 
 class LocalStream: public AbstractStreamWithMetadata {

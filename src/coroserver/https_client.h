@@ -13,10 +13,10 @@ namespace https {
 
 
 ///Https connection factory
-inline ConnectionFactory connectionFactory(ContextIO ioctx, ssl::Context sslctx, int timeout_ms, TimeoutSettings tms) {
-    return [ioctx  = std::move(ioctx), sslctx = std::move(sslctx), timeout_ms, tms](std::string_view host) mutable ->coro::future<Stream> {
+inline ConnectionFactory connectionFactory(Context &ioctx, ssl::Context sslctx, TimeoutSettings::Dur connect_timeout, TimeoutSettings tms) {
+    return [&ioctx, sslctx = std::move(sslctx), connect_timeout, tms](std::string_view host) mutable ->coro::future<Stream> {
         auto list = PeerName::lookup(host, "443");
-        Stream s = co_await ioctx.connect(std::move(list), timeout_ms, tms);
+        Stream s = co_await ioctx.connect(std::move(list), connect_timeout, tms);
         co_return ssl::Stream::connect(s, sslctx, std::string(host));
     };
 }
@@ -26,11 +26,11 @@ inline ConnectionFactory connectionFactory(ContextIO ioctx, ssl::Context sslctx,
 class Client: public http::Client {
 public:
 
-    Client(ContextIO ioctx, ssl::Context sslctx, std::string user_agent, int timeout_ms=ContextIO::defaultTimeout , TimeoutSettings tms={ContextIO::defaultTimeout,ContextIO::defaultTimeout})
+    Client(Context &ioctx, ssl::Context sslctx, std::string user_agent, TimeoutSettings::Dur connect_timeout=defaultConnectTimeout, TimeoutSettings tms=defaultTimeout)
         :http::Client({
             std::move(user_agent),
-            http::connectionFactory(ioctx, timeout_ms, tms),
-            connectionFactory(std::move(ioctx), std::move(sslctx), timeout_ms, tms)
+            http::connectionFactory(ioctx, connect_timeout, tms),
+            connectionFactory(ioctx, std::move(sslctx), connect_timeout, tms)
     }) {}
 
 };

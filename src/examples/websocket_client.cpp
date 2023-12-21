@@ -26,7 +26,7 @@ coro::async<void> reader(ws::Stream stream, coro::queue<QueueMessage> &q) {
     q.push(std::monostate());
 }
 
-coro::async<void> client(ContextIO ctx, coro::queue<QueueMessage> &data) {
+coro::async<void> client(Context &ctx, coro::queue<QueueMessage> &data) {
 
     try {
         http::Client httpc(ctx, "userver/20");
@@ -54,7 +54,7 @@ coro::async<void> client(ContextIO ctx, coro::queue<QueueMessage> &data) {
 
 constexpr coroserver::kmp_pattern new_line("\n");
 
-coro::async<void> input(ContextIO ctx, coro::queue<QueueMessage> &data) {
+coro::async<void> input(Context &ctx, coro::queue<QueueMessage> &data) {
     Stream s = ctx.create_stdio();
     std::string line;
     std::string name = "client: ";
@@ -82,7 +82,7 @@ coro::async<void> input(ContextIO ctx, coro::queue<QueueMessage> &data) {
 int main(int, char **) {
 
 
-    ContextIO ctx = ContextIO::create(0);
+    Context ctx(0);
     try {
         coro::queue<QueueMessage> q;
         coro::future<void> f = client(ctx,q).start();

@@ -2,6 +2,7 @@
 #ifndef _SRC_COROSERVER_MT_STREAM_qoiwujdoiqjdoiqdjoq_
 #define _SRC_COROSERVER_MT_STREAM_qoiwujdoiqjdoiqdjoq_
 #include "stream.h"
+#include "atomic_mutex.h"
 
 #include <coro.h>
 #include <vector>
@@ -12,6 +13,8 @@
 
 
 namespace coroserver {
+
+
 
 ///This class helps with multithreaded writing to a stream
 /**
@@ -43,16 +46,15 @@ public:
         init();
     }
 
-    using FnPrototype = decltype([](char){});
+    using WriteIterator = std::back_insert_iterator<std::vector<char> >;
 
 
-
-    template<std::invocable<FnPrototype> Fn>
+    template<std::invocable<WriteIterator> Fn>
     coro::lazy_future<bool> write(Fn &&fn) {
         std::unique_lock lk(_mx);
         if (_e) std::rethrow_exception(_e);
         if (_closed) return false;
-        fn([&](char c){_prepared.push_back(c);});
+        fn(std::back_inserter(_prepared));
         if (_pending) {
             lk.release(); //release mutex in locked state - we handle it as lazy target
             return _lazy_write_target2;
@@ -83,8 +85,8 @@ public:
      * @exception any any exception captured during recent flush
      */
     coro::lazy_future<bool> write(std::string_view txt) {
-        return write([&](auto wr){
-            for (auto y:txt) wr(y);
+        return write([&](auto iter){
+            std::copy(txt.begin(), txt.end(), iter);
         });
     }
 
@@ -176,7 +178,7 @@ public:
 
 protected:
     std::shared_ptr<IStream> stream;
-    mutable std::mutex _mx;
+    mutable AtomicMutex _mx;
     std::vector<char> _prepared;
     std::vector<char> _pending_write;
     std::vector<coro::promise<bool> > _flush1_ntf;
@@ -206,7 +208,7 @@ protected:
     }
 
     template<typename X, typename ... Ranges>
-    static void notify_flush(std::unique_lock<std::mutex> &lk, X &&val, Ranges && ... rngs) {
+    static void notify_flush(std::unique_lock<AtomicMutex> &lk, X &&val, Ranges && ... rngs) {
         using PROM = coro::promise<bool>::pending_notify;
         std::size_t sz = (0 + ... +std::distance(rngs.begin(), rngs.end()));
         auto ntf = reinterpret_cast<PROM *>(alloca(sizeof(PROM)*sz));
@@ -230,13 +232,20 @@ protected:
         std::unique_lock lk(_mx);
         try {
             _pending_write.clear();
-            _closed = !val->get();
-            if (_closed) {
+            bool to_close = !val->get();
+            if (to_close) {
+                _closed = true;
                 _prepared.clear();
                 _pending = false;
                  notify_flush(lk, true, _flush1_ntf, _flush2_ntf);
-
             } else if (_prepared.empty()) {
+                if (_write_eof) {
+                    _write_eof = false;
+                    _write_fut << [&]{return stream->write_eof();};
+                    lk.unlock();
+                    _write_fut.register_target(_write_fut_target);
+                    return;
+                }
                 _pending = false;
                 notify_flush(lk, true, _flush1_ntf, _flush2_ntf);
             } else {
@@ -274,13 +283,8 @@ protected:
             inst->destroy();
         }
     };
-
-
-
 };
 
+
 }
-
-
-
 #endif

@@ -1,8 +1,9 @@
 #include "check.h"
+
+#include <coroserver/context.h>
 #include <coroserver/stream.h>
 #include <coroserver/ssl_stream.h>
 #include <coroserver/character_io.h>
-#include <coroserver/io_context.h>
 
 using namespace coroserver;
 
@@ -66,7 +67,7 @@ aQwTUrA+Mrf6
 )pem";
 
 
-coro::async<void> write_task(coroserver::ContextIO ctx, std::string port, ssl::Context &sslctx) {
+coro::async<void> write_task(coroserver::Context &ctx, std::string port, ssl::Context &sslctx) {
     coroserver::Stream stream = co_await ctx.connect(PeerName::lookup("localhost", port));
     coroserver::Stream sslstream = coroserver::ssl::Stream::connect(stream, sslctx);
     coroserver::CharacterWriter<coroserver::Stream> wr(sslstream);
@@ -107,7 +108,7 @@ int main() {
     ssl::Context client_sslctx = ssl::Context::init_client();
     client_sslctx.set_certificate(cert);
 
-    coroserver::ContextIO ctx = coroserver::ContextIO::create(0);
+    coroserver::Context ctx(0);
 
     auto addr = PeerName::lookup("127.0.0.1","*");
     auto listener = ctx.accept(addr);

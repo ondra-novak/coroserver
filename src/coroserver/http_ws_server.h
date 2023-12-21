@@ -45,7 +45,7 @@ public:
      *
      * @exception coro::broken_promise_exception - invalid request
      */
-    static Server accept(http::ServerRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false) {
+    static Server accept(http::ServerRequest &req, TimeoutSettings tm = defaultTimeout, bool need_fragmented = false) {
         return Server(req, tm, need_fragmented);
     }
 
@@ -53,7 +53,7 @@ public:
 protected:
 
     Server(http::ServerRequest &req,
-           TimeoutSettings tm = {60000,60000},
+           TimeoutSettings tm = defaultTimeout,
            bool need_fragmented = false)
         :_result(coro::future<Stream>::get_promise())
     {

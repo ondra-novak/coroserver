@@ -5,7 +5,7 @@
 
 #include "static_lookup.h"
 #include <queue>
-#include <cocls/shared_future.h>
+#include <coro.h>
 namespace coroserver {
 
 namespace umq {
@@ -49,34 +49,142 @@ public:
 
     static UMQException makeError(ErrorCode code);
 
+    using AttachmentData = std::vector<char>;
+
+
     struct Payload {
         std::string_view text;
-        std::vector<coro::shared_future<std::vector<char> > > attachments;
+        std::vector<coro::lazy_future<AttachmentData> > attachments;
+
+        Payload() = default;
+        Payload(std::string_view text): text(text) {}
+        void add_attachment(AttachmentData attach) {
+            attachments.push_back(std::move(attach));
+        }
+        void add_attachment(coro::lazy_future<AttachmentData> attach) {
+            attachments.push_back(std::move(attach));
+        }
     };
 
-    struct HelloMessage: Payload {
-        coro::promise<Payload> _response;
-        void accept();
-        void accept(std::string_view payload);
-        void accept(Payload payload);
+
+    using ID = std::uint32_t;
+
+    struct Core;
+
+    struct Request : Payload {
+        ID id;
+        coro::promise<Payload> accept;
     };
 
-    struct RPCRequest : Payload {
+    class SubscriptionBase {
+    public:
+        SubscriptionBase() = default;
+        SubscriptionBase(ID id, std::weak_ptr<Core> core)
+            :_id(id), _core(core) {}
+        SubscriptionBase(SubscriptionBase &&x) = default;
+        SubscriptionBase(const SubscriptionBase &x) = delete;
+        SubscriptionBase &operator=(SubscriptionBase &&x) = default;
+        SubscriptionBase &operator=(const SubscriptionBase &x) = delete;
+    protected:
+        ID _id = 0;
+        std::weak_ptr<Core> _core;
+
+    };
+
+    ///Contains active subscription
+    /**
+     * Subscription can be used to listen on subscribed channel
+     */
+    class Subscription: public SubscriptionBase {
+    public:
+        using SubscriptionBase::SubscriptionBase;
+        ~Subscription();
+
+        ///Receive next data on channel
+        /**
+         * @return received data
+         * @note you need to call this method immediatelly to avoid miss
+         * any data. Optimal is to do this in the same thread.
+         *
+         * (work similar as coro::distributor)
+         *
+         */
+        coro::future<Payload> receive();
+        ID get_id() const {return _id;}
+    };
+
+    class Topic: public SubscriptionBase {
+    public:
+        using SubscriptionBase::SubscriptionBase;
+        ~Topic();
+        ///publish to the topic
+        /**
+         * @param pl payload to publish
+         * @return lazy future returns state of the channel. Future is resolved
+         * once the message hits the network. The value contain susccess.
+         * @retval true published
+         * @retval false topic has been closed
+         *
+         * @note Return value can be asynchronous. However if you don't wait to
+         * future resolution, you can test whether it is pending. If the topic
+         * was closed, it is always returned as resolved so you can read status
+         * false without waiting.
+         */
+        coro::lazy_future<bool> publish(const Payload &pl);
+
+        coro::future<void> on_unsubscribe();
+
+
 
     };
 
     Peer();
 
-    coro::future<HelloMessage> start_server(PConnection conn);
+    coro::future<Payload> connect(const Payload &pl);
 
-    coro::future<Payload> start_client(PConnection conn, Payload hello = {});
+    coro::future<Request> listen();
+
+    coro::future<Payload> call(const Payload &request);
+
+    coro::future<Request> get_request();
+
+    ///Create subscription
+    /**
+     * @return subscription.
+     *
+     * You need to create subscription before you can subscribe on a publisher.
+     * The publisher need an ID of subscription to correctly label data on
+     * the channel. You can use get_id() to retrieve this ID
+     */
+    Subscription subscribe();
 
 
-    State get_state() const;
+    ///Start publishing
+    Topic publish(ID topic_id);
 
-    void close();
-    void close(const UMQException &error);
-    void close(ErrorCode code);
+
+    ///Send message to a channel
+    /**
+     * Channels allow to send message without additional signaling. Other side
+     * must listen on a channel, otherwise the message is lost.
+     *
+     * @param channel_id channel id
+     * @param pl payload
+     * @return discardable lazy future
+     */
+    coro::lazy_future<bool> channel_send(ID channel_id, const Payload &pl);
+
+    ///Receive message on channel
+    /**
+     * @param channel_id channel id to listen.
+     * @return message when received
+     *
+     * @note Once the message received, you need to call this function again in the
+     * same thread, otherwise, the next message can be lost.
+     */
+    coro::future<Payload> channel_receive(ID channel_id);
+
+
 
 protected:
 
@@ -104,56 +212,25 @@ protected:
         hello = 'H',
         ///Welcome message, sends as reply by respondent, ID contains version, payload is response
         welcome = 'W',
-        ///RPC method call
-        /**
-         * Call RPC method, ID contains unique string. In the payload, there is name
-         * of the method terminated by line separator, following data are arguments
-         *
-         * @code
-         * Mabc
-         * method-name
-         * arguments
-         * @endode
+        ///Request
+        /**Send request. Request must be responded. The ID of response must match to
+         * ID of request. There can be only one Response to Request
          */
-        method = 'M',
+        request = 'Q',
 
-        ///Response with callback
+        ///Response
         /**
-         * Callback works similar as method 'M' However, callbacks are 'one shot' while
-         * methods are permanent.
+         * Response to a request, ID identifies the request
          */
-        result_callback = 'C',
-        ///Result of method or callback
+        response = 'P',
+
+
+        ///Error response to a request
         /**
-         * ID must be equal to to request 'M' or 'C'
-         * the payload contains response. This message causes, that server expects
-         * response from the client. The client must generate C, R, or E message
-         * to continue in dialog.
-         *
-         * @code
-         * a -> M -> b
-         * a <- C <- b
-         * a -> C -> b
-         * a <- C <- b
-         * a -> R -> b
-         * @endcode
-         */
-        result = 'R',
-        ///Exception of method
-        /**
-         * Exception is error response of the method. It means that method has been
-         * found, called, but failed. Payload contains error message
-         * ID must be equal to id of the request or the callback
-         */
-        exception = 'E',
-        ///Failed to route to target method
-        /**
-         * Method not found, or cannot be routed (network error, service unavailable),
-         * This means, that method was not called
-         * Payload contains error message
-         * ID must be equal to id of the request or the callback
-         */
-        route_error = '/',
+         * Same meaning as 'P', but indicates error
+         * */
+        response_error = 'E',
+
         /// Topic (subscription) update
         /**
          * ID contains id of topic
@@ -177,72 +254,19 @@ protected:
          * It is not error to generate this message as response to a message 'unsubscribe'.
          */
         topic_close = 'Z',
-        ///Set/update remote variable
-        /**
-         * ID = name of variable
-         * payload - value of the variable
-         */
-        set_var = 'S',
-        ///Unset the remove variable
-        /**
-         * ID = name of variable
-         * patload is empty
-         */
-        unset_var = 'X',
-        ///Discover services offered by the peer
-        /**
-         * It is like 'M' but only returns description
-         * @code
-         * ?<id>
-         * method.name
-         * @endcode
-         * Result is help for this method.
-         *
-         * If sends with empty payload or with name of route,
-         * the list of methods is returned. This list is formatted by following
-         * way
-         *   \M<name> - method
-         *   \R<name> - route
-         *
-         */
-        discover = '?'
-
+        ///Channel message
+        channel_message = 'C',
 
     };
 
-    PConnection _conn;
-
-    coro::future<void> _close_future;
-    coro::promise<void> _close_promise;
-    std::atomic_flag _closing;
-    bool _closed = false;
-
-    bool send(Type type, std::string_view id = {}, std::string_view payload = {}, int attachments = 0);
-    bool send(Type type, std::string_view id = {}, const Payload &pl = {});
-    void start_reader();
-    coro::suspend_point<void> on_message(coro::future<Message> &f) noexcept;
-    bool recvTextMessage(std::string_view message);
-    bool recvBinaryMessage(std::string_view message);
-
-    void allocate_attachments(std::string_view txtcount, std::vector<coro::shared_future<std::vector<char> > > &attach);
-
-    coro::call_fn_future_awaiter<&Peer::on_message> _on_msg_awt;
-
-    std::queue<coro::promise<std::vector<char> > > _awaited_binary;
-    std::queue<coro::shared_future<std::vector<char> > > _attach_send_queue;
-    std::mutex _attach_send_queue_mx;
-    coro::suspend_point<void> on_attachment_ready(coro::awaiter *) noexcept;
-    coro::call_fn_awaiter<&Peer::on_attachment_ready> _att_ready;
-    std::shared_ptr<Peer> _att_ready_peer_ref;
 
 
-    void on_attachment_error(const UMQException &e);
-    void on_hello_message(const std::string_view &version, const Payload &payload);
-    void on_welcome_message(const std::string_view &version, const Payload &payload);
+
+protected:
+
+    std::shared_ptr<Core> _core;
 
 
-    coro::promise<Payload> _welcome_response;
-    coro::promise<HelloMessage> _hello_request;
 
 
 };

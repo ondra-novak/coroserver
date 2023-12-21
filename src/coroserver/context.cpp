@@ -5,8 +5,8 @@
  *      Author: ondra
  */
 
+#include "context.h"
 #include "exceptions.h"
-#include "io_context.h"
 #include "ipoller.h"
 #include "poller_epoll.h"
 
@@ -16,7 +16,10 @@
 #include <coro.h>
 
 #include "local_stream.h"
+#include "atomic_mutex.h"
 
+#include <atomic>
+#include <csignal>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -24,8 +27,59 @@
 #include <netinet/tcp.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/signalfd.h>
 #include <thread>
+#include <tuple>
 namespace coroserver {
+
+class ContextIOImpl: public IAsyncSupport, public std::enable_shared_from_this<ContextIOImpl> {
+public:
+
+    using AcceptResult = std::pair<SocketHandle, PeerName>;
+
+
+    ContextIOImpl(coro::scheduler &sch);
+    ContextIOImpl(std::unique_ptr<coro::scheduler> sch);
+    ContextIOImpl(std::size_t iothreads);
+    ~ContextIOImpl();
+
+    virtual WaitResult io_wait(SocketHandle handle,
+                     AsyncOperation op,
+                     std::chrono::system_clock::time_point timeout) override;
+    virtual void shutdown(SocketHandle handle)  override;
+    virtual void close(SocketHandle handle)  override;
+
+    void stop();
+
+    coro::scheduler &get_scheduler()  {
+        return *_scheduler;
+    }
+
+    coro::future<void> on_ctx_destroy() {
+        return [&](auto prom) {
+            std::lock_guard lk(_mx);
+            _ctx_destroy.push_back(prom());
+        };
+    }
+
+
+protected:
+
+    using SchDeleter = void (*)(coro::scheduler *sch);
+    using SchPtr = std::unique_ptr<coro::scheduler, SchDeleter>;
+
+
+    SchPtr _scheduler;
+    std::unique_ptr<IPoller> _disp;
+    coro::future<void> _disp_run;
+    AtomicMutex _mx;
+    std::vector<coro::future<void>::pending_notify> _ctx_destroy;
+
+
+};
+
+
+
 
 void close_socket(const SocketHandle &handle) {
     ::close(handle);
@@ -74,11 +128,13 @@ void ContextIOImpl::close(SocketHandle handle)   {
 
 void ContextIOImpl::stop() {
     _disp->stop();
+    std::lock_guard _(_mx);
+    _ctx_destroy.clear();
 
 }
 
 
-AsyncSocket ContextIO::create_connected_socket(const PeerName &addr) {
+AsyncSocket Context::create_connected_socket(const PeerName &addr) {
     return addr.use_sockaddr([&](const sockaddr *saddr, socklen_t slen) {
         int sock = ::socket(saddr->sa_family, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, saddr->sa_family == AF_UNIX?0:IPPROTO_TCP);
         if (sock < 0) throw std::system_error(errno, std::system_category(), "::listen - create_socket");
@@ -103,7 +159,7 @@ AsyncSocket ContextIO::create_connected_socket(const PeerName &addr) {
 
 }
 
-AsyncSocket ContextIO::listen_socket(const PeerName &addr) {
+AsyncSocket Context::listen_socket(const PeerName &addr) {
     return addr.use_sockaddr([&](const sockaddr *saddr, socklen_t slen) {
         int sock = ::socket(saddr->sa_family, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, saddr->sa_family == AF_UNIX?0:IPPROTO_TCP);
         if (sock < 0) throw std::system_error(errno, std::system_category(), "::listen - create_socket");
@@ -167,13 +223,13 @@ static coro::generator<Stream> listen_generator(AsyncSocket socket,
 
 
 
-coro::generator<Stream> ContextIO::accept(std::vector<PeerName> &list,
+coro::generator<Stream> Context::accept(std::vector<PeerName> &list,
                                 std::stop_token token, TimeoutSettings tms) {
 
     std::vector<coro::generator<Stream> > gens;
     std::vector<SocketHandle> handles;
     for (PeerName &x: list) {
-        AsyncSocket socket = ContextIO::listen_socket(x);
+        AsyncSocket socket = Context::listen_socket(x);
         int id =x.get_group_id();
         x = PeerName::from_socket(socket,false).set_group_id(id);
         gens.push_back(listen_generator(std::move(socket), tms, token,  id));
@@ -181,7 +237,7 @@ coro::generator<Stream> ContextIO::accept(std::vector<PeerName> &list,
     return coro::aggregator(std::move(gens));
 }
 
-coro::generator<Stream> ContextIO::accept(std::vector<PeerName> &&list,
+coro::generator<Stream> Context::accept(std::vector<PeerName> &&list,
                                 std::stop_token token, TimeoutSettings tms) {
     return accept(list,std::move(token),std::move(tms));
 }
@@ -192,10 +248,10 @@ struct ConnectInfo {
     std::optional<AsyncSocket> socket;
 };
 
-static coro::async<void> wait_connect(ContextIO ctx,
+static coro::async<void> wait_connect(Context &ctx,
             const PeerName &peer,
             int delay_sec,
-            int timeout,
+            TimeoutSettings::Dur timeout,
             std::stop_token stop,
             coro::queue<ConnectInfo> &result) {
 
@@ -263,7 +319,7 @@ static coro::async<void> wait_connect(ContextIO ctx,
     result.push(ConnectInfo{peer, std::move(socket)});
 }
 
-coro::future<Stream> ContextIO::connect(std::vector<PeerName> list, int timeout_ms, TimeoutSettings tms) {
+coro::future<Stream> Context::connect(std::vector<PeerName> list, TimeoutSettings::Dur connect_timeout, TimeoutSettings tms) {
     //queue collects results for multiple sockets
     coro::queue<ConnectInfo> results;
     //stop source to stop futher waiting
@@ -273,7 +329,7 @@ coro::future<Stream> ContextIO::connect(std::vector<PeerName> list, int timeout_
     //start coroutines, each for one peer
     for (i = 0; i < cnt; i++) {
         //coroutine is detached, because each put result to queue
-        wait_connect(*this, list[i], i, timeout_ms, stop.get_token(), results).detach();
+        wait_connect(*this, list[i], i, connect_timeout, stop.get_token(), results).detach();
     }
     //contains connected stream
     std::optional<Stream> connected;
@@ -298,23 +354,15 @@ coro::future<Stream> ContextIO::connect(std::vector<PeerName> list, int timeout_
     co_return std::move(*connected);
 }
 
-ContextIO ContextIO::create(coro::scheduler &sch) {
-    return std::make_shared<ContextIOImpl>(sch);
+
+void Context::stop() {
+   if (_ptr) {
+       _ptr->stop();
+       _ptr.reset();
+   }
 }
 
-ContextIO ContextIO::create(std::unique_ptr<coro::scheduler> sch) {
-    return std::make_shared<ContextIOImpl>(std::move(sch));
-}
-
-ContextIO ContextIO::create(std::size_t iothreads) {
-    return std::make_shared<ContextIOImpl>(iothreads);
-}
-
-void ContextIO::stop() {
-   _ptr->stop();
-}
-
-Stream ContextIO::create_pipe(TimeoutSettings tms) {
+Stream Context::create_pipe(TimeoutSettings tms) {
     int fds[2];
     int r = pipe2(fds, O_CLOEXEC | O_NONBLOCK);
     if (r < 0) throw std::system_error(errno, std::system_category());
@@ -325,7 +373,7 @@ Stream ContextIO::create_pipe(TimeoutSettings tms) {
             tms));
 }
 
-Stream ContextIO::create_stdio(TimeoutSettings tms) {
+Stream Context::create_stdio(TimeoutSettings tms) {
     int rdfd = fcntl(0, F_DUPFD_CLOEXEC, 0);
     if (rdfd < 0) {
         int e =errno;
@@ -345,7 +393,7 @@ Stream ContextIO::create_stdio(TimeoutSettings tms) {
 
 }
 
-Stream ContextIO::read_named_pipe(const std::string &name, TimeoutSettings tms) {
+Stream Context::read_named_pipe(const std::string &name, TimeoutSettings tms) {
     int fd = ::open(name.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0)  {
         int e =errno;
@@ -358,9 +406,35 @@ Stream ContextIO::read_named_pipe(const std::string &name, TimeoutSettings tms) 
             tms));
 }
 
+coro::scheduler& Context::get_scheduler() {
+           return _ptr->get_scheduler();
+}
 
+Context::Context(coro::scheduler &sch)
+    :_ptr(std::make_shared<ContextIOImpl>(sch)) {}
 
-Stream ContextIO::write_named_pipe(const std::string &name, TimeoutSettings tms) {
+Context::Context(std::unique_ptr<coro::scheduler> sch)
+    :_ptr(std::make_shared<ContextIOImpl>(std::move(sch))) {}
+Context::Context(unsigned int iothreads)
+    :_ptr(std::make_shared<ContextIOImpl>(iothreads)) {}
+
+Context::~Context() {
+    stop();
+}
+
+Context::Context(Context &&other)
+    :_ptr(std::move(other._ptr)) {}
+
+Context& Context::operator =(Context &&other) {
+    if (this != &other) {
+        stop();
+        _ptr = std::move(other._ptr);
+    }
+    return *this;
+
+}
+
+Stream Context::write_named_pipe(const std::string &name, TimeoutSettings tms) {
     int fd = ::open(name.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0)  {
         int e =errno;
@@ -371,6 +445,63 @@ Stream ContextIO::write_named_pipe(const std::string &name, TimeoutSettings tms)
             AsyncSocket(fd, _ptr),
             PeerName(),
             tms));
+}
+
+
+
+static int signal_fd = -1;
+static std::once_flag stream_once;
+static Stream signal_stream(nullptr);
+
+
+static void signal_hndl(int sig) {
+    std::ignore = ::write(signal_fd, &sig, sizeof(sig));
+}
+
+static void init_signals(__sighandler_t h) {
+    for (int i: std::initializer_list<int>{SIGTERM, SIGINT, SIGHUP, SIGQUIT}) {
+        signal(i, h);
+    }
+
+}
+
+
+coro::async<void> signal_ctx_destroy(std::shared_ptr<ContextIOImpl> ptr) {
+    co_await ptr->on_ctx_destroy();
+    signal_fd = -1;
+    signal_stream = Stream(nullptr);
+    init_signals(SIG_DFL);
+
+}
+
+
+
+void init_signal_stream(std::shared_ptr<ContextIOImpl> ptr) {
+    int fds[2];
+    if (pipe2(fds,O_CLOEXEC|O_NONBLOCK) < 0)
+        throw std::system_error(errno, std::system_category());
+
+    signal_fd = fds[1];
+    init_signals(signal_hndl);
+    signal_stream = Stream(std::make_shared<LocalStream>(
+            AsyncSocket(fds[0],ptr),
+            AsyncSocket(fds[1],ptr),
+            PeerName(),TimeoutSettings{}));
+
+    signal_ctx_destroy(ptr).detach();
+
+}
+
+Stream Context::create_intr_listener() {
+    if (signal_fd == -1) {
+        init_signal_stream(_ptr);
+    }
+    return signal_stream;
+
+}
+
+coro::future<void> Context::on_context_destroy() {
+    return _ptr->on_ctx_destroy();
 }
 
 }

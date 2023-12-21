@@ -20,50 +20,11 @@
 
 using coroserver::PeerName;
 
-#ifndef COROSERVER_DEFAULT_TIMEOUT
-#define COROSERVER_DEFAULT_TIMEOUT 60000
-#endif
 
 namespace coroserver {
 
 
-class ContextIOImpl: public IAsyncSupport, public std::enable_shared_from_this<ContextIOImpl> {
-public:
-
-    using AcceptResult = std::pair<SocketHandle, PeerName>;
-
-
-    ContextIOImpl(coro::scheduler &sch);
-    ContextIOImpl(std::unique_ptr<coro::scheduler> sch);
-    ContextIOImpl(std::size_t iothreads);
-    ~ContextIOImpl();
-
-    virtual WaitResult io_wait(SocketHandle handle,
-                     AsyncOperation op,
-                     std::chrono::system_clock::time_point timeout) override;
-    virtual void shutdown(SocketHandle handle)  override;
-    virtual void close(SocketHandle handle)  override;
-
-    void stop();
-
-    coro::scheduler &get_scheduler()  {
-        return *_scheduler;
-    }
-
-
-protected:
-
-    using SchDeleter = void (*)(coro::scheduler *sch);
-    using SchPtr = std::unique_ptr<coro::scheduler, SchDeleter>;
-
-
-    SchPtr _scheduler;
-    std::unique_ptr<IPoller> _disp;
-    coro::future<void> _disp_run;
-};
-
-
-
+class ContextIOImpl;
 
 ///context IO
 /**
@@ -78,34 +39,34 @@ protected:
  * operations are canceled
  *
  */
-class ContextIO {
+class Context {
 public:
 
-    static constexpr int defaultTimeout = COROSERVER_DEFAULT_TIMEOUT;
+    Context() = default;
 
-    ContextIO(std::shared_ptr<ContextIOImpl> ptr):_ptr(std::move(ptr)) {}
+    Context(coro::scheduler &sch);
+    Context(std::unique_ptr<coro::scheduler> sch);
+    explicit Context(unsigned int iothreads);
 
-    ///create socket context
+    Context(Context &&other);
+    Context &operator=(Context &&other);
+
+    ~Context();
+
+    ///Give up current thread to context until the future is resolved
     /**
-     * @param dispatcherCount count dispatchers. In most of cases, 1 is enough, but
-     * if you expect a lot of connections, you can increase count of dispatchers. Each
-     * dispatcher allocates one thread
-     *
-     * @return instance (shared)
-     *
-     * @note before using the context, you need to start it and associate it with
-     * a thread pool. See start()
-     *
-     * @see start
+     * @param fut future to resolve
+     * @return return value of the resolved future
      */
-    static ContextIO create(coro::scheduler &sch);
-    static ContextIO create(std::unique_ptr<coro::scheduler> sch);
-        static ContextIO create(std::size_t iothreads = 2);
-
-
-    coro::scheduler &get_scheduler()  {
-        return _ptr->get_scheduler();
+    template<coro::future_type T>
+    auto await(T &&fut) {
+        return get_scheduler().await(std::forward<T>(fut));
     }
+
+
+
+
+    coro::scheduler &get_scheduler();
 
 
     ///Create listening socket at given peer
@@ -140,7 +101,7 @@ public:
     coro::generator<Stream> accept(
             std::vector<PeerName> &list,
             std::stop_token token = {},
-            TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+            TimeoutSettings tms = defaultTimeout);
 
     ///Create accept generator
     /**
@@ -164,12 +125,14 @@ public:
     coro::generator<Stream> accept(
             std::vector<PeerName> &&list,
             std::stop_token token = {},
-            TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+            TimeoutSettings tms = defaultTimeout);
 
 
     ///Connect stream to one of given addresses
 
-    coro::future<Stream> connect(std::vector<PeerName> list, int timeout_ms = defaultTimeout, TimeoutSettings tms = {defaultTimeout,defaultTimeout});
+    coro::future<Stream> connect(std::vector<PeerName> list,
+            TimeoutSettings::Dur timeout_ms = defaultConnectTimeout,
+            TimeoutSettings tms = defaultTimeout);
 
 
 
@@ -187,18 +150,6 @@ public:
     void stop();
 
 
-    ///Retrieve stop function
-    /**
-     * @return returns a function which once called, the context is stopped.
-     * @see stop();
-     */
-    auto stop_fn() {
-        return [ctx = *this]() mutable {
-            ctx.stop();
-            ctx._ptr.reset();
-        };
-    }
-
 
     ///create stream which serves as pipe
     Stream create_pipe(TimeoutSettings tms = {});
@@ -212,6 +163,26 @@ public:
     ///open named pipe for writing
     Stream write_named_pipe(const std::string &name, TimeoutSettings tms = {});
 
+    ///Creates stream, which receives a data when external interrupt is signaled
+    /**
+     * The stream can be read (only), content of read data is platform specific. You
+     * can await on this stream to wait on interrupt.
+     * The interrupt is hardcoded to SIGTERM, SIGINT, SIGHUP, SIGQUIT.
+     * Under Windows, it reacts to CTRL+C and CTRL+BREAK and closing console window.
+     *
+     * @return stream
+     */
+    Stream create_intr_listener();
+
+    ///Creates future, which resolves once the context is destroyed
+    /**
+     * @return future
+     *
+     * @note you need assume that context is already destoyed when the future
+     * is resolved
+     */
+    coro::future<void> on_context_destroy();
+
 
 protected:
       std::shared_ptr<ContextIOImpl> _ptr;
@@ -221,7 +192,7 @@ public:
     template<std::invocable<Stream> Fn>
     coro::future<void> tcp_server(Fn &&main_fn, std::vector<PeerName> lsn_peers,
             std::stop_token stoptoken = {},
-            TimeoutSettings tms = {defaultTimeout, defaultTimeout}) {
+            TimeoutSettings tms = defaultTimeout) {
         auto gen = accept(std::move(lsn_peers),stoptoken, tms);
         auto fn = [](coro::generator<Stream> gen, Fn main_fn) -> coro::async<void> {
             auto f = gen();
@@ -231,6 +202,11 @@ public:
             }
         };
         return fn(std::move(gen), std::move(main_fn));
+    }
+
+    coro::lazy_future<void> wait_for_intr() {
+        auto s = create_intr_listener();
+        co_await s.read();
     }
 };
 

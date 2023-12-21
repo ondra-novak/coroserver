@@ -232,7 +232,7 @@ public:
      * of the message is retrieved from the first fragment and it is ignored on
      * other fragments.
      */
-    template<typename Fn>
+    template<std::invocable<char> Fn>
     bool operator()(const Message &message, Fn &&output) {
         std::string tmp;
         std::string_view payload = message.payload;
@@ -307,6 +307,7 @@ public:
         return true;
 
     }
+
 
 protected:
     bool _client = false;

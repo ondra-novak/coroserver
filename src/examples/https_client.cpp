@@ -98,7 +98,7 @@ coro::async<void> make_POST_request_te_except_empty(coroserver::https::Client &c
 int main() {
 
     coroserver::ssl::Context ssl = coroserver::ssl::Context::init_client();
-    coroserver::ContextIO ctx = coroserver::ContextIO::create(2);
+    coroserver::Context ctx(2);
     coroserver::https::Client httpc(ctx, ssl, "coroserver/20");
     make_GET_request(httpc).join();
     make_POST_request(httpc).join();
@@ -106,7 +106,6 @@ int main() {
     make_POST_request_te_except(httpc, false).join();
     make_POST_request_te_except(httpc, true).join();
     make_POST_request_te_except_empty(httpc).join();
-    ctx.stop();
 
     return 0;
 }

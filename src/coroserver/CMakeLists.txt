@@ -4,7 +4,7 @@ add_library(coroserver
 	peername.cpp
 	stream.cpp
 	socket_stream.cpp
-	io_context.cpp
+	context.cpp
 	poller_epoll.cpp
    memstream.cpp
    chunked_stream.cpp
@@ -26,7 +26,7 @@ add_library(coroserver
    local_stream.cpp
    signal.cpp
 #   message_stream.cpp
-#   umq_peer.cpp
+   umq_peer.cpp
     
 )
 add_dependencies(coroserver coroserver_version libcoro_single_header)

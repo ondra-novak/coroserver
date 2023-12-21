@@ -22,7 +22,7 @@ namespace ws {
     public:
 
         static Client connect(http::ClientRequest &req,
-                              TimeoutSettings tm = {60000,60000},
+                              TimeoutSettings tm = defaultTimeout,
                               bool need_fragmented = false) {
             return Client(req, tm, need_fragmented);
         }
@@ -30,7 +30,7 @@ namespace ws {
 
     protected:
 
-        Client(http::ClientRequest &req, TimeoutSettings tm = {60000,60000}, bool need_fragmented = false);
+        Client(http::ClientRequest &req, TimeoutSettings tm = defaultTimeout, bool need_fragmented = false);
 
 
         TimeoutSettings _tm;

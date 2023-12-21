@@ -1,4 +1,4 @@
-#include <coroserver/io_context.h>
+#include <coroserver/context.h>
 
 #include <iostream>
 #include <coroserver/peername.h>
@@ -33,7 +33,7 @@ coro::async<void> co_main(Stream s) {
 int main() {
 
     auto addrs = PeerName::lookup(":10000","");
-    ContextIO ctx = ContextIO::create(1);
+    Context ctx(1);
     auto fin = ctx.tcp_server([&](Stream &&s){
         co_main(std::move(s)).detach();
     },std::move(addrs));

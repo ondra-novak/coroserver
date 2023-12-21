@@ -1,6 +1,6 @@
-#include "local_stream.h"
-#include "io_context.h"
+#include "context.h"
 
+#include "local_stream.h"
 #include <unistd.h>
 #include <poll.h>
 
@@ -44,7 +44,7 @@ coro::future<std::string_view> LocalStream::read() {
     if (read_begin(buff)) return buff;
     return [&](auto p) {
         _read_promise = std::move(p);
-        _wait_read_result << [&]{return _read_fd.io_wait(AsyncOperation::read,_tms.read_timeout_tp());};
+        _wait_read_result << [&]{return _read_fd.io_wait(AsyncOperation::read,_tms.get_read_timeout());};
         _wait_read_result.register_target(_wait_read_target);
     };
 }
@@ -92,7 +92,7 @@ void LocalStream::write_begin() {
     int r;
     do {
         if (!write_available()) {
-            _wait_write_result << [&]{return _write_fd.io_wait(AsyncOperation::write, _tms.write_timeout_tp());};
+            _wait_write_result << [&]{return _write_fd.io_wait(AsyncOperation::write, _tms.get_write_timeout());};
             _wait_write_result.register_target(_wait_write_target);
             return;
 

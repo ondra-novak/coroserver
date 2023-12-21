@@ -17,8 +17,11 @@ public:
     ~InternalState() {}
 
     coro::lazy_future<bool> write(const Message &msg) {
-        return _writer.write([&](auto fn){
-            _builder(msg, std::forward<decltype(fn)>(fn));
+        return _writer.write([&](auto iter){
+            _builder(msg, [&](char c){
+                *iter = c;
+                ++iter;
+            });
         });
     }
 

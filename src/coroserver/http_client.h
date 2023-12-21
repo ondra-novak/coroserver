@@ -7,20 +7,22 @@
 
 #ifndef SRC_COROSERVER_CLIENT_H_
 #define SRC_COROSERVER_CLIENT_H_
+#include "context.h"
 #include "http_client_request.h"
 
 #include <coro.h>
 
-#include "io_context.h"
 namespace coroserver{
 
 namespace http {
 
 
-inline ConnectionFactory connectionFactory(ContextIO ctx, int timeout_ms, TimeoutSettings tms) {
-    return [ctx  = std::move(ctx), timeout_ms, tms](std::string_view host) mutable ->coro::future<Stream> {
+inline ConnectionFactory connectionFactory(Context &ctx,
+        TimeoutSettings::Dur connect_timeout,
+        TimeoutSettings tms) {
+    return [&ctx, connect_timeout, tms](std::string_view host) mutable ->coro::future<Stream> {
         auto list = PeerName::lookup(host, "80");
-        return ctx.connect(std::move(list), timeout_ms, tms);
+        return ctx.connect(list, connect_timeout, tms);
     };
 }
 
@@ -58,9 +60,11 @@ public:
     ///Create http client
     Client(Config cfg);
 
-    Client(ContextIO ioctx, std::string user_agent, int timeout_ms=ContextIO::defaultTimeout , TimeoutSettings tms={ContextIO::defaultTimeout,ContextIO::defaultTimeout})
+    Client(Context &ioctx, std::string user_agent,
+            TimeoutSettings::Dur connect_timeout=defaultConnectTimeout,
+            TimeoutSettings tms=defaultTimeout)
         :Client({
-        user_agent, connectionFactory(std::move(ioctx), timeout_ms, tms),
+        user_agent, connectionFactory(ioctx, connect_timeout, tms),
         nullptr
     }) {}
 

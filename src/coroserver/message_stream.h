@@ -12,6 +12,23 @@
 
 namespace coroserver {
 
+class MessageStream: public AbstractProxyStream {
+
+};
+#if 0
+
+
+
+
+
+
+
+
+
+
+
+
+
 ///MessageStream is message oriented stream
 /**
  * This stream transfers whole messages. In compare to standard streams, where sending
@@ -74,7 +91,11 @@ protected:
 
 };
 
+#endif
+
+
 }
+
 
 
 #endif /* SRC_COROSERVER_MESSAGE_STREAM_H_ */

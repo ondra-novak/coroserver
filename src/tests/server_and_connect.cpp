@@ -1,12 +1,12 @@
 #include "check.h"
 
+#include <coroserver/context.h>
 #include <coroserver/stream.h>
-#include <coroserver/io_context.h>
 
 using namespace coroserver;
 
 void check1() {
-    ContextIO ctx = ContextIO::create(2);
+    Context ctx(2);
 
     auto addrs_listen = PeerName::lookup("127.0.0.1", "*");
     auto listening = ctx.accept(std::move(addrs_listen));
@@ -23,7 +23,7 @@ void check1() {
     Stream r = wtconn1;
 }
 void check2() {
-    ContextIO ctx = ContextIO::create(2);
+    Context ctx(2);
 
     auto addrs_listen = PeerName::lookup("[::1]", "*");
     auto listening = ctx.accept(std::move(addrs_listen));

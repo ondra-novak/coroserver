@@ -6,6 +6,41 @@ namespace coroserver {
 
 namespace umq {
 
+UMQException::UMQException(int code, std::string_view message):_code(code) {
+    _msgtext = std::to_string(_code).append(" ").append(message);
+    _message = std::string_view(_msgtext).substr(_msgtext.size()-message.size());
+}
+
+UMQException::UMQException(std::string_view txtmsg):_msgtext(txtmsg) {
+    char *endptr;
+    int code = strtol(_msgtext.c_str(), &endptr, 10);
+    while (*endptr && std::isspace(*endptr)) ++endptr;
+    _code = code;
+    _message = std::string_view(endptr);
+}
+
+std::string_view UMQException::get_serialized() const {
+    return _msgtext;
+}
+
+UMQException Peer::makeError(ErrorCode code) {
+    return UMQException(static_cast<int>(code),strErrorCode[code]);
+}
+
+struct Peer::Core {
+
+    std::unique_ptr<IConnection> _conn;
+
+
+
+
+
+};
+
+
+
+
+#if 0
 Peer::Peer()
         :_close_promise(_close_future.get_promise())
         ,_on_msg_awt(this)
@@ -207,26 +242,6 @@ bool Peer::recvBinaryMessage(std::string_view message) {
     return true;
 }
 
-UMQException::UMQException(int code, std::string_view message):_code(code) {
-    _msgtext = std::to_string(_code).append(" ").append(message);
-    _message = std::string_view(_msgtext).substr(_msgtext.size()-message.size());
-}
-
-UMQException::UMQException(std::string_view txtmsg):_msgtext(txtmsg) {
-    char *endptr;
-    int code = strtol(_msgtext.c_str(), &endptr, 10);
-    while (*endptr && std::isspace(*endptr)) ++endptr;
-    _code = code;
-    _message = std::string_view(endptr);
-}
-
-std::string_view UMQException::get_serialized() const {
-    return _msgtext;
-}
-
-UMQException Peer::makeError(ErrorCode code) {
-    return UMQException(static_cast<int>(code),strErrorCode[code]);
-}
 
 void Peer::on_attachment_error(const UMQException &e) {
     if (_awaited_binary.empty()) {
@@ -294,7 +309,7 @@ void Peer::HelloMessage::accept(Payload payload) {
     _response(payload);
 }
 
-
+#endif
 }
 
 }

@@ -1,4 +1,4 @@
-#include <coroserver/io_context.h>
+#include <coroserver/context.h>
 
 #include <iostream>
 #include <coroserver/peername.h>
@@ -77,7 +77,7 @@ int main() {
     std::transform(secure_addrs.begin(), secure_addrs.end(), std::back_inserter(addrs), [](const PeerName &p){
         return PeerName(p).set_group_id(1);
     });
-    ContextIO ioctx = ContextIO::create(4);
+    Context ioctx(4);
     http::Server server(http::Server::secure(sslctx, 1));
     server.set_handler("/", http::Method::GET, http::StaticPage("www"));
     auto fin = server.start(

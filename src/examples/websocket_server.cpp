@@ -1,4 +1,4 @@
-#include <coroserver/io_context.h>
+#include <coroserver/context.h>
 
 #include <iostream>
 #include <sstream>
@@ -157,7 +157,7 @@ int main(int, char **) {
     MyPublisher publisher;
 
     auto addrs = PeerName::lookup(":10000","");
-    ContextIO ctx = ContextIO::create(1);
+    Context ctx(1);
     auto listener = ctx.accept(std::move(addrs));
     http::Server server;
 

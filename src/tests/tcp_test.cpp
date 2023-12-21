@@ -1,10 +1,11 @@
 #include "check.h"
+
+#include <coroserver/context.h>
 #include <coroserver/stream.h>
 #include <coroserver/character_io.h>
-#include <coroserver/io_context.h>
 
 
-coro::async<void> write_task(coroserver::ContextIO ctx, std::string port) {
+coro::async<void> write_task(coroserver::Context &ctx, std::string port) {
     coroserver::Stream stream = co_await ctx.connect(PeerName::lookup("localhost", port));
     coroserver::CharacterWriter<coroserver::Stream> wr(stream);
     for (int i = 0; i < 655360; i++) {
@@ -36,7 +37,7 @@ coro::async<void> server_task(coro::lazy_future<coroserver::Stream> &&f) {
 
 int main() {
 
-    coroserver::ContextIO ctx = coroserver::ContextIO::create(0);
+    coroserver::Context ctx(0);
 
     auto addr = PeerName::lookup("127.0.0.1","*");
     auto listener = ctx.accept(addr);
