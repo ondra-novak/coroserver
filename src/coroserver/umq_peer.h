@@ -6,6 +6,8 @@
 #include "static_lookup.h"
 #include <queue>
 #include <coro.h>
+
+#include <iostream>
 namespace coroserver {
 
 namespace umq {
@@ -58,6 +60,8 @@ public:
 
         Payload() = default;
         Payload(std::string_view text): text(text) {}
+        Payload(std::string_view text, std::vector<coro::lazy_future<AttachmentData> > attachments)
+            : text(text),attachments(std::move(attachments)) {}
         void add_attachment(AttachmentData attach) {
             attachments.push_back(std::move(attach));
         }
@@ -67,13 +71,29 @@ public:
     };
 
 
+
     using ID = std::uint32_t;
+
+    static constexpr ID version = 1;
 
     struct Core;
 
-    struct Request : Payload {
+    struct PayloadWithID : Payload {
         ID id;
-        coro::promise<Payload> accept;
+        PayloadWithID() = default;
+        template<typename ... Args>
+        PayloadWithID(ID id, Args && ... args):Payload(std::forward<Args>(args)...), id(id) {}
+
+    };
+
+    struct Request : PayloadWithID {
+        coro::promise<Payload> response;
+        Request() = default;
+        template<typename ... Args>
+        Request(coro::promise<Payload> &&prom, Args && ... args)
+            :PayloadWithID(std::forward<Args>(args)...)
+            ,response(std::move(prom)) {}
+
     };
 
     class SubscriptionBase {
@@ -140,13 +160,43 @@ public:
 
     Peer();
 
-    coro::future<Payload> connect(const Payload &pl);
+    State get_state() const;
+    ///Connect to other peer
+    /**
+     * @param conn opened connection
+     * @param pl payload sent with the request
+     * @return
+     */
+    coro::future<Payload> connect(PConnection &&conn, Payload &&pl = {});
 
-    coro::future<Request> listen();
+    ///Initialize peer and listen for incoming connection
+    /**
+     * @param conn opened connection
+     * @return connect request. you need to response this request to continue
+     */
+    coro::future<Request> listen(PConnection &&conn);
 
-    coro::future<Payload> call(const Payload &request);
+    ///returns future, which is resolved once the communication is done (disconnected)
+    /**
+     * @return future object
+     *
+     * @note you can have only one waiting future, futher calls break previous promises
+     */
+    coro::future<void> done();
 
-    coro::future<Request> get_request();
+
+    ///Send request and await for response
+    /**
+     * @param request request to send
+     * @return response
+     */
+    coro::future<Payload> send_request(const Payload &request);
+
+    ///Receive request (as server) to generate response
+    /**
+     * @return received request
+     */
+    coro::future<Request> receive_request();
 
     ///Create subscription
     /**
@@ -185,13 +235,15 @@ public:
     coro::future<Payload> channel_receive(ID channel_id);
 
 
+    static void toBase36(ID id, std::ostream &out);
+    static ID fromBase36(std::string_view txt);
 
 protected:
 
     enum class Type: char {
         ///global errors, empty id
         /**Last message in stream, always leads to closing connection */
-        error = '!',
+        error = 'N',
         ///Count of attachments
         /**every command with payload can have this prefix. Instead ID is number
          * count of expected attachments. The command starts at payload section
@@ -207,7 +259,7 @@ protected:
         attachment_count='A',
         ///Attachment error. Can appear instead binary content but counts as binary content
         /** id is empty, payload contains error message */
-        attachment_error='e',
+        attachment_error='M',
         ///Hello message Sends by an initiator. ID contains version, payload is accessible by respondent
         hello = 'H',
         ///Welcome message, sends as reply by respondent, ID contains version, payload is response
@@ -264,13 +316,33 @@ protected:
 
 protected:
 
-    std::shared_ptr<Core> _core;
+    struct CoreDeleter {
+        void operator()(Core *ptr);
+    };
+    struct Command;
 
+    using PCore =  std::unique_ptr<Core, CoreDeleter>;
 
-
+    PCore _core;
 
 };
 
+
+class ProtocolError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+class AttachmentError: public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+    AttachmentError(const std::string_view &txt):runtime_error(std::string(txt)) {}
+};
+class RequestError: public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+    RequestError(const std::string_view &txt):runtime_error(std::string(txt)) {}
+};
 
 
 class UMQException:  public std::exception {
