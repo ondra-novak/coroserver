@@ -171,17 +171,10 @@ public:
      * Under Windows, it reacts to CTRL+C and CTRL+BREAK and closing console window.
      *
      * @return stream
+     *
+     * @note Under linux, one byte is carried which contains signal number
      */
     Stream create_intr_listener();
-
-    ///Creates future, which resolves once the context is destroyed
-    /**
-     * @return future
-     *
-     * @note you need assume that context is already destoyed when the future
-     * is resolved
-     */
-    coro::future<void> on_context_destroy();
 
 
 protected:
@@ -204,10 +197,6 @@ public:
         return fn(std::move(gen), std::move(main_fn));
     }
 
-    coro::lazy_future<void> wait_for_intr() {
-        auto s = create_intr_listener();
-        co_await s.read();
-    }
 };
 
 

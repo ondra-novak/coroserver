@@ -18,7 +18,8 @@ int main() {
         std::cout << line << std::endl;
     }));
     std::cout << "Press CTRL+C to stop:" << std::endl;
-    ctx.await(ctx.wait_for_intr());
+    Stream z = ctx.create_intr_listener();
+    ctx.await(z.read());
     std::cout << "Exit" << std::endl;
     ctx.stop();
     fin.wait();

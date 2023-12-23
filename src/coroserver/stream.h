@@ -131,6 +131,8 @@ class ReadUntilFuture;
  */
 class Stream {
 public:
+    Stream() = default;
+
     Stream(std::shared_ptr<IStream> s):_stream(std::move(s)) {}
 
     ///Read the stream, asynchronously

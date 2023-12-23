@@ -32,6 +32,14 @@
 #include <tuple>
 namespace coroserver {
 
+static void init_signals(__sighandler_t h) {
+    for (int i: std::initializer_list<int>{SIGTERM, SIGINT, SIGHUP, SIGQUIT}) {
+        signal(i, h);
+    }
+
+}
+
+
 class ContextIOImpl: public IAsyncSupport, public std::enable_shared_from_this<ContextIOImpl> {
 public:
 
@@ -55,12 +63,7 @@ public:
         return *_scheduler;
     }
 
-    coro::future<void> on_ctx_destroy() {
-        return [&](auto prom) {
-            std::lock_guard lk(_mx);
-            _ctx_destroy.push_back(prom());
-        };
-    }
+    Stream get_signal_stream();
 
 
 protected:
@@ -72,9 +75,9 @@ protected:
     SchPtr _scheduler;
     std::unique_ptr<IPoller> _disp;
     coro::future<void> _disp_run;
-    AtomicMutex _mx;
-    std::vector<coro::future<void>::pending_notify> _ctx_destroy;
 
+    std::once_flag _signal_init;
+    Stream _signal_stream;
 
 };
 
@@ -106,6 +109,14 @@ ContextIOImpl::ContextIOImpl(std::unique_ptr<coro::scheduler> sch)
 
 ContextIOImpl::~ContextIOImpl() {
     _disp->stop();
+    bool has_signals = true;
+    std::call_once(_signal_init, [&]{
+        has_signals = false;;
+    });
+    if (!has_signals) {
+        init_signals(SIG_DFL);
+        _signal_stream = Stream();
+    }
     _scheduler->await(_disp_run);
 }
 
@@ -128,8 +139,6 @@ void ContextIOImpl::close(SocketHandle handle)   {
 
 void ContextIOImpl::stop() {
     _disp->stop();
-    std::lock_guard _(_mx);
-    _ctx_destroy.clear();
 
 }
 
@@ -450,58 +459,33 @@ Stream Context::write_named_pipe(const std::string &name, TimeoutSettings tms) {
 
 
 static int signal_fd = -1;
-static std::once_flag stream_once;
-static Stream signal_stream(nullptr);
 
 
 static void signal_hndl(int sig) {
     std::ignore = ::write(signal_fd, &sig, sizeof(sig));
 }
 
-static void init_signals(__sighandler_t h) {
-    for (int i: std::initializer_list<int>{SIGTERM, SIGINT, SIGHUP, SIGQUIT}) {
-        signal(i, h);
-    }
 
-}
-
-
-coro::async<void> signal_ctx_destroy(std::shared_ptr<ContextIOImpl> ptr) {
-    co_await ptr->on_ctx_destroy();
-    signal_fd = -1;
-    signal_stream = Stream(nullptr);
-    init_signals(SIG_DFL);
-
-}
-
-
-
-void init_signal_stream(std::shared_ptr<ContextIOImpl> ptr) {
-    int fds[2];
-    if (pipe2(fds,O_CLOEXEC|O_NONBLOCK) < 0)
-        throw std::system_error(errno, std::system_category());
-
-    signal_fd = fds[1];
-    init_signals(signal_hndl);
-    signal_stream = Stream(std::make_shared<LocalStream>(
-            AsyncSocket(fds[0],ptr),
-            AsyncSocket(fds[1],ptr),
-            PeerName(),TimeoutSettings{}));
-
-    signal_ctx_destroy(ptr).detach();
-
-}
 
 Stream Context::create_intr_listener() {
-    if (signal_fd == -1) {
-        init_signal_stream(_ptr);
-    }
-    return signal_stream;
+    return _ptr->get_signal_stream();
 
 }
 
-coro::future<void> Context::on_context_destroy() {
-    return _ptr->on_ctx_destroy();
+inline Stream ContextIOImpl::get_signal_stream() {
+    std::call_once(_signal_init, [&]{
+        int fds[2];
+        if (pipe2(fds,O_CLOEXEC|O_NONBLOCK) < 0)
+            throw std::system_error(errno, std::system_category());
+
+        signal_fd = fds[1];
+        init_signals(signal_hndl);
+        _signal_stream = Stream(std::make_shared<LocalStream>(
+                AsyncSocket(fds[0],shared_from_this()),
+                AsyncSocket(fds[1],shared_from_this()),
+                PeerName(),TimeoutSettings{}));
+    });
+    return _signal_stream;
 }
 
 }
