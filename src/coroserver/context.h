@@ -177,6 +177,10 @@ public:
     Stream create_intr_listener();
 
 
+    ///Create bidirectional stream pair
+    std::pair<Stream, Stream> create_pair(TimeoutSettings tms = {});
+
+
 protected:
       std::shared_ptr<ContextIOImpl> _ptr;
 

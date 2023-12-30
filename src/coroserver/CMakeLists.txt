@@ -24,7 +24,7 @@ add_library(coroserver
    http_client_request.cpp
    http_client.cpp
    local_stream.cpp
-   signal.cpp
+   umq_stream_connection.cpp
 #   message_stream.cpp
    umq_peer.cpp
     

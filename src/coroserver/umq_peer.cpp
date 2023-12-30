@@ -101,17 +101,17 @@ public:
     coro::future<Message> _read_fut;
     coro::future<Message>::target_type _read_target;
     coro::promise<void> _done_promise;
-    coro::promise<Request> _listen_promise;
-    coro::promise<Payload> _connect_promise;
-    coro::promise<Request> _request_promise;
-    coro::future<Payload> _response_fut;
-    coro::future<Payload>::target_type _response_target;
+    coro::promise<Request &&> _listen_promise;
+    coro::promise<Payload &&> _connect_promise;
+    coro::promise<Request &&> _request_promise;
 
-    std::unordered_map<ID, coro::promise<Payload> > _requests;
-    std::unordered_map<ID, coro::promise<Payload> > _subscriptions;
-    std::unordered_map<ID, coro::promise<Payload> > _channels;
+    std::unordered_map<ID, coro::promise<Payload &&> > _requests;
+    std::unordered_map<ID, coro::promise<Payload &&> > _subscriptions;
+    std::unordered_map<ID, coro::promise<void> > _topics;
+    std::unordered_map<ID, coro::promise<Payload &&> > _channels;
     std::mutex _mx;
 
+    ID _next_id = 1;
     std::string _received_error;
 
     bool _reader_active = false;
@@ -177,7 +177,7 @@ public:
     void on_topic_close(PayloadWithID &payload);
     void on_channel_message(PayloadWithID &payload);
 
-    coro::async<void> wait_for_accept(coro::promise<Payload> &prom);
+    coro::async<void> wait_for_accept(coro::promise<Payload &&> &prom);
 
     coro::lazy_future<bool> send_message(Type type, ID id, Payload &pl);
     coro::lazy_future<bool> send_message(Type type, ID id, Payload &&pl);
@@ -216,6 +216,7 @@ void Peer::Core::start_receive() {
     _reader_active = true;
     add_ref();
     _read_fut << [&]{return _conn->receive();};
+    _read_fut.register_target(_read_target);
 }
 
 bool Peer::Core::process_message(const Message &msg) {
@@ -347,6 +348,7 @@ coro::lazy_future<bool> Peer::Core::send_message(Type type, ID id, Payload &pl) 
     }
     Command(type, id, pl.text).build(_out_buff);
     auto ret = _conn->send({MessageType::text, _out_buff.view()});
+    _out_buff.str({});
     for (auto &x: pl.attachments) {
         _send_attachments.push(std::move(x));
     }
@@ -407,16 +409,23 @@ void Peer::Core::cleanup() {
     decltype(_requests) requests;
     decltype(_subscriptions) subscriptions;
     decltype(_channels) channels;
+    decltype(_topics) topics;
     {
         std::lock_guard lk(_mx);
         requests = std::move(_requests);
         subscriptions = std::move(_subscriptions);
         channels = std::move(_channels);
+        topics = std::move(_topics);
     }
     _done_promise.drop();
     _listen_promise.drop();
     _connect_promise.drop();
+    _request_promise.drop();
     _send_attachments.close();
+
+    for (auto &[x,promise]: topics) {
+        promise();
+    }
     //dtors
 
 }
@@ -441,12 +450,12 @@ void Peer::Core::on_attachment_error(PayloadWithID &payload) {
     p.reject(AttachmentError(payload.text));
 }
 
-coro::async<void> Peer::Core::wait_for_accept(coro::promise<Payload> &prom) {
+coro::async<void> Peer::Core::wait_for_accept(coro::promise<Payload &&> &prom) {
     add_ref();
-    coro::future<Payload> response;
+    coro::future<Payload &&> response;
     prom = response.get_promise();
     try {
-        Payload &pl = co_await response;
+        Payload pl = co_await response;
         send_message(Type::welcome, version, pl);
     } catch (const coro::broken_promise_exception &e) {
         protocol_error("Rejected");
@@ -461,7 +470,7 @@ void Peer::Core::on_hello(PayloadWithID &payload) {
         protocol_error("Unsupported version");
         return;
     }
-    coro::promise<Payload> prom;
+    coro::promise<Payload &&> prom;
     wait_for_accept(prom).detach();
      _listen_promise(std::move(prom), std::move(payload));
 }
@@ -475,32 +484,58 @@ void Peer::Core::on_welcome(PayloadWithID &payload) {
     _connect_promise(std::move(payload));
 }
 
+struct Peer::OpenedRequest {
+    ID _id = 0;
+    coro::future<Payload &&> _fut;
+    coro::future<Payload &&>::target_type _target;
+    Core *_owner;
+
+    OpenedRequest(Core *core):_owner(core) {
+        _owner->add_ref();
+        coro::target_simple_activation(_target, [&](auto *f){
+            process_response(f);
+        });
+    }
+
+    OpenedRequest(const OpenedRequest &) = delete;
+    OpenedRequest &operator=(const OpenedRequest &) = delete;
+
+    ~OpenedRequest() {
+        _owner->release_ref();
+    }
+
+    void process_response(coro::future<Payload &&>  *fut) {
+        try {
+            Payload pl = fut->get();
+            _owner->send_message(Type::response, _id, std::move(pl));
+        } catch (std::exception &e) {
+            _owner->send_message(Type::response_error, _id, Payload(e.what()));
+        }
+        coro::pool_alloc<OpenedRequest>::instance().destroy(this);
+    }
+
+    static OpenedRequest *create(Core *owner) {
+        return coro::pool_alloc<OpenedRequest>::instance().construct(owner);
+    }
+
+};
+
 void Peer::Core::on_request(PayloadWithID &payload) {
     if (_request_promise) { //awaiting request?
-        auto prom = _response_fut.get_promise();
-        coro::target_simple_activation(_response_target, [&,id = payload.id](auto){
-            try {
-                Payload &pl = _response_fut;
-                send_message(Type::response, id, std::move(pl));
-            } catch (std::exception &e) {
-                send_message(Type::response_error, id, Payload(e.what()));
-            }
-            release_ref();
-        });
-        _response_fut.register_target(_response_target);
-        add_ref();
+        auto open_req = OpenedRequest::create(this);
+        open_req->_id = payload.id;
+        auto prom = open_req->_fut.get_promise();
+        open_req->_fut.register_target(open_req->_target);
 
         if (_request_promise(std::move(prom), std::move(payload))) return;
 
-        release_ref();
-        coro::target_simple_activation(_response_target, [](auto){});
         prom();
     }
     send_message(Type::response_error, payload.id, Payload("Unexpected request"));
 }
 
 void Peer::Core::on_response(PayloadWithID &payload) {
-    coro::promise<Payload>::pending_notify ntf;
+    coro::promise<Payload &&>::pending_notify ntf;
     {
         std::lock_guard _(_mx);
         auto iter = _requests.find(payload.id);
@@ -512,7 +547,7 @@ void Peer::Core::on_response(PayloadWithID &payload) {
 }
 
 void Peer::Core::on_response_error(PayloadWithID &payload) {
-    coro::promise<Payload>::pending_notify ntf;
+    coro::promise<Payload &&>::pending_notify ntf;
     {
         std::lock_guard _(_mx);
         auto iter = _requests.find(payload.id);
@@ -525,7 +560,7 @@ void Peer::Core::on_response_error(PayloadWithID &payload) {
 }
 
 void Peer::Core::on_topic_update(PayloadWithID &payload) {
-    coro::promise<Payload>::pending_notify ntf;
+    coro::promise<Payload &&>::pending_notify ntf;
     std::lock_guard _(_mx);
     auto iter = _subscriptions.find(payload.id);
     if (iter == _subscriptions.end()) {
@@ -536,11 +571,16 @@ void Peer::Core::on_topic_update(PayloadWithID &payload) {
 }
 
 void Peer::Core::on_unsubscribe(PayloadWithID &payload) {
-    //TODO
+    coro::promise<void>::pending_notify ntf;
+    std::lock_guard _(_mx);
+    auto iter = _topics.find(payload.id);
+    if (iter == _topics.end()) return;
+    ntf = iter->second();
+    _topics.erase(iter);
 }
 
 void Peer::Core::on_topic_close(PayloadWithID &payload) {
-    coro::promise<Payload>::pending_notify ntf;
+    coro::promise<Payload &&>::pending_notify ntf;
     std::lock_guard _(_mx);
     auto iter = _subscriptions.find(payload.id);
     if (iter == _subscriptions.end()) return;
@@ -548,7 +588,7 @@ void Peer::Core::on_topic_close(PayloadWithID &payload) {
 }
 
 void Peer::Core::on_channel_message(PayloadWithID &payload) {
-    coro::promise<Payload>::pending_notify ntf;
+    coro::promise<Payload &&>::pending_notify ntf;
     std::lock_guard _(_mx);
     auto iter = _channels.find(payload.id);
     if (iter == _channels.end()) return;
@@ -562,7 +602,7 @@ inline void Peer::Core::close() {
 }
 
 
-coro::future<Peer::Payload> Peer::connect(PConnection &&conn, Payload &&pl) {
+coro::future<Peer::Payload &&> Peer::connect(PConnection &&conn, Payload &&pl) {
     _core = PCore(new Core(std::move(conn)));
     return [&](auto prom) {
         _core->_connect_promise = std::move(prom);
@@ -571,7 +611,7 @@ coro::future<Peer::Payload> Peer::connect(PConnection &&conn, Payload &&pl) {
     };
 }
 
-coro::future<Peer::Request> Peer::listen(PConnection &&conn) {
+coro::future<Peer::Request &&> Peer::listen(PConnection &&conn) {
     _core = PCore(new Core(std::move(conn)));
     return [&](auto prom) {
         _core->_listen_promise = std::move(prom);
@@ -581,6 +621,7 @@ coro::future<Peer::Request> Peer::listen(PConnection &&conn) {
 
 coro::future<void> Peer::done() {
     return [&](auto prom) {
+        if (!_core) return;
         std::unique_lock lk(_core->_mx);
         if (!_core->_received_error.empty()) {
             auto x = prom.reject(ProtocolError(_core->_received_error));
@@ -595,6 +636,138 @@ coro::future<void> Peer::done() {
         _core->_done_promise = std::move(prom);
     };
 }
+
+
+coro::future<Peer::Payload &&> Peer::send_request(Payload &request) {
+    return [&](auto promise) {
+        ID id;
+        {
+            if (!_core) return;
+            std::lock_guard _(_core->_mx);
+            id = _core->_next_id++;
+            _core->_requests.emplace(id, std::move(promise));
+        }
+        _core->send_message(Type::request, id, request);
+    };
+}
+
+coro::future<Peer::Payload &&> Peer::send_request(Payload &&request) {
+    return send_request(request);
+}
+
+coro::future<Peer::Request &&> Peer::receive_request() {
+    return [&](auto prom) {
+        if (!_core) return;
+        _core->_request_promise = std::move(prom);
+    };
+}
+
+Peer::Subscription Peer::subscribe() {
+    std::lock_guard _(_core->_mx);
+    if (!_core) throw std::logic_error("Inactive peer");
+    ID id = _core->_next_id++;
+    _core->_subscriptions[id];
+    return Subscription(id, _core.get());
+}
+
+Peer::Subscription::~Subscription() {
+    coro::promise<Payload &&>::pending_notify ntf;
+    std::lock_guard _(_core->_mx);
+    auto iter = _core->_subscriptions.find(_id);
+    if (iter == _core->_subscriptions.end()) return;
+    ntf = iter->second.drop();
+    _core->_subscriptions.erase(iter);
+}
+
+coro::future<Peer::Payload &&> Peer::Subscription::receive() {
+    return [&](auto prom) {
+        std::lock_guard _(_core->_mx);
+        auto iter = _core->_subscriptions.find(_id);
+        if (iter == _core->_subscriptions.end()) return;
+        iter->second = std::move(prom);
+    };
+}
+
+Peer::SubscriptionBase::SubscriptionBase(ID id, Core *core)
+    :_id(id),_core(core) {
+    _core->add_ref();
+}
+
+void Peer::SubscriptionCoreDeleter::operator ()(Core *x) const {
+    x->release_ref();
+}
+
+Peer::Topic Peer::publish(ID topic_id) {
+    if (!_core) throw std::logic_error("Inactive peer");
+    std::lock_guard _(_core->_mx);
+    _core->_topics[topic_id];
+    return Topic(topic_id, _core.get());
+}
+
+Peer::Topic::~Topic() {
+    coro::promise<void>::pending_notify ntf;
+    {
+        std::lock_guard _(_core->_mx);
+        auto iter = _core->_topics.find(_id);
+        if (iter == _core->_topics.end()) return;
+        ntf = iter->second.drop();
+        _core->_topics.erase(iter);
+    }
+    _core->send_message(Type::topic_close, _id, {});
+
+}
+
+coro::lazy_future<bool> Peer::Topic::publish(Payload &pl) {
+    {
+        std::lock_guard _(_core->_mx);
+        auto iter = _core->_topics.find(_id);
+        if (iter ==_core->_topics.end()) return false;
+    }
+    return _core->send_message(Type::topic_update, _id, pl);
+}
+
+coro::lazy_future<bool> Peer::Topic::publish(Payload &&pl) {
+    return publish(pl);
+}
+
+coro::future<void> Peer::Topic::on_unsubscribe() {
+    return [&](auto promise) {
+        std::lock_guard _(_core->_mx);
+        auto iter = _core->_topics.find(_id);
+        if (iter ==_core->_topics.end()) return;
+        iter->second = std::move(promise);
+    };
+}
+
+coro::lazy_future<bool> Peer::channel_send(ID channel_id, Payload &pl) {
+    if (!_core) return false;
+    return _core->send_message(Type::channel_message, channel_id, pl);
+}
+coro::lazy_future<bool> Peer::channel_send(ID channel_id, Payload &&pl) {
+    if (!_core) return false;
+    return _core->send_message(Type::channel_message, channel_id, std::move(pl));
+}
+
+coro::future<Peer::Payload &&> Peer::channel_receive(ID channel_id) {
+    return [&](auto promise) {
+        if (!_core) return;
+        std::lock_guard _(_core->_mx);
+        _core->_channels[channel_id] = std::move(promise);
+    };
+}
+
+Peer::Peer() {
+}
+
+Peer::State Peer::get_state() const {
+    if (_core == nullptr) return State::unbound;
+    if (_core->_listen_promise || _core->_connect_promise) return State::opening;
+    if (_core->_closed) return State::closing;
+    if (!_core->_reader_active) return State::closed;
+    return State::open;
+}
+
+
 
 }
 

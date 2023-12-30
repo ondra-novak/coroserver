@@ -7,6 +7,7 @@
 #include <queue>
 #include <coro.h>
 
+#include "strutils.h"
 #include <iostream>
 namespace coroserver {
 
@@ -54,13 +55,15 @@ public:
     using AttachmentData = std::vector<char>;
 
 
+    using Text = TextBuffer<char, 64>;
+
     struct Payload {
-        std::string_view text;
+        Text text;
         std::vector<coro::lazy_future<AttachmentData> > attachments;
 
         Payload() = default;
         Payload(std::string_view text): text(text) {}
-        Payload(std::string_view text, std::vector<coro::lazy_future<AttachmentData> > attachments)
+        Payload(std::string_view text, std::vector<coro::lazy_future<AttachmentData> > &&attachments)
             : text(text),attachments(std::move(attachments)) {}
         void add_attachment(AttachmentData attach) {
             attachments.push_back(std::move(attach));
@@ -87,27 +90,30 @@ public:
     };
 
     struct Request : PayloadWithID {
-        coro::promise<Payload> response;
+        coro::promise<Payload &&> response;
         Request() = default;
         template<typename ... Args>
-        Request(coro::promise<Payload> &&prom, Args && ... args)
+        Request(coro::promise<Payload &&> &&prom, Args && ... args)
             :PayloadWithID(std::forward<Args>(args)...)
             ,response(std::move(prom)) {}
 
     };
 
+    struct SubscriptionCoreDeleter {
+        void operator()(Core *x) const;
+    };
+
     class SubscriptionBase {
     public:
         SubscriptionBase() = default;
-        SubscriptionBase(ID id, std::weak_ptr<Core> core)
-            :_id(id), _core(core) {}
+        SubscriptionBase(ID id, Core *core);
         SubscriptionBase(SubscriptionBase &&x) = default;
         SubscriptionBase(const SubscriptionBase &x) = delete;
         SubscriptionBase &operator=(SubscriptionBase &&x) = default;
         SubscriptionBase &operator=(const SubscriptionBase &x) = delete;
     protected:
         ID _id = 0;
-        std::weak_ptr<Core> _core;
+        std::unique_ptr<Core, SubscriptionCoreDeleter> _core;
 
     };
 
@@ -129,7 +135,7 @@ public:
          * (work similar as coro::distributor)
          *
          */
-        coro::future<Payload> receive();
+        coro::future<Payload &&> receive();
         ID get_id() const {return _id;}
     };
 
@@ -150,7 +156,8 @@ public:
          * was closed, it is always returned as resolved so you can read status
          * false without waiting.
          */
-        coro::lazy_future<bool> publish(const Payload &pl);
+        coro::lazy_future<bool> publish(Payload &pl);
+        coro::lazy_future<bool> publish(Payload &&pl);
 
         coro::future<void> on_unsubscribe();
 
@@ -167,14 +174,14 @@ public:
      * @param pl payload sent with the request
      * @return
      */
-    coro::future<Payload> connect(PConnection &&conn, Payload &&pl = {});
+    coro::future<Payload &&> connect(PConnection &&conn, Payload &&pl = {});
 
     ///Initialize peer and listen for incoming connection
     /**
      * @param conn opened connection
      * @return connect request. you need to response this request to continue
      */
-    coro::future<Request> listen(PConnection &&conn);
+    coro::future<Request &&> listen(PConnection &&conn);
 
     ///returns future, which is resolved once the communication is done (disconnected)
     /**
@@ -190,13 +197,17 @@ public:
      * @param request request to send
      * @return response
      */
-    coro::future<Payload> send_request(const Payload &request);
+    coro::future<Payload &&> send_request(Payload &request);
+
+    coro::future<Payload &&> send_request(Payload &&request);
 
     ///Receive request (as server) to generate response
     /**
-     * @return received request
+     * @return received request.
+     *
+     *
      */
-    coro::future<Request> receive_request();
+    coro::future<Request &&> receive_request();
 
     ///Create subscription
     /**
@@ -222,7 +233,8 @@ public:
      * @param pl payload
      * @return discardable lazy future
      */
-    coro::lazy_future<bool> channel_send(ID channel_id, const Payload &pl);
+    coro::lazy_future<bool> channel_send(ID channel_id, Payload &pl);
+    coro::lazy_future<bool> channel_send(ID channel_id, Payload &&pl);
 
     ///Receive message on channel
     /**
@@ -232,18 +244,19 @@ public:
      * @note Once the message received, you need to call this function again in the
      * same thread, otherwise, the next message can be lost.
      */
-    coro::future<Payload> channel_receive(ID channel_id);
+    coro::future<Payload &&> channel_receive(ID channel_id);
 
 
     static void toBase36(ID id, std::ostream &out);
     static ID fromBase36(std::string_view txt);
+
 
 protected:
 
     enum class Type: char {
         ///global errors, empty id
         /**Last message in stream, always leads to closing connection */
-        error = 'N',
+        error = 'E',
         ///Count of attachments
         /**every command with payload can have this prefix. Instead ID is number
          * count of expected attachments. The command starts at payload section
@@ -259,7 +272,7 @@ protected:
         attachment_count='A',
         ///Attachment error. Can appear instead binary content but counts as binary content
         /** id is empty, payload contains error message */
-        attachment_error='M',
+        attachment_error='N',
         ///Hello message Sends by an initiator. ID contains version, payload is accessible by respondent
         hello = 'H',
         ///Welcome message, sends as reply by respondent, ID contains version, payload is response
@@ -281,7 +294,7 @@ protected:
         /**
          * Same meaning as 'P', but indicates error
          * */
-        response_error = 'E',
+        response_error = 'R',
 
         /// Topic (subscription) update
         /**
@@ -320,6 +333,7 @@ protected:
         void operator()(Core *ptr);
     };
     struct Command;
+    struct OpenedRequest;
 
     using PCore =  std::unique_ptr<Core, CoreDeleter>;
 

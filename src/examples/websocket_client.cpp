@@ -1,6 +1,5 @@
 #include <coroserver/http_client.h>
 #include <coroserver/http_ws_client.h>
-#include <coroserver/signal.h>
 #include <coroserver/stream_utils.h>
 #include <coro.h>
 #include <iostream>

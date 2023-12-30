@@ -20,7 +20,9 @@ set(testFiles
     http_client.cpp
     mt_stream.cpp
     shared_lockable_ptr.cpp
-#    message_stream.cpp
+    umq_basic.cpp
+    text_buffer.cpp
+
 )
 
 link_libraries(

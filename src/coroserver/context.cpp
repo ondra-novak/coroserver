@@ -488,5 +488,16 @@ inline Stream ContextIOImpl::get_signal_stream() {
     return _signal_stream;
 }
 
+std::pair<Stream, Stream> Context::create_pair(TimeoutSettings tms) {
+    int sockets[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM |SOCK_NONBLOCK|SOCK_CLOEXEC, 0, sockets)<0) {
+        throw std::system_error(errno, std::system_category(), "Failed to create socketpair");
+    }
+    return {
+        Stream(SocketStream::create(AsyncSocket(sockets[0],_ptr), PeerName(), tms)),
+        Stream(SocketStream::create(AsyncSocket(sockets[1],_ptr), PeerName(), tms))
+    };
+}
+
 }
 

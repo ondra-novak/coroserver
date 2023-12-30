@@ -12,8 +12,28 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace coroserver {
+
+
+template<typename T>
+constexpr std::size_t calculate_string_size(const T *arr, std::size_t n) {
+    if constexpr(std::is_same_v<T, char> || std::is_same_v<T, wchar_t>
+                || std::is_same_v<T, char16_t> || std::is_same_v<T, char32_t>) {
+        if (arr[n-1] == 0) return n-1;
+    }
+    return n;
+}
+
+template<typename T, std::size_t n>
+constexpr std::size_t calculate_string_size(const T (&arr)[n]) {
+    return calculate_string_size(arr,n);
+
+}
+
+
 
 template<typename T>
 struct kmp_pattern_base {
@@ -46,13 +66,7 @@ public:
 
     constexpr kmp_pattern(const T *pattern) {
         this->_pattern = pattern;
-        if constexpr(std::is_same_v<T, char> || std::is_same_v<T, wchar_t>
-                    || std::is_same_v<T, char16_t> || std::is_same_v<T, char32_t>) {
-            if (pattern[N-1] == 0) this->_size = N-1;
-            else this->_size = N;
-        } else {
-            this->_size = N;
-        }
+        this->_size = calculate_string_size(pattern, N);
         this->build_lps(_lps_data);
         this->_lps = _lps_data;
     }
@@ -447,6 +461,164 @@ public:
     constexpr bool operator!=(const StringICmpView &other) const {return !strIEqual()(*this, other);}
 };
 
+
+template<typename T, unsigned int static_buffer>
+union TextBuffer {
+public:
+
+    static_assert(static_buffer < 256);
+
+    enum ViewTag {};
+
+    constexpr TextBuffer():_view() {}
+    constexpr ~TextBuffer() {
+        if (_view.type == Type::dyn) {
+            std::destroy_at(&_dyn);
+        }
+    }
+    constexpr TextBuffer(const std::string_view &text) {
+        if (std::is_constant_evaluated()) {
+            std::construct_at(&_view, text);
+        } else if (text.size() <= static_buffer) {
+            std::construct_at(&_st, text.begin(), text.end());
+        } else {
+            std::construct_at(&_dyn, text.begin(), text.end());
+        }
+    }
+    template<std::size_t n>
+    constexpr TextBuffer(const T (&arr)[n])
+        :TextBuffer(ViewTag{}, std::string_view(arr, calculate_string_size(arr))) {
+
+    }
+
+    constexpr TextBuffer(ViewTag, std::string_view txt)
+        :_view(txt) {}
+
+    constexpr TextBuffer(const TextBuffer &other) {
+        switch(other._st.type) {
+            default:
+            case Type::stc:
+                std::construct_at(&_st, other._st);
+                break;
+            case Type::dyn:
+                std::construct_at(&_dyn, other._dyn);
+                break;
+            case Type::view:
+                std::construct_at(&_view, other._view);
+                break;
+        }
+    }
+
+    constexpr TextBuffer(TextBuffer &&other) {
+        switch(other._st.type) {
+            default:
+            case Type::stc:
+                std::construct_at(&_st, std::move(other._st));
+                break;
+            case Type::dyn:
+                std::construct_at(&_dyn, std::move(other._dyn));
+                break;
+            case Type::view:
+                std::construct_at(&_view, other._view);
+                break;
+        }
+    }
+    constexpr TextBuffer &operator=(const TextBuffer &other) {
+        if (this != &other) {
+            std::destroy_at(this);
+            std::construct_at(this, other);
+        }
+        return *this;
+    }
+    constexpr TextBuffer &operator=(TextBuffer &&other) {
+        if (this != &other) {
+            std::destroy_at(this);
+            std::construct_at(this, std::move(other));
+        }
+        return *this;
+    }
+
+    constexpr std::string_view get() const {
+        switch(_st.type) {
+            default:
+            case Type::stc:
+                return std::string_view(_st.data, _st.size);
+            case Type::dyn:
+                return std::string_view(_dyn.data, _dyn.sz);
+            case Type::view:
+                return std::string_view(_view.data);
+        }
+    }
+
+    constexpr operator std::string_view() const {
+        return get();
+    }
+
+    bool operator==(const TextBuffer &other) const {
+        return get() == other.get();
+    }
+
+protected:
+
+    enum class Type: char {
+        stc,dyn,view
+    };
+
+    struct StaticPart {
+        Type type = Type::stc;
+        unsigned char size = 0;
+        T data[static_buffer - 2];
+        constexpr StaticPart() {
+            std::fill(std::begin(data), std::end(data),T());
+        }
+        template<typename X>
+        constexpr StaticPart(X beg, X end):size(std::distance(beg, end)) {
+            auto iter = std::copy(beg,end, std::begin(data));
+            std::fill(iter, std::end(data),T());
+        }
+    };
+
+    struct DynamicPart {
+        Type type = Type::dyn;
+        std::size_t sz;
+        T *data;
+
+        template<typename X>
+        DynamicPart(X beg, X end):sz(std::distance(beg,end)), data(new T[sz]) {
+            std::copy(beg, end, data);
+        }
+        ~DynamicPart() {
+            delete [] data;
+        }
+
+        DynamicPart(DynamicPart &&other)
+            :sz(std::exchange(other.sz,0))
+            ,data(std::exchange(other.data, nullptr)) {}
+        DynamicPart(const DynamicPart &other)
+            :sz(other.sz)
+            ,data(new T[sz]) {
+            std::copy(other.data, other.data+sz, data);
+        }
+    };
+    struct ViewPart {
+        Type type = Type::view;
+        std::string_view data;
+
+        constexpr ViewPart() = default;
+        constexpr ViewPart(std::string_view view):data(view) {}
+    };
+
+    StaticPart _st;
+    DynamicPart _dyn;
+    ViewPart _view;
+
+};
+
+}
+
+template<typename IOStream, unsigned int sz>
+IOStream &operator << (IOStream &stm, const coroserver::TextBuffer<char, sz> &txt) {
+    return stm << txt.get();
 }
 
 
