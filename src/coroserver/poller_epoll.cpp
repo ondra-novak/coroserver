@@ -29,32 +29,20 @@ static int init_epoll_object() {
     return e;
 }
 
-static int init_signaled_handle() {
-    int fd[2];
-    int r = pipe2(fd, O_CLOEXEC);
-    if (r <0)  {
-        int e = errno;
-        throw std::system_error(e,std::generic_category(), "socket/notify");
-    }
-    ::close(fd[1]);
-    return fd[0];
-
-}
-
 
 Poller_epoll::Poller_epoll()
-:epoll_fd(-1)
-,event_fd(-1)
+:_epoll_fd(init_epoll_object())
 ,first_timeout(std::chrono::system_clock::time_point::min())
-
 {
-    try {
-        epoll_fd = init_epoll_object();
-        event_fd = init_signaled_handle();
-    } catch (...) {
-        if (event_fd>=0) ::close(event_fd);
-        if (epoll_fd>=0) ::close(epoll_fd);
+    epoll_event ev ={};
+    ev.events = EPOLLIN;
+    ev.data.fd = _ntf_event.getFD();
+    int r = epoll_ctl(_epoll_fd, EPOLL_CTL_ADD, _ntf_event.getFD(), &ev);
+    if (r < 0) {
+        int e = errno;
+        throw std::system_error(e,std::generic_category(), "event_notify");
     }
+
 }
 
 coro::future<void> Poller_epoll::start(coro::scheduler &scheduler) {
@@ -87,7 +75,7 @@ void Poller_epoll::stop() {
          std::lock_guard _(_mx);
          if (!_running || _request_stop) return;
          for (auto &x: fd_map) {
-             epoll_ctl(epoll_fd, EPOLL_CTL_DEL, x.first, &ev);
+             epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, x.first, &ev);
          }
          std::swap(tmp ,fd_map);
          _request_stop = true;
@@ -105,8 +93,6 @@ Poller_epoll::~Poller_epoll() {
     if (_running) {
         _cond.wait(lk,[&]{return !_running;});
     }
-    ::close(event_fd);
-    ::close(epoll_fd);
 }
 
 WaitResult Poller_epoll::io_wait(SocketHandle s,
@@ -145,7 +131,7 @@ void Poller_epoll::shutdown(SocketHandle s) {
         if (iter != fd_map.end()) {
             std::swap(tmp,iter->second);
             fd_map.erase(iter);
-            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, s, &ev);
+            epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, s, &ev);
         }
         mclosing_map.emplace(s);
     }
@@ -153,22 +139,7 @@ void Poller_epoll::shutdown(SocketHandle s) {
 
 
 void Poller_epoll::notify() {
-	epoll_event ev ={};
-	ev.events = EPOLLIN|EPOLLONESHOT;
-	ev.data.fd = event_fd;
-	int r = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, event_fd, &ev);
-	if (r < 0) {
-		int e = errno;
-		if (e == ENOENT) {
-			r = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, event_fd, &ev);
-			if (r < 0) {
-				int e = errno;
-				throw std::system_error(e, std::generic_category(), "notify()");
-			}
-		} else {
-			throw std::system_error(e, std::generic_category(), "notify_mod()");
-		}
-	}
+    _ntf_event.regEvent();
 }
 
 
@@ -193,16 +164,16 @@ void Poller_epoll::rearm_fd(bool first_call, FDMap::iterator iter) {
 	}
 	if (ev.events) {
 		ev.events |= EPOLLONESHOT;
-		int r = epoll_ctl(epoll_fd, first_call?EPOLL_CTL_ADD:EPOLL_CTL_MOD, ev.data.fd, &ev);
+		int r = epoll_ctl(_epoll_fd, first_call?EPOLL_CTL_ADD:EPOLL_CTL_MOD, ev.data.fd, &ev);
 		if (r < 0) {
 			int e = errno;
 			throw std::system_error(e, std::generic_category(), "epoll_ctl");
 		}
 
-	/*	if (lst.timeout < first_timeout) {
-		    first_timeout = lst.timeout;*/
+		if (lst.timeout < first_timeout) {
+		    first_timeout = lst.timeout;
 		    notify();
-		/*}*/
+		}
 	}
 }
 
@@ -260,7 +231,7 @@ void Poller_epoll::worker() noexcept {
                 timeout = std::chrono::duration_cast<std::chrono::milliseconds>(xtm - now).count();
             }
             lock.unlock();
-            r = epoll_wait(epoll_fd, events, 16, timeout);
+            r = epoll_wait(_epoll_fd, events, 16, timeout);
             if (r < 0) {
                 int e = errno;
                 if (e != EINTR) {
@@ -279,7 +250,7 @@ void Poller_epoll::worker() noexcept {
             for (int i = 0; i < r; i++) {
                 auto &e = events[i];
                 int fd = e.data.fd;
-                if (fd != event_fd) {
+                if (fd != _ntf_event.getFD()) {
                     auto iter = fd_map.find(fd);
                     if (iter != fd_map.end()) {
                         RegList &regs = fd_map[fd];
@@ -306,11 +277,13 @@ void Poller_epoll::worker() noexcept {
                         rearm_fd(false, iter);
                     }
 
+                } else {
+                    _ntf_event.fetch_and_reset();
                 }
             }
-            for (auto &x: ntf) {
-                if (x) _current_scheduler->schedule(std::move(x));
-            }
+        }
+        for (auto &x: ntf) {
+            if (x) _current_scheduler->schedule(std::move(x));
         }
         if (_request_stop) {
             _running = false;

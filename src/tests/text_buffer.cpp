@@ -4,7 +4,7 @@
 
 #include <iostream>
 
-using Txt = coroserver::TextBuffer<char, 40>;
+using Txt = coroserver::DataBuffer<char, 40>;
 
 constexpr Txt test1 = {};
 constexpr Txt test2 = {"ahoj svete"};
@@ -13,10 +13,10 @@ int main() {
 
     CHECK_EQUAL(test1, "");
     CHECK_EQUAL(test2, "ahoj svete");
-    std::cout << sizeof(coroserver::TextBuffer<char, 16>) << std::endl;
-    std::cout << sizeof(coroserver::TextBuffer<char, 24>) << std::endl;
-    std::cout << sizeof(coroserver::TextBuffer<char, 32>) << std::endl;
-    std::cout << sizeof(coroserver::TextBuffer<char, 40>) << std::endl;
+    std::cout << sizeof(coroserver::DataBuffer<char, 16>) << std::endl;
+    std::cout << sizeof(coroserver::DataBuffer<char, 24>) << std::endl;
+    std::cout << sizeof(coroserver::DataBuffer<char, 32>) << std::endl;
+    std::cout << sizeof(coroserver::DataBuffer<char, 40>) << std::endl;
     std::cout << sizeof(std::string) << std::endl;
     Txt n("ahoj");
     std::string_view t = n;

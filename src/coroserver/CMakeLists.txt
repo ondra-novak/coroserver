@@ -9,6 +9,7 @@ add_library(coroserver
    memstream.cpp
    chunked_stream.cpp
    limited_stream.cpp
+   event_fd.cpp
 #   json/json.cpp
     http_common.cpp
    http_server_request.cpp

@@ -9,7 +9,7 @@
 #define SRC_USERVER_POLLER_EPOLL_H_
 
 #include "ipoller.h"
-
+#include "event_fd.h"
 
 #include "scheduler.h"
 
@@ -70,8 +70,8 @@ protected:
     using PendingNotify = std::vector<coro::future<bool>::pending_notify>;
 
 
-	int epoll_fd;
-	int event_fd;
+	FileDescriptor _epoll_fd;
+	EFDEventRegister _ntf_event;
 
 	std::mutex _mx;
 	FDMap fd_map;

@@ -55,7 +55,7 @@ public:
     using AttachmentData = std::vector<char>;
 
 
-    using Text = TextBuffer<char, 64>;
+    using Text = DataBuffer<char, 64>;
 
     struct Payload {
         Text text;

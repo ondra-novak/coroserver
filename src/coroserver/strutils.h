@@ -463,20 +463,20 @@ public:
 
 
 template<typename T, unsigned int static_buffer>
-union TextBuffer {
+union DataBuffer {
 public:
 
     static_assert(static_buffer < 256);
 
     enum ViewTag {};
 
-    constexpr TextBuffer():_view() {}
-    constexpr ~TextBuffer() {
+    constexpr DataBuffer():_view() {}
+    constexpr ~DataBuffer() {
         if (_view.type == Type::dyn) {
             std::destroy_at(&_dyn);
         }
     }
-    constexpr TextBuffer(const std::string_view &text) {
+    constexpr DataBuffer(const std::string_view &text) {
         if (std::is_constant_evaluated()) {
             std::construct_at(&_view, text);
         } else if (text.size() <= static_buffer) {
@@ -486,15 +486,15 @@ public:
         }
     }
     template<std::size_t n>
-    constexpr TextBuffer(const T (&arr)[n])
-        :TextBuffer(ViewTag{}, std::string_view(arr, calculate_string_size(arr))) {
+    constexpr DataBuffer(const T (&arr)[n])
+        :DataBuffer(ViewTag{}, std::string_view(arr, calculate_string_size(arr))) {
 
     }
 
-    constexpr TextBuffer(ViewTag, std::string_view txt)
+    constexpr DataBuffer(ViewTag, std::string_view txt)
         :_view(txt) {}
 
-    constexpr TextBuffer(const TextBuffer &other) {
+    constexpr DataBuffer(const DataBuffer &other) {
         switch(other._st.type) {
             default:
             case Type::stc:
@@ -509,7 +509,7 @@ public:
         }
     }
 
-    constexpr TextBuffer(TextBuffer &&other) {
+    constexpr DataBuffer(DataBuffer &&other) {
         switch(other._st.type) {
             default:
             case Type::stc:
@@ -523,14 +523,14 @@ public:
                 break;
         }
     }
-    constexpr TextBuffer &operator=(const TextBuffer &other) {
+    constexpr DataBuffer &operator=(const DataBuffer &other) {
         if (this != &other) {
             std::destroy_at(this);
             std::construct_at(this, other);
         }
         return *this;
     }
-    constexpr TextBuffer &operator=(TextBuffer &&other) {
+    constexpr DataBuffer &operator=(DataBuffer &&other) {
         if (this != &other) {
             std::destroy_at(this);
             std::construct_at(this, std::move(other));
@@ -554,9 +554,52 @@ public:
         return get();
     }
 
-    bool operator==(const TextBuffer &other) const {
+    constexpr bool operator==(const DataBuffer &other) const {
         return get() == other.get();
     }
+
+    void make_mutable() {
+        if (_view.type == Type::view) {
+            std::string_view x = get();
+            std::destroy_at(this);
+            std::construct_at(this, x);
+        }
+    }
+
+    std::size_t size() const {
+        return get().size();
+    }
+
+    auto begin() const {
+        return get().begin();
+    }
+    auto end() const {
+        return get().end();
+    }
+    auto begin() {
+        switch (_st.type) {
+            default:
+            case Type::stc: return _st.data;
+            case Type::dyn: return _dyn.data;
+            case Type::view: {
+                make_mutable();
+                return begin();
+            }
+        }
+    }
+    auto end() {
+        switch (_st.type) {
+            default:
+            case Type::stc: return _st.data+_st.size;
+            case Type::dyn: return _dyn.data + _dyn.sz;
+            case Type::view: {
+                make_mutable();
+                return end();
+            }
+        }
+    }
+
+
 
 protected:
 
@@ -617,7 +660,7 @@ protected:
 }
 
 template<typename IOStream, unsigned int sz>
-IOStream &operator << (IOStream &stm, const coroserver::TextBuffer<char, sz> &txt) {
+IOStream &operator << (IOStream &stm, const coroserver::DataBuffer<char, sz> &txt) {
     return stm << txt.get();
 }
 
