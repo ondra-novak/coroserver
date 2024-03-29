@@ -7,7 +7,7 @@
 
 #ifndef SRC_USERVER_IO_CONTEXT_H_
 #define SRC_USERVER_IO_CONTEXT_H_
-#include "async_support.h"
+#include "timer.h"
 #include "defs.h"
 #include "ipoller.h"
 #include "stream.h"
@@ -42,31 +42,38 @@ class ContextIOImpl;
 class Context {
 public:
 
-    Context() = default;
-
-    Context(coro::scheduler &sch);
-    Context(std::unique_ptr<coro::scheduler> sch);
-    explicit Context(unsigned int iothreads);
+    Context();
 
     Context(Context &&other);
     Context &operator=(Context &&other);
 
+
     ~Context();
 
-    ///Give up current thread to context until the future is resolved
+
+    using SchItem = coro::promise<bool>::notify;
+
+    ///Run foreground (single threaded)
+    void run();
+
+    ///Run control thread foreground, use custom scheduler
+    void run(coro::function<void(SchItem)> schedule_fn);
+
+    ///start background thread - single threaded execution
+    void start();
+
+    ///Start thread at background, use custom scheduler
+    void start(coro::function<void(SchItem)> schedule_fn);
+
+    ///start using thread pool
+    void start(std::shared_ptr<coro::thread_pool> thread_pool);
+
+    ///start and create thread pool - use specified count threads
     /**
-     * @param fut future to resolve
-     * @return return value of the resolved future
+     * @param threads count of threads allocated for the thread pool. Note that
+     * there is always one extra thread for control thread
      */
-    template<coro::future_type T>
-    auto await(T &&fut) {
-        return get_scheduler().await(std::forward<T>(fut));
-    }
-
-
-
-
-    coro::scheduler &get_scheduler();
+    void start(unsigned int threads);
 
 
     ///Create listening socket at given peer
@@ -150,6 +157,9 @@ public:
     void stop();
 
 
+    ///Create timer
+    /** The timer provides scheduling features, such a sleep_for and sleep_until for coroutines */
+    Timer create_timer();
 
     ///create stream which serves as pipe
     Stream create_pipe(TimeoutSettings tms = {});

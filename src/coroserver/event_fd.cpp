@@ -14,6 +14,13 @@ FileDescriptor::FileDescriptor(FileDescriptor &&other):_fd(std::exchange(other._
 FileDescriptor::~FileDescriptor() {
     if (_fd >= 0) ::close(_fd);
 }
+FileDescriptor &FileDescriptor::operator=(FileDescriptor &&other) {
+    if (this != &other) {
+        if (_fd >= 0) ::close(_fd);
+        _fd = std::exchange(other._fd,-1);
+    }
+    return *this;
+}
 
 EventFD::EventFD(Mode mode):EventFD(mode, 0) {
 }

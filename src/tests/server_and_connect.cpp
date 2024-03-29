@@ -6,14 +6,16 @@
 using namespace coroserver;
 
 void check1() {
-    Context ctx(2);
+    Context ctx;
+    ctx.start();
 
     auto addrs_listen = PeerName::lookup("127.0.0.1", "*");
     auto listening = ctx.accept(std::move(addrs_listen));
 
-    auto addrs_connect = PeerName::lookup("localhost", addrs_listen[0].get_port());
+    auto addrs_connect = PeerName::lookup("127.0.0.1", addrs_listen[0].get_port());
 
     auto wtconn1 = listening();
+    wtconn1.start();
 
 
     auto connecting = ctx.connect(addrs_connect);
@@ -23,7 +25,8 @@ void check1() {
     Stream r = wtconn1;
 }
 void check2() {
-    Context ctx(2);
+    Context ctx;
+    ctx.start();
 
     auto addrs_listen = PeerName::lookup("[::1]", "*");
     auto listening = ctx.accept(std::move(addrs_listen));

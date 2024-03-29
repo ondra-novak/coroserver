@@ -67,7 +67,7 @@ protected:
 
 	using FDMap = std::unordered_map<SocketHandle, RegList>;
 	using MarkedClosingMap = std::set<SocketHandle>;
-    using PendingNotify = std::vector<coro::future<bool>::pending_notify>;
+    using PendingNotify = std::vector<coro::promise<bool>::notify>;
 
 
 	FileDescriptor _epoll_fd;

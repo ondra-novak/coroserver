@@ -7,8 +7,7 @@
 
 #include "context.h"
 #include "exceptions.h"
-#include "ipoller.h"
-#include "poller_epoll.h"
+#include "epoll.h"
 
 #include "socket_stream.h"
 
@@ -44,37 +43,35 @@ class ContextIOImpl: public IAsyncSupport, public std::enable_shared_from_this<C
 public:
 
     using AcceptResult = std::pair<SocketHandle, PeerName>;
+    using SchItem = Context::SchItem;
 
-
-    ContextIOImpl(coro::scheduler &sch);
-    ContextIOImpl(std::unique_ptr<coro::scheduler> sch);
-    ContextIOImpl(std::size_t iothreads);
+    ContextIOImpl() = default;
     ~ContextIOImpl();
 
-    virtual WaitResult io_wait(SocketHandle handle,
-                     AsyncOperation op,
-                     std::chrono::system_clock::time_point timeout) override;
+    virtual coro::future<bool> input(SocketHandle handle, std::chrono::system_clock::time_point timeout) override;
+    virtual coro::future<bool> output(SocketHandle handle, std::chrono::system_clock::time_point timeout) override;
     virtual void shutdown(SocketHandle handle)  override;
     virtual void close(SocketHandle handle)  override;
+    virtual coro::future<bool> timer(std::chrono::system_clock::time_point tp, const void *ident) override;
+    virtual TimerCancel cancel_timer(const void *ident) override;
+
+    void run();
+    void run(coro::function<void(SchItem)> schedule_fn);
+    void start(coro::function<void(SchItem)> schedule_fn);
+    void start(std::shared_ptr<coro::thread_pool> thread_pool);
+    void start(unsigned int threads);
 
     void stop();
 
-    coro::scheduler &get_scheduler()  {
-        return *_scheduler;
-    }
 
     Stream get_signal_stream();
 
 
 protected:
+    AsyncEPoll _epoll;
+    std::stop_source _stp;
+    std::vector<std::thread> _threads;
 
-    using SchDeleter = void (*)(coro::scheduler *sch);
-    using SchPtr = std::unique_ptr<coro::scheduler, SchDeleter>;
-
-
-    SchPtr _scheduler;
-    std::unique_ptr<IPoller> _disp;
-    coro::future<void> _disp_run;
 
     std::once_flag _signal_init;
     Stream _signal_stream;
@@ -89,26 +86,9 @@ void close_socket(const SocketHandle &handle) {
 }
 
 
-ContextIOImpl::ContextIOImpl(coro::scheduler &sch)
-        :_scheduler(SchPtr(&sch,[](coro::scheduler *){}))
-        ,_disp(std::make_unique<Poller_epoll>())
-        ,_disp_run(_disp->start(*_scheduler)) {
-}
-
-ContextIOImpl::ContextIOImpl(std::size_t iothreads)
-        :_scheduler(SchPtr(new coro::scheduler(iothreads),[](coro::scheduler *sch){delete sch;}))
-        ,_disp(std::make_unique<Poller_epoll>())
-        ,_disp_run(_disp->start(*_scheduler)) {
-}
-
-ContextIOImpl::ContextIOImpl(std::unique_ptr<coro::scheduler> sch)
-        :_scheduler(SchPtr(sch.release(),[](coro::scheduler *sch){delete sch;}))
-        ,_disp(std::make_unique<Poller_epoll>())
-        ,_disp_run(_disp->start(*_scheduler)) {
-}
 
 ContextIOImpl::~ContextIOImpl() {
-    _disp->stop();
+    stop();
     bool has_signals = true;
     std::call_once(_signal_init, [&]{
         has_signals = false;;
@@ -117,31 +97,25 @@ ContextIOImpl::~ContextIOImpl() {
         init_signals(SIG_DFL);
         _signal_stream = Stream();
     }
-    _scheduler->await(_disp_run);
 }
 
-WaitResult ContextIOImpl::io_wait(SocketHandle handle,
-                 AsyncOperation op,
-                 std::chrono::system_clock::time_point timeout) {
-    return _disp->io_wait(handle, op, timeout);
-
-}
 void ContextIOImpl::shutdown(SocketHandle handle) {
-    _disp->shutdown(handle);
+    _epoll.shutdown(handle);
 
 }
 void ContextIOImpl::close(SocketHandle handle)   {
-    _disp->close(handle);
+    _epoll.unreg(handle);
     ::close(handle);
-    /* c
-    */
 }
 
 void ContextIOImpl::stop() {
-    _disp->stop();
+    _stp.request_stop();
+    for (auto &x: _threads) x.join();
+    _threads.clear();
 
 }
 
+Context::Context():_ptr(std::make_shared<ContextIOImpl>()) {}
 
 AsyncSocket Context::create_connected_socket(const PeerName &addr) {
     return addr.use_sockaddr([&](const sockaddr *saddr, socklen_t slen) {
@@ -207,8 +181,8 @@ static coro::generator<Stream> listen_generator(AsyncSocket socket,
     });
 
     while (true) {
-        auto wtres = socket.io_wait(AsyncOperation::accept,std::chrono::system_clock::time_point::max());
-        bool connected = co_await wtres.has_value();
+        auto wtres = socket.input(std::chrono::system_clock::time_point::max());
+        bool connected = co_await !!wtres;
         if (!connected || !wtres.get()) break;
         sockaddr_storage addr;
         socklen_t slen = sizeof(addr);
@@ -216,7 +190,7 @@ static coro::generator<Stream> listen_generator(AsyncSocket socket,
                 SOCK_NONBLOCK|SOCK_CLOEXEC);
         if (s>=0) {
             co_yield Stream (SocketStream::create(
-                            socket.set_socket_handle(s),
+                            socket.set_handle(s),
                             PeerName::from_sockaddr(&addr).set_group_id(group_id),
                             tmcfg));
         } else {
@@ -269,18 +243,17 @@ static coro::async<void> wait_connect(Context &ctx,
     //if delay_sec is nonzero - add some delay
     if (delay_sec) {
         //wait for delay - store future - to solve race condition
-        auto dl = ctx.get_scheduler().sleep_for(std::chrono::seconds(delay_sec), &socket);
+        auto dl = ctx.create_timer().sleep_for(std::chrono::seconds(delay_sec), &socket);
         //register stop callback, which will cancel our delay
-        std::stop_callback stpcb(stop, [&]{ctx.get_scheduler().cancel(&socket);});
+        std::stop_callback stpcb(stop, [&]{ctx.create_timer().cancel(&socket);});
         //check stop requested finally, before wait, it would appear before registration
         if (stop.stop_requested()) {
             //if requested, cancel our wait
-            ctx.get_scheduler().cancel(&socket);
+            ctx.create_timer().cancel(&socket);
         }
         //in all case, wait for delay, retrieve result
-        try {
-            co_await dl;
-        } catch (const coro::broken_promise_exception &) {
+        bool canceled = co_await !dl;
+        if (canceled) {
             result.push(ConnectInfo{peer, {}});
             co_return;
         }
@@ -299,9 +272,9 @@ static coro::async<void> wait_connect(Context &ctx,
         //in this state, we can use socket handle to mark it closing when stop is requested
         std::stop_callback stpcb(stop, [&]{socket.shutdown();});
 
-        auto res = socket.io_wait(AsyncOperation::connect, TimeoutSettings::from_duration(timeout));
+        auto res = socket.output(TimeoutSettings::from_duration(timeout));
 
-        co_await res.has_value();
+        co_await res.wait();
     }
 
     if (stop.stop_requested()) {
@@ -415,17 +388,6 @@ Stream Context::read_named_pipe(const std::string &name, TimeoutSettings tms) {
             tms));
 }
 
-coro::scheduler& Context::get_scheduler() {
-           return _ptr->get_scheduler();
-}
-
-Context::Context(coro::scheduler &sch)
-    :_ptr(std::make_shared<ContextIOImpl>(sch)) {}
-
-Context::Context(std::unique_ptr<coro::scheduler> sch)
-    :_ptr(std::make_shared<ContextIOImpl>(std::move(sch))) {}
-Context::Context(unsigned int iothreads)
-    :_ptr(std::make_shared<ContextIOImpl>(iothreads)) {}
 
 Context::~Context() {
     stop();
@@ -456,6 +418,9 @@ Stream Context::write_named_pipe(const std::string &name, TimeoutSettings tms) {
             tms));
 }
 
+Timer Context::create_timer() {
+    return Timer(_ptr);
+}
 
 
 static int signal_fd = -1;
@@ -472,7 +437,53 @@ Stream Context::create_intr_listener() {
 
 }
 
-inline Stream ContextIOImpl::get_signal_stream() {
+void ContextIOImpl::run() {
+    _epoll.serve([](auto){}, _stp.get_token());
+}
+
+void ContextIOImpl::run(coro::function<void(SchItem)> schedule_fn) {
+    _epoll.serve(std::move(schedule_fn), _stp.get_token());
+}
+
+void ContextIOImpl::start(coro::function<void(SchItem)> schedule_fn) {
+    _threads.emplace_back([this,schedule_fn = std::move(schedule_fn)]() mutable {
+        run(std::move(schedule_fn));
+    });
+}
+
+void ContextIOImpl::start(std::shared_ptr<coro::thread_pool> thread_pool) {
+    start([thread_pool](SchItem x){
+        thread_pool->enqueue(std::move(x));
+    });
+}
+
+void ContextIOImpl::start(unsigned int threads) {
+    start(std::make_shared<coro::thread_pool>(threads));
+}
+
+inline coro::future<bool> ContextIOImpl::input(SocketHandle handle,
+        std::chrono::system_clock::time_point timeout) {
+    return _epoll.wait(handle, Operation::input, timeout);
+}
+
+inline coro::future<bool> ContextIOImpl::output(SocketHandle handle,
+        std::chrono::system_clock::time_point timeout) {
+    return _epoll.wait(handle, Operation::output, timeout);
+}
+
+inline coro::future<bool> ContextIOImpl::timer(
+        std::chrono::system_clock::time_point tp, const void *ident) {
+    return _epoll.wait(tp, ident);
+}
+
+inline ContextIOImpl::TimerCancel ContextIOImpl::cancel_timer(const void *ident) {
+    return [x = _epoll.cancel(ident)](const std::type_info &info) mutable -> void *{
+        if (typeid(x) == info) return &x;
+        return nullptr;
+    };
+}
+
+Stream ContextIOImpl::get_signal_stream() {
     std::call_once(_signal_init, [&]{
         int fds[2];
         if (pipe2(fds,O_CLOEXEC|O_NONBLOCK) < 0)
@@ -488,6 +499,29 @@ inline Stream ContextIOImpl::get_signal_stream() {
     return _signal_stream;
 }
 
+void Context::run() {
+    _ptr->run();
+}
+
+void Context::run(coro::function<void(SchItem)> schedule_fn) {
+    _ptr->run(std::move(schedule_fn));
+}
+void Context::start() {
+    _ptr->start([](auto){});
+}
+
+void Context::start(coro::function<void(SchItem)> schedule_fn) {
+    _ptr->start(std::move(schedule_fn));
+}
+
+void Context::start(std::shared_ptr<coro::thread_pool> thread_pool) {
+    _ptr->start(std::move(thread_pool));
+}
+
+void Context::start(unsigned int threads) {
+    _ptr->start(threads);
+}
+
 std::pair<Stream, Stream> Context::create_pair(TimeoutSettings tms) {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_STREAM |SOCK_NONBLOCK|SOCK_CLOEXEC, 0, sockets)<0) {
@@ -498,6 +532,8 @@ std::pair<Stream, Stream> Context::create_pair(TimeoutSettings tms) {
         Stream(SocketStream::create(AsyncSocket(sockets[1],_ptr), PeerName(), tms))
     };
 }
+
+
 
 }
 

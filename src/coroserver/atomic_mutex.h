@@ -26,7 +26,7 @@ public:
     }
 
 protected:
-    waitable_atomic<bool> _state = {};
+    std::atomic<bool> _state = {};
 };
 
 

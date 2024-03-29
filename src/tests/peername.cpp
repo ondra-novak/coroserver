@@ -7,7 +7,7 @@
 using namespace coroserver;
 
 
-int main(int argc, char **argv) {
+int main() {
     {
         auto peer = PeerName::lookup("127.0.0.1:12345");
         CHECK_EQUAL(peer.size(),1);

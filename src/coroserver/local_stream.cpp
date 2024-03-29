@@ -11,8 +11,6 @@ LocalStream::LocalStream(AsyncSocket read_fd,  AsyncSocket write_fd, PeerName pe
 ,_read_fd(std::move(read_fd))
 ,_write_fd(std::move(write_fd))
 ,_peer(std::move(peer)) {
-    coro::target_member_fn_activation<&LocalStream::read_completion>(_wait_read_target, this);
-    coro::target_member_fn_activation<&LocalStream::write_completion>(_wait_write_target, this);
 }
 
 bool LocalStream::read_begin(std::string_view &buff) {
@@ -44,8 +42,24 @@ coro::future<std::string_view> LocalStream::read() {
     if (read_begin(buff)) return buff;
     return [&](auto p) {
         _read_promise = std::move(p);
-        _wait_read_result << [&]{return _read_fd.io_wait(AsyncOperation::read,_tms.get_read_timeout());};
-        _wait_read_result.register_target(_wait_read_target);
+        _wait_read_result << [&]{return _read_fd.input(_tms.get_read_timeout());};
+        _wait_read_result >> [this] {
+            try {
+                if (_wait_read_result.has_value()) {
+                    bool st = _wait_read_result;
+                    if (st) {
+                        _read_promise(read_nb());
+                    } else {
+                        _read_promise();
+                    }
+                } else {
+                    _is_eof = true;
+                    _read_promise();
+                }
+            } catch (...) {
+                _read_promise.reject();
+            }
+        };
     };
 }
 
@@ -55,23 +69,6 @@ std::string_view LocalStream::read_nb() {
     return buff;
 }
 
-void LocalStream::read_completion(coro::future<bool> *f) noexcept {
-    try {
-        if (f->has_value()) {
-            bool st = *f;
-            if (st) {
-                _read_promise(read_nb());
-            } else {
-                _read_promise();
-            }
-        } else {
-            _is_eof = true;
-            _read_promise();
-        }
-    } catch (...) {
-        _read_promise.reject();
-    }
-}
 
 bool LocalStream::is_read_timeout() const {
     return !_is_eof;
@@ -92,8 +89,24 @@ void LocalStream::write_begin() {
     int r;
     do {
         if (!write_available()) {
-            _wait_write_result << [&]{return _write_fd.io_wait(AsyncOperation::write, _tms.get_write_timeout());};
-            _wait_write_result.register_target(_wait_write_target);
+            _wait_write_result << [&]{return _write_fd.output(_tms.get_write_timeout());};
+            _wait_write_result >> [&]{
+                try {
+                    if (_wait_write_result.has_value()) {
+                        bool st = _wait_write_result;
+                        if (st) {
+                            write_begin();
+                        } else {
+                            _write_promise(false);
+                        }
+                    } else {
+                        _is_closed = true;
+                        _write_promise(false);
+                    }
+                } catch (...) {
+                    _write_promise.reject();
+                }
+            };
             return;
 
         }
@@ -121,23 +134,6 @@ void LocalStream::write_begin() {
     }
 }
 
-void LocalStream::write_completion(coro::future<bool> *f) noexcept {
-    try {
-        if (f->has_value()) {
-            bool st = *f;
-            if (st) {
-                write_begin();
-            } else {
-                _write_promise(false);
-            }
-        } else {
-            _is_closed = true;
-            _write_promise(false);
-        }
-    } catch (...) {
-        _write_promise.reject();
-    }
-}
 
 coro::future<bool> LocalStream::write_eof() {
     if (_is_closed) return false;

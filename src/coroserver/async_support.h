@@ -6,35 +6,10 @@
 #include "defs.h"
 #include <coro.h>
 #include <memory>
+#include <any>
 
 
 namespace coroserver {
-
-enum class AsyncOperation {
-    ///reading from stream
-    read = 0,
-    ///writing to stream
-    write,
-    ///accept new connection
-    accept,
-    ///connect to a server
-    connect,
-    ///end of waitable operations
-    _count,
-};
-
-
-///Future contains result of wait operation
-/**
- * Future can be resolved with true, when operation is complete
- *
- * Future can be resolved with false, when operation timeouted
- *
- * Future can be resolved with no-value. when connection has been closed
- *
- * Future can be resolved with an exception in case of error
- */
-using WaitResult = coro::future<bool>;
 
 
 void close_socket(const SocketHandle &handle);
@@ -44,12 +19,46 @@ class IAsyncSupport {
 public:
 
 
+    using TimerCancel = coro::function<void *(const std::type_info &type)>;
+
     virtual ~IAsyncSupport() = default;
-    virtual WaitResult io_wait(SocketHandle handle,
-                     AsyncOperation op,
-                     std::chrono::system_clock::time_point timeout) = 0;
+    ///wait for stream input
+    /**
+     * @param handle handle of stream
+     * @param timeout timeout
+     * @retval true data arrived
+     * @retval false timeout
+     * @retval /canceled/ connection shutdown
+     */
+    virtual coro::future<bool> input(SocketHandle handle, std::chrono::system_clock::time_point timeout) = 0;
+    ///wait for stream output
+    /**
+     * @param handle handle of stream
+     * @param timeout timeout
+     * @retval true clear to send data
+     * @retval false timeout
+     * @retval /canceled/ connection shutdown
+     */
+    virtual coro::future<bool> output(SocketHandle handle, std::chrono::system_clock::time_point timeout) = 0;
+    ///Shutdown the connection
     virtual void shutdown(SocketHandle handle) = 0;
+    ///Close connection - release handle
     virtual void close(SocketHandle handle) = 0;
+    ///Create timer
+    /**
+     * @param tp time when timer is triggered
+     * @param ident optinal identification
+     * @retval true time reached
+     * @retval false timer canceled
+     * @retval /canceled/ timer canceled because context is canceled
+     */
+    virtual coro::future<bool> timer(std::chrono::system_clock::time_point tp, const void *ident) = 0;
+    ///Cancel time
+    /**
+     * @param ident identity of timer
+     * @return object, which prevents timer creation while it is held.
+     */
+    virtual TimerCancel cancel_timer(const void *ident) = 0;
 };
 
 
@@ -103,59 +112,66 @@ public:
     ///test validity
     explicit operator bool() const {return _valid;}
 
-    ///Asynchronous wait
+    ///wait for stream input
     /**
-     * @param op async operation to wait
-     * @retval true success
-     * @retval false - timeout, never happen here
-     * @retval no-value - connection shutdown
-     * @exception any error detected on socket
-     */
-    coro::future<bool> io_wait(AsyncOperation op) {
-        return io_wait(op, std::chrono::system_clock::time_point::max());
-    }
-    ///Asynchronous wait
-    /**
-     * @param op async operation to wait
-     * @param timeout absolute time point when timeout happen. If the timepoint is
-     * in past, it timeout immediatelly, however, if there is pending event it returns
-     * success.
-     * @retval true success
+     * @param handle handle of stream
+     * @param timeout timeout
+     * @retval true data arrived
      * @retval false timeout
-     * @retval no-value - connection shutdown
-     * @exception any error detected on socket
+     * @retval /canceled/ connection shutdown
      */
-    WaitResult io_wait(AsyncOperation op, std::chrono::system_clock::time_point timeout) {
-        return _async_support->io_wait(_h, op, timeout);
+    coro::future<bool> input(std::chrono::system_clock::time_point timeout) {
+        return _async_support->input(_h, timeout);
     }
-    ///Asynchronous wait
+    template<typename A, typename B>
+    coro::future<bool> input(std::chrono::duration<A,B> timeout) {
+        return input(std::chrono::system_clock::now()+timeout);
+    }
+    ///wait for stream output
     /**
-     * @param op async operation to wait
-     * @param dur timeout duration
-     * @retval true success
+     * @param handle handle of stream
+     * @param timeout timeout
+     * @retval true clear to send data
      * @retval false timeout
-     * @retval no-value - connection shutdown
-     * @exception any error detected on socket
+     * @retval /canceled/ connection shutdown
      */
-    template<typename Rep, typename Period>
-    WaitResult io_wait(AsyncOperation op, std::chrono::duration<Rep, Period> dur) {
-        return io_wait(op, std::chrono::system_clock::now()+dur);
-    }
-    ///Shutdown connection
-    /**
-     * This cancels any async waiting, including any future requests for async waiting.
-     * However, the socket is still valid, and can be used for communition, so
-     * any unread data can be still read.
-     *
-     * @note cancel event is distributed in current thread, so any awaiting coroutine
-     * is waken up now. The function returns after cancel is processed by all
-     * awaiting coroutines
-     */
-    void shutdown() {
-        _async_support->shutdown(_h);
+    coro::future<bool> output(std::chrono::system_clock::time_point timeout) {
+        return _async_support->output(_h, timeout);
     }
 
-    AsyncSocket set_socket_handle(SocketHandle h) {
+    template<typename A, typename B>
+    coro::future<bool> output(std::chrono::duration<A,B> timeout) {
+        return output(std::chrono::system_clock::now()+timeout);
+    }
+    ///Shutdown the connection
+    void shutdown() {
+        return _async_support->shutdown(_h);
+    }
+    ///Close connection - release handle
+    void close() {
+        return _async_support->close(_h);
+    }
+    ///Create timer
+    /**
+     * @param tp time when timer is triggered
+     * @param ident optinal identification
+     * @retval true time reached
+     * @retval false timer canceled
+     * @retval /canceled/ timer canceled because context is canceled
+     */
+    coro::future<bool> timer(std::chrono::system_clock::time_point tp, const void *ident) {
+        return _async_support->timer(tp, ident);
+    }
+    ///Cancel time
+    /**
+     * @param ident identity of timer
+     * @return object, which prevents timer creation while it is held.
+     */
+    auto cancel_timer(const void *ident) {
+        return _async_support->cancel_timer(ident);
+    }
+
+    AsyncSocket set_handle(SocketHandle h) {
         return AsyncSocket(h, _async_support);
     }
 

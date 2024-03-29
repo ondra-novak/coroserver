@@ -46,8 +46,6 @@ protected:
 
     coro::future<bool> _wait_read_result;
     coro::future<bool> _wait_write_result;
-    coro::future<bool>::target_type _wait_read_target;
-    coro::future<bool>::target_type _wait_write_target;
     coro::promise<std::string_view> _read_promise;
     coro::promise<bool> _write_promise;
 
@@ -62,8 +60,6 @@ protected:
 
     void write_begin();
     bool read_begin(std::string_view &buff);
-    void read_completion(coro::future<bool> *f) noexcept;
-    void write_completion(coro::future<bool> *f) noexcept;
 
     bool read_available() const;
     bool write_available() const;

@@ -10,8 +10,15 @@ public:
 
     FileDescriptor(int fd):_fd(fd) {}
     FileDescriptor(FileDescriptor &&other);
+    FileDescriptor &operator=(FileDescriptor &&other);
     ~FileDescriptor();
     operator int () const {return _fd;}
+    bool operator!() const {return _fd < 0;}
+    int release(){
+        int r = _fd;
+        _fd = -1;
+        return r;
+    }
 
 protected:
     int _fd =-1;

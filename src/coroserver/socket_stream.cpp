@@ -1,4 +1,3 @@
-#include "context.h"
 
 #include "socket_stream.h"
 #include <sys/socket.h>
@@ -12,8 +11,6 @@ SocketStream::SocketStream(AsyncSocket socket, PeerName peer, TimeoutSettings tm
 :AbstractStreamWithMetadata(std::move(tms))
 ,_socket(std::move(socket))
 ,_peer(std::move(peer)) {
-    coro::target_member_fn_activation<&SocketStream::read_completion>(_wait_read_target, this);
-    coro::target_member_fn_activation<&SocketStream::write_completion>(_wait_write_target, this);
 }
 
 bool SocketStream::read_begin(std::string_view &buff) {
@@ -62,8 +59,24 @@ coro::future<std::string_view> SocketStream::read() {
     return [&](auto p) {
         disable_nagle();
         _read_promise = std::move(p);
-        _wait_read_result << [&]{return _socket.io_wait(AsyncOperation::read,_tms.get_read_timeout());};
-        _wait_read_result.register_target(_wait_read_target);
+        _wait_read_result << [&]{return _socket.input(_tms.get_read_timeout());};
+        _wait_read_result >> [&]{
+            try {
+                if (_wait_read_result.has_value()) {
+                    bool st = _wait_read_result;
+                    if (st) {
+                        _read_promise(read_nb());
+                    } else {
+                        _read_promise();
+                    }
+                } else {
+                    _is_eof = true;
+                    _read_promise();
+                }
+            } catch (...) {
+                _read_promise.reject();
+            }
+        };
     };
 }
 
@@ -73,23 +86,6 @@ std::string_view SocketStream::read_nb() {
     return buff;
 }
 
-void SocketStream::read_completion(coro::future<bool> *f) noexcept {
-    try {
-        if (f->has_value()) {
-            bool st = *f;
-            if (st) {
-                _read_promise(read_nb());
-            } else {
-                _read_promise();
-            }
-        } else {
-            _is_eof = true;
-            _read_promise();
-        }
-    } catch (...) {
-        _read_promise.reject();
-    }
-}
 
 bool SocketStream::is_read_timeout() const {
     return !_is_eof;
@@ -124,8 +120,24 @@ void SocketStream::write_begin() {
     if (r < 0) {
         int e = errno;
         if (e == EWOULDBLOCK|| e == EAGAIN) {
-            _wait_write_result << [&]{return _socket.io_wait(AsyncOperation::write,_tms.get_write_timeout());};
-            _wait_write_result.register_target(_wait_write_target);
+            _wait_write_result << [&]{return _socket.output(_tms.get_write_timeout());};
+            _wait_write_result >> [&]{
+                try {
+                    if (_wait_write_result.has_value()) {
+                        bool st = _wait_write_result;
+                        if (st) {
+                            write_begin();
+                        } else {
+                            _write_promise(false);
+                        }
+                    } else {
+                        _is_closed = true;
+                        _write_promise(false);
+                    }
+                } catch (...) {
+                    _write_promise.reject();
+                }
+            };
         } else if (e == EPIPE) {
             _is_closed = true;
             _write_promise(false);
@@ -134,24 +146,6 @@ void SocketStream::write_begin() {
         }
     } else {
         throw std::system_error(EPIPE, std::system_category(), "send returned 0");
-    }
-}
-
-void SocketStream::write_completion(coro::future<bool> *f) noexcept {
-    try {
-        if (f->has_value()) {
-            bool st = *f;
-            if (st) {
-                write_begin();
-            } else {
-                _write_promise(false);
-            }
-        } else {
-            _is_closed = true;
-            _write_promise(false);
-        }
-    } catch (...) {
-        _write_promise.reject();
     }
 }
 
@@ -217,7 +211,7 @@ static coro::async<void> shutdown_slow(AsyncSocket sock) {
     //if there still some data
     while (get_siocoutq(sock) > 0 && max_wait > std::chrono::system_clock::now()) {
         //wait for
-        auto p = sock.io_wait(AsyncOperation::read, std::chrono::milliseconds(500));
+        auto p = sock.input(std::chrono::milliseconds(500));
         //co_await and check status - no value mean, we can no longer wait
         if (co_await !p)
             break;
