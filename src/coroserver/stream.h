@@ -331,6 +331,57 @@ public:
         return {_stream, srch, limit, buffer};
     }
 
+
+    class BlockRead {
+    public:
+
+        BlockRead( std::shared_ptr<IStream> &s, std::size_t limit, BinBuffer &buffer)
+            :_stream(s),_limit(limit),_buffer(buffer) {}
+
+        coro::future<std::string_view> initiate() {
+            return [&](auto promise) {
+                _buffer.clear();
+                _prom = std::move(promise);
+                _rdr << [this]{return _stream->read();};
+                _rdr >> [this]{process();};
+            };
+        }
+
+    protected:
+        std::shared_ptr<IStream> &_stream;
+        std::size_t _limit;
+        BinBuffer &_buffer;
+
+        coro::future<std::string_view> _rdr;
+        coro::promise<std::string_view> _prom;
+
+        coro::promise<std::string_view>::notify process() {
+            try {
+                std::string_view data = _rdr;
+                if (data.empty()) {
+                    return _prom(_buffer.data(), _buffer.size());
+                }
+                auto remain = _limit - _buffer.size();
+                if (remain <= data.size()) {
+                    _stream->put_back(data.substr(remain));
+                    data = data.substr(0,remain);
+                    _buffer.insert(_buffer.end(), data.begin(), data.end());
+                    return _prom(_buffer.data(), _buffer.size());
+                }
+                _buffer.insert(_buffer.end(), data.begin(), data.end());
+                _rdr << [this]{return _stream->read();};
+                _rdr >> [this]{process();};
+                return {};
+            } catch (...) {
+                return _prom.reject();
+            }
+        }
+    };
+
+    awaitable<std::string_view, BlockRead> block_read(BinBuffer &buffer, std::size_t limit) {
+        return {_stream, limit, buffer};
+    }
+
 protected:
     std::shared_ptr<IStream> _stream;
 };

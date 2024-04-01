@@ -44,9 +44,8 @@ protected:
     std::size_t _limit_read;
     std::size_t _limit_write;
 
-    void join_read(coro::future<std::string_view> *fut) noexcept;
+    void join_read() noexcept;
     coro::future<std::string_view> _read_fut;
-    coro::future<std::string_view>::target_type _read_fut_target;
     coro::promise<std::string_view> _read_result;
 };
 

@@ -16,7 +16,6 @@ coroserver::LimitedStream::LimitedStream(std::shared_ptr<IStream> proxied,
 ,_limit_read(limit_read)
 ,_limit_write(limit_write)
 {
-    coro::target_member_fn_activation<&LimitedStream::join_read>(_read_fut_target, this);
 
 }
 
@@ -26,7 +25,7 @@ coro::future<std::string_view> LimitedStream::read() {
     return [&](auto promise) {
         _read_result = std::move(promise);
         _read_fut << [&]{return _proxied->read();}; //continue by join
-        _read_fut.register_target(_read_fut_target);
+        _read_fut >> [&]{join_read();};
     };
 }
 
@@ -47,9 +46,9 @@ LimitedStream::~LimitedStream() {
     if (_limit_read || _limit_write) _proxied->shutdown();
 }
 
-void LimitedStream::join_read(coro::future<std::string_view> *fut) noexcept {
+void LimitedStream::join_read() noexcept {
     try {
-        std::string_view data = *fut;
+        std::string_view data = _read_fut;
         auto ret = data.substr(0, _limit_read);
         _proxied->put_back(data.substr(ret.size()));
         _limit_read -= ret.size();
@@ -70,17 +69,17 @@ coro::future<bool> LimitedStream::write(std::string_view buffer) {
 
 coro::future<bool> LimitedStream::write_eof() {
     if (_limit_write) {
-        return ([&]()->coro::async<bool> {
-            CharacterWriter<Stream> wr(_proxied);
+        return ([](LimitedStream *self)->coro::async<bool> {
+            CharacterWriter<Stream> wr(self->_proxied);
             bool ret;
-            while (_limit_write) {
+            while (self->_limit_write) {
                 ret = co_await wr(0);
                 if (!ret) co_return ret;
-                --_limit_write;
+                --self->_limit_write;
             }
             ret = co_await wr.flush();
             co_return ret;
-        })();
+        })(this);
     } else {
         return true;
     }

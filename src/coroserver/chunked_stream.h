@@ -42,7 +42,7 @@ public:
 
 protected:
 //write part
-    void join_write(coro::future<bool> *f) noexcept;
+    void join_write() noexcept;
     coro::future<bool> _write_fut;
     std::string_view _data_to_write;
     std::string _new_chunk_write;
@@ -51,21 +51,13 @@ protected:
 
 //read part
     enum class ReadState {r1,n1,number,r2,n2,check_empty,data,r3,n3,eof};
-    void join_read(coro::future<std::string_view> *f) noexcept;
+    void join_read() noexcept;
     coro::future<std::string_view> _read_fut;
     coro::promise<std::string_view> _read_result;
     ReadState _rd_state = ReadState::number;
     std::size_t _chunk_size = 0;
 
 
-
-
-//    coro::generator<std::string_view> _reader;
-
-
-//    coro::generator<std::string_view> start_reader();
-
-//    bool _eof_reached = false;
 };
 
 }

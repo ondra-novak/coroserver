@@ -12,8 +12,8 @@ add_library(coroserver
     ssl_stream.cpp
 #	poller_epoll.cpp
 #   memstream.cpp
-#   chunked_stream.cpp
-#   limited_stream.cpp
+    chunked_stream.cpp
+    limited_stream.cpp
 #   json/json.cpp
 #    http_common.cpp
 #   http_server_request.cpp

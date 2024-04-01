@@ -10,9 +10,6 @@ ChunkedStream::ChunkedStream(std::shared_ptr<IStream> proxied, bool allow_read, 
 , _eof_written (!allow_write)
 ,_rd_state (allow_read?ReadState::number:ReadState::eof)
 {
-    coro::target_member_fn_activation<&ChunkedStream::join_read>(_read_fut_target, this);
-    coro::target_member_fn_activation<&ChunkedStream::join_write>(_write_fut_target, this);
-
 }
 
 coro::future<std::string_view> ChunkedStream::read() {
@@ -21,12 +18,12 @@ coro::future<std::string_view> ChunkedStream::read() {
     return [&](coro::promise<std::string_view> p) {
         _read_result = std::move(p);
         _read_fut << [&]{return _proxied->read();};
-        _read_fut.register_target(_read_fut_target);
+        _read_fut >> [&]{join_read();};
     };
 
 }
 
-void ChunkedStream::join_read(coro::future<std::string_view> *f) noexcept {
+void ChunkedStream::join_read() noexcept {
 
     auto error = []{
             throw std::runtime_error("Invalid chunk format");
@@ -37,7 +34,7 @@ void ChunkedStream::join_read(coro::future<std::string_view> *f) noexcept {
     };
 
     try {
-        std::string_view buff = *f;
+        std::string_view buff = _read_fut;
         if (buff.empty()) {
             _rd_state = ReadState::eof;
             _read_result(buff);
@@ -129,7 +126,7 @@ void ChunkedStream::join_read(coro::future<std::string_view> *f) noexcept {
         }
 
         _read_fut << [&]{return _proxied->read();};
-        _read_fut.register_target(_read_fut_target);
+        _read_fut >> [&]{return join_read();};
 
     } catch (...) {
         _read_result.reject();
@@ -155,20 +152,20 @@ coro::future<bool> ChunkedStream::write(std::string_view buffer) {
     return [&](coro::promise<bool> p) {
         _write_result = std::move(p);
         _write_fut << [&]{return _proxied->write(_new_chunk_write);};
-        _write_fut.register_target(_write_fut_target);
+        _write_fut >> [&]{join_write();};
     };
 }
 
-void ChunkedStream::join_write(coro::future<bool> *f) noexcept {
+void ChunkedStream::join_write() noexcept {
     try {
-        bool res = *f;
+        bool res = _write_fut;
         if (res && !_data_to_write.empty()) {
             _new_chunk_write.clear();
             _new_chunk_write.append("\r\n");
             auto d = _data_to_write;
             _data_to_write = {};
             _write_fut << [&]{return _proxied->write(d);};
-            _write_fut.register_target(_write_fut_target);
+            _write_fut >> [&]{join_write();};
         } else {
             _write_result(res);
         }
@@ -183,7 +180,7 @@ coro::future<bool> ChunkedStream::write_eof() {
     return [&](coro::promise<bool> p) {
         _write_result = std::move(p);
         _write_fut << [&]{return _proxied->write(_new_chunk_write);};
-        _write_fut.register_target(_write_fut_target);
+        _write_fut >> [&]{join_write();};
     };
 }
 

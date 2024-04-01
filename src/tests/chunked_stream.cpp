@@ -34,15 +34,13 @@ void test2() {
         std::string_view buff = chs.read();
         while (!buff.empty()) {
             result.append(buff);
-            buff = chs.read();
+            buff = chs.read().get();
         }
     }
     CHECK_EQUAL(result, expected);
     std::string_view extra = s.read();
     CHECK_EQUAL(extra, "ExtraData");
 
-    auto f = chs.read();
-    std::string_view &ref = f;
 }
 
 int main() {

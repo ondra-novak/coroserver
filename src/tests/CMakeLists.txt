@@ -10,9 +10,9 @@ set(testFiles
     read_until.cpp
     chartest.cpp
 #    json.cpp
-    tcp_test.cpp
-    chunked_stream.cpp
-#    limited_stream.cpp
+     tcp_test.cpp
+     chunked_stream.cpp
+     limited_stream.cpp
 #    http_server.cpp
 #    prefixmap.cpp
 #    named_enum.cpp

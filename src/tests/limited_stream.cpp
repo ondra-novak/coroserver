@@ -1,7 +1,6 @@
 #include "check.h"
 #include "test_stream.h"
 #include <coroserver/limited_stream.h>
-#include <coroserver/stream_utils.h>
 
 
 void test1() {
@@ -38,12 +37,12 @@ void test3() {
     auto s = TestStream<100>::create({"Hello", " World", " Extra data"});
     auto ls = coroserver::LimitedStream::read(s, 11);
 
+    coroserver::BinBuffer xbuff;
+    std::string_view buff = ls.block_read(xbuff, 15).get();
 
-    coroserver::BlockReader blk(ls);
-    coroserver::BlockReader org_blk(s);
-    std::string_view buff = blk.read(15).get();
+
     CHECK_EQUAL(buff,"Hello World");
-    buff = org_blk.read(100).get();
+    buff = s.block_read(xbuff, 100).get();
     CHECK_EQUAL(buff," Extra data");
 }
 
@@ -51,14 +50,14 @@ void test4() {
     auto s = TestStream<100>::create({"Hello World Extra data"});
     auto ls = coroserver::LimitedStream::read(s, 11);
 
+    coroserver::BinBuffer xbuff;
+
     std::string_view buff;
-    coroserver::BlockReader blk(ls);
-    coroserver::BlockReader org_blk(s);
-    buff =  blk.read(5).get();
+    buff =  ls.block_read(xbuff, 5).get();
     CHECK_EQUAL(buff,"Hello");
-    buff = blk.read(15).get();
+    buff =  ls.block_read(xbuff, 15).get();
     CHECK_EQUAL(buff," World");
-    buff = org_blk.read(100).get();
+    buff =  s.block_read(xbuff, 100).get();
     CHECK_EQUAL(buff," Extra data");
 }
 
