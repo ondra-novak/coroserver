@@ -19,7 +19,7 @@ class IAsyncSupport {
 public:
 
 
-    using TimerCancel = coro::function<void *(const std::type_info &type)>;
+    using TimerCancel = coro::any<>;
 
     virtual ~IAsyncSupport() = default;
     ///wait for stream input

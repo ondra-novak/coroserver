@@ -73,21 +73,40 @@ protected:
     std::mutex _mx;
 
 
-    enum State {
+    enum class State {
         not_established,
         established,
         closing,
         closed
     };
 
+    enum class Action {
+        no_action,
+        eof,
+        read,
+        write,
+    };
+
     SSLObject _ssl;
     BIO *_read_data;
     BIO *_write_data;
-    State _state = not_established;
+    State _state = State::not_established;
 
-    std::array<char, 16384> _rdbuff;
+    std::vector<char> _read_buffer;
+    std::size_t _read_buffer_size = 1024;
+
     std::string_view _wrbuff;
     std::vector<char> _encrypted_write_buffer;
+
+
+    template<typename RetVal>
+    coro::async<RetVal, coro::reusable_allocator> io_coroutine(coro::reusable_allocator &);
+    Action determine_ssl_state(int r);
+    void post_ssl_read(std::string_view buffer);
+    bool post_ssl_write(bool st);
+    coro::async<bool, coro::reusable_allocator> write_eof_coro(coro::reusable_allocator &);
+    coro::future<bool> send_encrypted();
+    coro::future<std::string_view> read_encrypted();
 
 
     coro::promise<std::string_view> _read_result;
@@ -99,8 +118,8 @@ protected:
 
 
 
-//    coro::reusable_storage _rdstor;
-//    coro::reusable_storage _wrstor;
+    coro::reusable_allocator _rdstor;
+    coro::reusable_allocator _wrstor;
 
 
     ///special result from run_ssl_io - operation complete, return retval
@@ -116,51 +135,7 @@ protected:
     };
 
 
-  //  template<typename Ret, typename Fn>
-  //  coro::with_allocator<coro::reusable_storage, coro::async<Ret> > run_ssl_io(coro::reusable_storage &, Fn fn, Ret failRet);
 
-    bool read_begin();
-    bool write_begin();
-    void write_eof_begin();
-    void begin_ssl();
-    void establish_begin();
-    bool flush_output(std::unique_lock<std::mutex> &lk, coro::mutex::target_type &target);
-    void complete_write();
-    void complete_read();
-
-    template<std::invocable<> Fn>
-    bool handle_ssl_error(std::unique_lock<std::mutex> &lk, int r, coro::mutex::target_type &target, Fn &&zero_fn);
-
-    // contains target activated ater unlock of IO operation during reading
-    coro::mutex::target_type _reader_unlock_target;
-    // contains target activated ater unlock of IO operation during writing
-    coro::mutex::target_type _writer_unlock_target;
-    // contains target activated ater unlock of IO operation during handshake
-    coro::mutex::target_type _handshake_unlock_target;
-    // contains target activated ater unlock of IO operation during handshake
-    coro::mutex::target_type _shutdown_unlock_target;
-
-    // if async IO ends with exception, it is stored there
-    std::exception_ptr _error_state;
-    // if async IO ends with timeout, this flag is true
-    bool _read_timeout = false;
-
-    // stores ownership of a lock for reading IO
-    coro::mutex::ownership _read_ownership;
-    // stores target for reading IO
-    coro::future<std::string_view>::target_type _read_fut_target;
-    // stores future for reading IO
-    coro::future<std::string_view> _read_fut;
-
-    // stores ownership of a lock for writing IO
-    coro::mutex::ownership _write_ownership;
-    // stores target for writing IO
-    coro::future<bool>::target_type _write_fut_target;
-    // stores future for writing IO
-    coro::future<bool> _write_fut;
-
-    // stores ownership of a lock, while handshake is performed
-    coro::mutex::ownership _handshake_ownership;
 
 
 

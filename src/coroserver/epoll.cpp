@@ -95,11 +95,11 @@ void AsyncEPoll::do_serve(ICb &&scheduler, std::stop_token stoken) {
                         if (iter != _regs.end()) {
                             if (ev.events & (EPOLLIN|EPOLLERR)) {
                                 output.push_back(iter->second._items[0]._prom(true));
-                                iter->second._items[1]._timeout = max_timeout;
+                                iter->second._items[0]._timeout = max_timeout;
                             }
                             if (ev.events & (EPOLLOUT|EPOLLERR)) {
                                 output.push_back(iter->second._items[1]._prom(true));
-                                iter->second._items[2]._timeout = max_timeout;
+                                iter->second._items[1]._timeout = max_timeout;
                             }
                         }
                     }

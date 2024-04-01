@@ -16,7 +16,7 @@
 namespace coroserver {
 
 enum class Operation {
-    input,
+    input = 0,
     output,
 };
 
@@ -72,7 +72,7 @@ protected:
         }
     };
 
-    using SocketMap = std::unordered_map<int, WaitReg,std::hash<int>, std::equal_to<int>, CacheFriendlyAllocator<std::pair<const int, WaitReg> > >;
+    using SocketMap = std::unordered_map<int, WaitReg,std::hash<int>, std::equal_to<int>/*,CacheFriendlyAllocator<std::pair<const int, WaitReg> > */>;
     SocketMap _regs = {};
     std::vector<ScheduledItem> _scheduled;
     std::vector<const void *> _blocked;

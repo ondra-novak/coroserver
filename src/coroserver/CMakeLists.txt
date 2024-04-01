@@ -8,6 +8,8 @@ add_library(coroserver
 	socket_stream.cpp
 	context.cpp
     event_fd.cpp
+    ssl_common.cpp
+    ssl_stream.cpp
 #	poller_epoll.cpp
 #   memstream.cpp
 #   chunked_stream.cpp
@@ -21,8 +23,6 @@ add_library(coroserver
 #   websocket_stream.cpp
 #   http_ws_server.cpp
 #   http_ws_client.cpp
-#   ssl_common.cpp
-#   ssl_stream.cpp
 #   ssl_http_support.cpp
 #   http_client_request.cpp
 #   http_client.cpp

@@ -19,313 +19,222 @@ Stream::Stream(_Stream target, Context ctx):AbstractProxyStream(target.getStream
     BIO_set_mem_eof_return(_write_data, -1);
     SSL_set_bio(_ssl, _read_data, _write_data);
 
-    coro::target_simple_activation(_reader_unlock_target, [&](coro::mutex::ownership own){
-        own.reset();
-        read_begin();
-    });
-    coro::target_simple_activation(_writer_unlock_target, [&](coro::mutex::ownership own){
-        own.reset();
-        write_begin();
-    });
-    coro::target_simple_activation(_handshake_unlock_target, [&](coro::mutex::ownership own){
-        own.reset();
-        establish_begin();
-    });
-    coro::target_simple_activation(_read_fut_target, [&](coro::future<std::string_view> *){
-        {
-            std::lock_guard lk(_mx);
-            complete_read();
-        }
-        _read_ownership.reset();
-    });
-    coro::target_simple_activation(_write_fut_target, [&](coro::future<bool> *){
-        {
-            std::lock_guard lk(_mx);
-            complete_write();
-        }
-        _write_ownership.reset();
-    });
+}
 
+template<typename RetVal>
+coro::async<RetVal, coro::reusable_allocator> Stream::io_coroutine(coro::reusable_allocator &) {
+    static constexpr bool reading = std::is_same_v<RetVal, std::string_view>;
+    static constexpr bool writing = std::is_same_v<RetVal, bool>;
+    static_assert(reading || writing, "Invalid usage");
 
+    //this coroutine is called for reading or writing
+
+    int r;
+
+    //not established yet?
+    if (_state == State::not_established) {
+        //lock handshake - in case when read and write are running in parallel
+        auto own = co_await _handshake;
+        //repeat while not established
+        while (_state == State::not_established) {
+            //perform hanshake (no lock need there)
+            r = SSL_do_handshake(_ssl);
+            //check status, only 1 is established
+            if (r > 0) {
+                _state = State::established;
+            } else {
+                //by return value determine state
+                Action action = determine_ssl_state(r);
+                switch (action) {
+                    case Action::write:
+                        post_ssl_write(co_await send_encrypted());
+                        break;
+
+                    case Action::read:
+                        post_ssl_read(co_await read_encrypted());
+                        break;
+                    default:
+                        //invalid state - close connection
+                        _state = State::closed;
+                        break;
+                }
+            }
+        }
+    }
+
+    do {
+        if constexpr(reading) {
+            {//SSL under lock
+                std::lock_guard _(_mx);
+                //return eof, if closed
+                if (_state == State::closed) co_return std::string_view();
+                //prepare buffer
+                _read_buffer.resize(_read_buffer_size);
+                //read from ssl
+                r = SSL_read(_ssl,_read_buffer.data(), _read_buffer.size());
+            }
+            //success read?
+            if (r > 0) {
+                //return read data
+                auto sz = static_cast<std::size_t>(r);
+                if (sz == _read_buffer_size) {
+                    _read_buffer_size = _read_buffer_size *3 /2;
+                }
+                co_return std::string_view(_read_buffer.data(), sz);
+            }
+        } else if constexpr(writing) {
+            {//SSL under lock
+                std::lock_guard _(_mx);
+                //fail write is closing
+                if (_state == State::closing || _state == State::closed) co_return false;
+                //success write if emptyy
+                if (_wrbuff.empty()) co_return true;
+                //write buffer
+                r = SSL_write(_ssl, _wrbuff.data(), _wrbuff.size());
+            }
+            //update _wrbuff depend on state
+            if (r > 0) _wrbuff = _wrbuff.substr(r);
+        }
+        //determine ssl state now
+        Action action = determine_ssl_state(r);
+        switch (action) {
+            case Action::write: {
+                auto own = co_await _wrmx;
+                post_ssl_write(co_await send_encrypted());
+            } break;
+            case Action::read: {
+                auto own = co_await _rdmx;
+                auto s = co_await read_encrypted();
+                if (s.empty()) {
+                    if constexpr (reading) {
+                        //is empty returned, return also empty
+                        //this might be timeout
+                        co_return std::string_view();
+                    } else {
+                        //timeout when write requested is failure
+                        co_return false;
+                    }
+                }
+                //process data
+                post_ssl_read(s);
+                break;
+            }
+            default:
+                //ignore any other state
+                break;
+
+        }
+    }
+     while (true);
 
 }
+//determine state
+Stream::Action Stream::determine_ssl_state(int r) {
+    //ownership - will be released outside lock
+    coro::mutex::ownership own;
+    std::lock_guard _(_mx);
+    char *buff;
+    long sz = BIO_get_mem_data(_write_data,&buff); // @suppress("C-Style cast instead of C++ cast")
+    //any encrypted data to send?
+    if (sz) {
+        //try to lock write
+        own = _wrmx.try_lock();
+        //if failed, buffer is currently used, can't flush
+        if (own) {
+            //we acquired lock, resize buffer
+            _encrypted_write_buffer.resize(sz);
+            //copy content
+            std::copy(buff, buff+sz, _encrypted_write_buffer.begin());
+            //reset bio
+            BIO_reset(_write_data);
+            //request write
+            return Action::write;
+        }
+    }
+    // no action for this status
+    if (r > 0) return Action::no_action;
+
+    //determine error
+    int ssl_state = SSL_get_error(_ssl, r);
+    switch (ssl_state) {
+        case SSL_ERROR_ZERO_RETURN: {
+            _state = State::closed; //stream is closed
+            return Action::eof;
+        }
+        case SSL_ERROR_WANT_READ: {
+            return Action::read;    //we need read
+        }
+        case SSL_ERROR_SYSCALL:
+            throw std::system_error(errno, std::system_category()); //system error
+        default:
+            throw SSLError();   //ssl error
+    }
+}
+
+void Stream::post_ssl_read(std::string_view data) {
+    std::lock_guard _(_mx);
+    //read empty?
+    if (data.empty()) {
+        //steam is closed
+        BIO_set_mem_eof_return(_read_data,0);
+    } else {
+        //otherwise set data
+        BIO_write(_read_data, data.data(), data.length());
+    }
+}
+
+coro::future<bool> Stream::send_encrypted() {
+    return _proxied->write(std::string_view(_encrypted_write_buffer.data(), _encrypted_write_buffer.size()));
+}
+coro::future<std::string_view> Stream::read_encrypted() {
+    return _proxied->read();
+}
+
+
+coro::async<bool, coro::reusable_allocator> Stream::write_eof_coro(coro::reusable_allocator &) {
+    int r;
+    {
+        std::lock_guard _(_mx);
+        //we need established state
+        if (_state != State::established) co_return true;
+        //shutdown SSL stream
+        r = SSL_shutdown(_ssl);
+        //state is closing
+        _state = State::closing;
+    }
+    //we need flush buffer
+    Action a = determine_ssl_state(r);
+    //and if something need to be written, write it now
+    if (a == Action::write) {
+        auto own = co_await _wrmx;
+        co_return post_ssl_write(co_await send_encrypted());
+    }
+    co_return true;
+}
+
+coro::future<bool> Stream::write_eof() {
+    return write_eof_coro(_wrstor);
+}
+
+bool Stream::post_ssl_write(bool st) {
+    std::lock_guard _(_mx);
+    _encrypted_write_buffer.clear();
+    if (st == false && _state != State::closed) {
+        _state = State::closing;
+    }
+    return st;
+}
+
 
 coro::future<std::string_view> Stream::read() {
     std::string_view tmp = AbstractStream::read_putback_buffer();
-    if (!tmp.empty() || _state == closed) return tmp;
-    return [&](auto promise) {
-        _read_result = std::move(promise);
-        if (!read_begin()) {
-            begin_ssl();
-            if (_handshake.register_target_async(_reader_unlock_target) == nullptr) return;
-        }
-    };
-}
-
-bool Stream::flush_output(std::unique_lock<std::mutex> &lk, coro::mutex::target_type &target) {
-    char *buff;
-    long sz = BIO_get_mem_data(_write_data,&buff); // @suppress("C-Style cast instead of C++ cast")
-
-    if (sz) {
-
-        auto own = _wrmx.try_lock();
-        if (own) {
-            _write_ownership = std::move(own);
-            _encrypted_write_buffer.resize(sz);
-            std::copy(buff, buff+sz, _encrypted_write_buffer.begin());
-            BIO_reset(_write_data);
-            std::string_view bw(_encrypted_write_buffer.data(), _encrypted_write_buffer.size());
-            _write_fut << [&]{return _proxied->write(bw);};
-            if (!_write_fut.register_target_async(_write_fut_target)) {
-                complete_write();
-                lk.unlock();
-                _write_ownership.reset();
-                lk.lock();
-
-            }
-        } else if (_wrmx.register_target_async(target) == nullptr) {
-            return true;
-        }
-    }
-    return false;
-
-}
-
-template<std::invocable<> Fn>
-bool Stream::handle_ssl_error(std::unique_lock<std::mutex> &lk, int r, coro::mutex::target_type &target, Fn &&zero_fn) {
-
-
-    if (flush_output(lk, target)) return true;
-
-    int ssl_state = SSL_get_error(_ssl, r);
-    switch (ssl_state) {
-
-        case SSL_ERROR_ZERO_RETURN: {
-            zero_fn();
-            return true;
-        }
-        case SSL_ERROR_WANT_READ: {
-            auto own = _rdmx.try_lock();
-            if (own) {
-                _read_ownership = std::move(own);
-                _read_timeout = false;
-                _read_fut << [&]{return _proxied->read();};
-                if (!_read_fut.register_target_async(_read_fut_target)) {
-                    complete_read();
-                    lk.unlock();
-                    _read_ownership.reset();
-                    lk.lock();
-                }
-            }
-            if (_rdmx.register_target_async(target) == nullptr) {
-                return true;
-            }
-            break;
-        }
-        case SSL_ERROR_SYSCALL:
-            throw std::system_error(errno, std::system_category());
-        default:
-            throw SSLError();
-    }
-    return false;
-
-}
-
-
-bool Stream::read_begin() {
-    coro::promise<std::string_view>::pending_notify ntf;
-    std::unique_lock lk(_mx);
-    try {
-        if (_error_state) std::rethrow_exception(_error_state);
-        if (_state == not_established) return false;
-        while (true) {
-            if (_state == closed || _read_timeout) {
-                if (_error_state) std::rethrow_exception(_error_state);
-                ntf = _read_result();
-                break;
-            }
-            int r = SSL_read(_ssl, _rdbuff.data(), _rdbuff.size());
-            if (r > 0) {
-                ntf = _read_result(_rdbuff.data(), r);
-                break;
-            } else if (r == 0 && eof_without_shudown_is_error == false) {
-                _state = closed;
-                ntf = _read_result();
-            } else {
-                if (handle_ssl_error(lk, r, _reader_unlock_target, [&]{
-                        _state = closed;
-                        ntf = _read_result();
-                })) break;
-            }
-        }
-    } catch (...) {
-        _state = closed;
-        ntf = _read_result.reject();
-    }
-    return true;
+    if (!tmp.empty() || _state == State::closed) return tmp;
+    return io_coroutine<std::string_view>(_rdstor);
 }
 
 coro::future<bool> Stream::write(std::string_view data) {
-    return [&](auto promise) {
-        _wrbuff = data;
-        _write_result = std::move(promise);
-        if (!write_begin()) {
-            begin_ssl();
-            if (_handshake.register_target_async(_writer_unlock_target) == nullptr) return;
-        }
-    };
-
-}
-
-bool Stream::write_begin() {
-    coro::promise<bool>::pending_notify ntf;
-    std::unique_lock lk(_mx);
-    try {
-        if (_error_state) std::rethrow_exception(_error_state);
-        if (_state == not_established) return false;
-        while (true) {
-            if (_state == closing || _state == closed) {
-                if (_error_state) std::rethrow_exception(_error_state);
-                ntf = _write_result(false);
-                break;
-            }
-            auto wrsz = _wrbuff.size();
-            if (wrsz == 0) {
-                ntf = _write_result(true);
-                break;
-            }
-            int r = SSL_write(_ssl, _wrbuff.data(), wrsz);
-            if (r > 0) {
-                _wrbuff = _wrbuff.substr(r);
-                if (flush_output(lk,_writer_unlock_target)) break;
-            } else {
-                if (handle_ssl_error(lk,r, _writer_unlock_target, [&]{
-                    _state = closed;
-                    ntf = _write_result(false);
-                })) break;
-            }
-        }
-    } catch (...) {
-        _state = closed;
-        ntf = _write_result.reject();
-    }
-    return true;
-}
-
-void Stream::complete_read() {
-    try {
-        std::string_view data = _read_fut;
-        if (data.empty()) {
-            if (_proxied->is_read_timeout()) _read_timeout = true;
-            else BIO_set_mem_eof_return(_read_data,0);
-        } else {
-            BIO_write(_read_data, data.data(), data.length());
-        }
-
-    } catch (...) {
-        _state = closed;
-        _error_state = std::current_exception();
-    }
-
-}
-void Stream::complete_write() {
-    try {
-        bool b = _write_fut;
-        if (!b) {
-            _state = closed;
-        }
-    } catch (...) {
-        _state = closed;
-        _error_state = std::current_exception();
-    }
-
-}
-
-
-void Stream::begin_ssl() {
-    auto own = _handshake.try_lock();
-    if (!own) return;
-    _handshake_ownership = std::move(own);
-    establish_begin();
-}
-
-void Stream::establish_begin() {
-    std::unique_lock lk(_mx);
-    try {
-        while (true) {
-            if (_state != not_established) {
-                lk.unlock();
-                _handshake_ownership.reset();
-                break;
-            }
-            auto r = SSL_do_handshake(_ssl);
-            if (r > 0) {
-                _state = established;
-                lk.unlock();
-                _handshake_ownership.reset();
-                break;
-            } else {
-                if (handle_ssl_error(lk, r, _handshake_unlock_target, [&]{
-                    _state = closed;
-                    lk.unlock();
-                    _handshake_ownership.reset();
-                })) return;
-            }
-        }
-    } catch (...) {
-        _state = closed;
-        _error_state = std::current_exception();
-    }
-
-}
-
-
-coro::future<bool> Stream::write_eof() {
-    return [&](auto promise) {
-        _write_result = std::move(promise);
-        write_eof_begin();
-    };
-}
-
-void Stream::write_eof_begin() {
-    coro::promise<bool>::pending_notify ntf;
-    std::unique_lock lk(_mx);
-    try {
-        if (_error_state) std::rethrow_exception(_error_state);
-        if (_state == not_established) {
-            begin_ssl();
-            if (_handshake.register_target_async(_writer_unlock_target) == nullptr) return;
-        }
-        while (true) {
-            if (_state == closing || _state == closed) {
-                ntf = _write_result(false);
-                return;
-            }
-            coro::target_simple_activation(_writer_unlock_target, [&](coro::mutex::ownership){
-                write_eof_begin();
-            });
-            int r = SSL_shutdown(_ssl);
-            if (r > 0) {
-                _state = closed;
-                ntf = _write_result(true);
-                break;
-            } else if (r == 0) {
-                _state = closing;
-                if (flush_output(lk,_writer_unlock_target)) return;
-                ntf = _write_result(true);
-                break;
-            } else {
-                if (handle_ssl_error(lk,r, _writer_unlock_target, [&]{
-                    _state = closed;
-                    ntf = _write_result(false);
-                })) return;
-            }
-        }
-    } catch (...) {
-        _state = closed;
-        ntf = _write_result.reject();
-    }
-
+    _wrbuff = data;
+    return io_coroutine<bool>(_wrstor);
 }
 
 
@@ -393,30 +302,18 @@ Stream::~Stream() {
     //if the connection is still established
     //we need to shutdown this
     //but we have no longer asynchronous features available (in destructor)
-    if (_state == established) {
+    if (_state == State::established) {
         //shutdown of the stream causes that all operations becomes non-blocking
         _proxied->shutdown();
-        //lock and call SSL_shutdown
-        std::unique_lock lk(_mx);
-        SSL_shutdown(_ssl);
-        coro::mutex::target_type target;
-        coro::target_simple_activation(target, [](coro::mutex::ownership){});
-        //try to flush data to the stream in non-blocking mode
-        //if this fails, connection will be terminated in all cases
-        flush_output(lk, target);
+        //try to shutdown SSL connection - shutdown packet is sent nonblocking
+        //this should not wait, as socket has asynchronous operations disabled
+        write_eof().wait();
     }
-    //reset state to close
-    _state = closed;
-    //reset any ownerships and release any possible awaiters
-    _read_ownership.reset();
-    _write_ownership.reset();
-    _handshake_ownership.reset();
-    //we should be good
 }
 
 coro::generator<_Stream> Stream::accept(coro::generator<_Stream> gen, Context ctx, std::function<void()> ssl_error) {
     auto f = gen();
-    while (co_await f.has_value()) {
+    while (co_await !!f) {
         try {
             co_yield Stream::accept(std::move(f.get()), ctx);
         } catch (...) {

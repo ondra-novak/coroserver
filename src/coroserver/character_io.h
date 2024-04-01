@@ -54,13 +54,11 @@ public:
         return _ptr != _end;
     }
     ///suspend when reading next character
-    bool await_suspend(std::coroutine_handle<> h) {
+    std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) {
 
-        coro::target_coroutine(_target, h, nullptr);
         //perform reading into future
         _fut << [&]{return _s.read();};
-
-        return _fut.register_target_async(_target);
+        return _fut.await_suspend(h);
     }
     ///called after resume to retrieve a value
     int await_resume() {
@@ -91,7 +89,7 @@ public:
         if (_ptr == _end) {
             _fut << [&]{return _s.read();};
             _fut.wait();
-            std::string_view &text = _fut.value();
+            std::string_view text = _fut;
             if (text.empty()) return -1;
             _ptr = text.data();
             _end = _ptr+text.size();
@@ -104,7 +102,6 @@ public:
 
 protected:
     Stream _s;
-    coro::future<std::string_view>::target_type _target;
     coro::future<std::string_view> _fut;
     const char *_ptr = nullptr;
     const char *_end = nullptr;
@@ -147,11 +144,10 @@ public:
         bool await_ready() const {
             return _state != flush_req;
         }
-        bool await_suspend(std::coroutine_handle<> h) {
-            coro::target_coroutine(_target, h);
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) {
             _fut << [&]{return _owner._s.write(std::string_view(_owner._buffer.data(), _owner._pos));};
             _owner._pos = 0;
-            return _fut.register_target_async(_target);
+            return _fut.await_suspend(h);
         }
         bool await_resume() {
             switch (_state) {
@@ -173,7 +169,7 @@ public:
                 case flushed_ok:
                 case noflush: return true;
                 case flush_req: {
-                    bool b = _owner._s.write(std::string_view(_owner._buffer, _owner._pos)).wait();
+                    bool b = _owner._s.write(std::string_view(_owner._buffer, _owner._pos));
                     _owner._pos = 0;
                     _state = b?flushed_ok:flushed_fail;
                     return b;
@@ -200,7 +196,6 @@ public:
         };
         State _state;
         coro::future<bool> _fut;
-        coro::future<bool>::target_type _target;
     };
 
     ///write the character

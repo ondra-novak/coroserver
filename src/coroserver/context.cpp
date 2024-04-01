@@ -477,10 +477,7 @@ inline coro::future<bool> ContextIOImpl::timer(
 }
 
 inline ContextIOImpl::TimerCancel ContextIOImpl::cancel_timer(const void *ident) {
-    return [x = _epoll.cancel(ident)](const std::type_info &info) mutable -> void *{
-        if (typeid(x) == info) return &x;
-        return nullptr;
-    };
+    return TimerCancel(_epoll.cancel(ident));
 }
 
 Stream ContextIOImpl::get_signal_stream() {

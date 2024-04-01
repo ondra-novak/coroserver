@@ -75,7 +75,7 @@ coro::async<void> write_task(coroserver::Context &ctx, std::string port, ssl::Co
         co_await wr(static_cast<char>(i & 0xFF));
     }
     co_await wr.flush();
-    sslstream.write_eof();
+    co_await sslstream.write_eof();
 }
 
 coro::async<void> read_task(coroserver::Stream s) {
@@ -92,7 +92,7 @@ coro::async<void> read_task(coroserver::Stream s) {
     CHECK_EQUAL(cnt, 655360);
 }
 
-coro::async<void> server_task(coro::lazy_future<coroserver::Stream> &&f, ssl::Context &sslctx) {
+coro::async<void> server_task(coro::deferred_future<coroserver::Stream> f, ssl::Context &sslctx) {
 
     coroserver::Stream s = co_await f;
     coroserver::Stream sslstream = coroserver::ssl::Stream::accept(s, sslctx);
@@ -108,15 +108,15 @@ int main() {
     ssl::Context client_sslctx = ssl::Context::init_client();
     client_sslctx.set_certificate(cert);
 
-    coroserver::Context ctx(0);
+    coroserver::Context ctx;
 
     auto addr = PeerName::lookup("127.0.0.1","*");
     auto listener = ctx.accept(addr);
 
     write_task(ctx, addr[0].get_port(), client_sslctx).detach();
-
-    ctx.get_scheduler().await(server_task(listener(), server_sslctx).start());
-    ctx.stop();
+    coro::future<void> r = server_task(listener(), server_sslctx);
+    r >> [&]{ctx.stop();};
+    ctx.run();
 
 
 }
