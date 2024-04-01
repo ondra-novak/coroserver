@@ -40,6 +40,9 @@ void test2() {
     CHECK_EQUAL(result, expected);
     std::string_view extra = s.read();
     CHECK_EQUAL(extra, "ExtraData");
+
+    auto f = chs.read();
+    std::string_view &ref = f;
 }
 
 int main() {

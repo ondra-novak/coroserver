@@ -28,7 +28,7 @@ coro::async<void> read_task(coroserver::Stream s) {
     CHECK_EQUAL(cnt, 655360);
 }
 
-coro::async<void> server_task(coro::lazy_future<coroserver::Stream> &&f) {
+coro::async<void> server_task(coro::deferred_future<coroserver::Stream> &&f) {
 
     coroserver::Stream s = co_await f;
     co_await read_task(s);
@@ -37,14 +37,14 @@ coro::async<void> server_task(coro::lazy_future<coroserver::Stream> &&f) {
 
 int main() {
 
-    coroserver::Context ctx(0);
+    coroserver::Context ctx;
 
     auto addr = PeerName::lookup("127.0.0.1","*");
     auto listener = ctx.accept(addr);
 
     write_task(ctx, addr[0].get_port()).detach();
 
-    ctx.get_scheduler().await(server_task(listener()).start());
+    ctx.run_until<void>(server_task(listener()));
 
 
 }

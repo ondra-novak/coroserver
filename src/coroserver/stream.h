@@ -12,7 +12,7 @@
 #include "strutils.h"
 #include "timeout.h"
 
-#include <coro.h>
+#include "coro_common.h"
 #include <chrono>
 
 
@@ -110,7 +110,8 @@ protected:
 
 };
 
-class ReadUntilFuture;
+
+using BinBuffer = std::vector<char>;
 
 ///Generic stream
 /**
@@ -227,6 +228,110 @@ public:
      */
     static Stream null_stream();
 
+
+    template<typename KMP>
+    class ReadUntil {
+    public:
+
+        ReadUntil( std::shared_ptr<IStream> &s, KMP pattern, std::size_t limit, BinBuffer &buffer)
+            :_s(s),_pattern(pattern),_limit(limit),_buffer(buffer) {}
+        coro::future<std::string_view> initiate() {
+            return [&](auto promise) {
+                _buffer.clear();
+                _srch = _pattern;
+                _prom = std::move(promise);
+                _rdr << [this]{return _s->read();};
+                _rdr >> [this]{process();};
+            };
+        }
+
+    protected:
+        std::shared_ptr<IStream> &_s;
+        KMP _pattern;
+        kmp_search<char> _srch;
+        std::size_t _limit;
+        BinBuffer &_buffer;
+
+        coro::future<std::string_view> _rdr;
+        coro::promise<std::string_view> _prom;
+
+        auto process() {
+            try {
+                std::string_view data = _rdr;
+                if (data.empty()) {
+                    if (!_buffer.empty()) {
+                        return _prom(_buffer.data(), _buffer.size());
+                    } else {
+                        return _prom.cancel();
+                    }
+                }
+                std::size_t sz = data.size();
+                for (std::size_t i = 0; i < sz; ++i) {
+                    if (_srch(data[i])) {
+                        std::size_t e = i + 1;
+                        _s->put_back(data.substr(e));
+                        if (_buffer.empty()) {
+                            return _prom(data.data(), e - _srch.size());
+                        } else {
+                            _buffer.insert(_buffer.end(), data.data(), data.data()+e);
+                            return _prom(_buffer.data(), _buffer.size()- _srch.size());
+                        }
+                    }
+                }
+                _buffer.insert(_buffer.end(), data.begin(), data.end());
+                if (_buffer.size() > _limit) return _prom.cancel();
+                _rdr << [this]{return _s->read();};
+                _rdr >> [this]{process();};
+                return coro::promise<std::string_view>::notify();
+            } catch (...) {
+                return _prom.reject();
+            }
+        }
+
+    };
+
+
+    ///Read until specified sequence is found
+    /**
+     * @param buffer temporary buffer, must be declared by caller and it is used to
+     * store temporary data. The caller can preallocate buffer or reuse buffer when
+     * the function is called repeatedly
+     *
+     * @param srch search pattern
+     * @param limit limit. This is security limit to avoid processing too long sequences
+     * of data. If the limit is reached, the processing is canceled like end of stream. Note
+     * that limit is not checked for exact value, so it is still possible to receive
+     * longer sequence then specified limit. Default value is unlimited
+     *
+     * @return awaitable object, which returns string_view containing the sequence excluding
+     * the pattern. If the pattern is not reached until end of stream, the remainig
+     * data are returned. If no data are extracted, cancels await operation
+     */
+    template<unsigned int N>
+    awaitable<std::string_view, ReadUntil<kmp_pattern<char, N> > >read_until(BinBuffer &buffer, kmp_pattern<char, N> srch, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        return {_stream, srch, limit, buffer};
+    }
+    ///Read until specified sequence is found
+    /**
+     * @param buffer temporary buffer, must be declared by caller and it is used to
+     * store temporary data. The caller can preallocate buffer or reuse buffer when
+     * the function is called repeatedly
+     *
+     * @param srch search pattern
+     * @param limit limit. This is security limit to avoid processing too long sequences
+     * of data. If the limit is reached, the processing is canceled like end of stream. Note
+     * that limit is not checked for exact value, so it is still possible to receive
+     * longer sequence then specified limit. Default value is unlimited
+     *
+     * @return awaitable object, which returns string_view containing the sequence excluding
+     * the pattern. If the pattern is not reached until end of stream, the remainig
+     * data are returned. If no data are extracted, cancels await operation
+     */
+    awaitable<std::string_view, ReadUntil<kmp_pattern<char, 0> > >read_until(BinBuffer &buffer, std::string_view srch, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        return {_stream, srch, limit, buffer};
+    }
+
+protected:
     std::shared_ptr<IStream> _stream;
 };
 

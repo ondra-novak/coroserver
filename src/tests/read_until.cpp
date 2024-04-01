@@ -1,19 +1,23 @@
 #include "check.h"
 #include <coroserver/stream.h>
-#include <coroserver/stream_utils.h>
 #include <queue>
 #include "test_stream.h"
 
 template<unsigned int N>
-void test(std::vector<std::string> zadani, const coroserver::kmp_pattern<char,N> &sep, std::size_t limit, bool r1, std::string_view r2) {
+void test(std::vector<std::string> zadani, const coroserver::kmp_pattern<char,N> &sep, std::size_t limit, bool r1, std::string_view r2, bool extra_data = true) {
     coroserver::Stream s (std::make_shared<TestStream<100>>(std::move(zadani)));
-    coroserver::ReadUntil rdline(s, limit);
-    auto r = rdline(sep, true);
-    CHECK_EQUAL(r.has_value(),r1);
-    if (r.has_value()) {
+    coroserver::BinBuffer buffer;
+    auto r = s.read_until(buffer, sep, limit);
+    bool hv = !!r;
+    CHECK_EQUAL(hv,r1);
+    if (hv) {
         CHECK_EQUAL(r.get(), r2);
-        std::string_view extra = s.read_nb();
-        CHECK_EQUAL("Extra data",extra);
+        std::string_view extra = s.read();
+        if (extra_data) {
+            CHECK_EQUAL("Extra data",extra);
+        } else {
+            CHECK_EQUAL("",extra);
+        }
     }
 }
 
@@ -31,10 +35,11 @@ int main() {
 
 
 
-    test({"Test line1\n\rTest line2\r\n\r\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2\r\n\r\n");
-    test({"Test line1\n\rTest line2\r\n","\r\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2\r\n\r\n");
-    test({"Test line1\n\rTest line2\r\n","\r","\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2\r\n\r\n");
-    test({"Test line1\n\r","Test line2\r\n\r\n","Extra data"},nlnl,15,false,{});
+    test({"Test line1\n\rTest line2\r\n\r\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2");
+    test({"Test line1\n\rTest line2\r\n","\r\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2");
+    test({"Test line1\n\rTest line2\r\n","\r","\nExtra data"},nlnl,9999,true,"Test line1\n\rTest line2");
+    test({"Test line1\n\r","Test line2\r\n\r\n","Extra data"},nlnl,15,true,"Test line1\n\rTest line2");
     test({"Test line1\n\r","Test line2\r\n\r\n","Extra data"},nlnl,5,false,{});
+    test({"Test line1\n\r","Test line2\r\n","Extra data"},nlnl,9999,true,"Test line1\n\r" "Test line2\r\n" "Extra data", false);
 }
 

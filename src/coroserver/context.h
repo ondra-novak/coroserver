@@ -76,6 +76,54 @@ public:
     void start(unsigned int threads);
 
 
+    ///start context in foregrount, stop it, when future is resolved
+    /**
+     * @param fut future to test
+     * @param schedule_fn function called to schedule an action. You can use thread_pool scheduler
+     * @return result of future
+     */
+    template<typename T, std::invocable<SchItem> Fn>
+    T run_until(coro::future<T> &fut, Fn &&schedule_fn) {
+        if (fut.set_callback([&]{stop();})) {
+            run(std::forward<Fn>(schedule_fn));
+        }
+        return fut.get();
+
+    }
+    ///start context in foregrount, stop it, when future is resolved
+    /**
+     * @param fut future to test
+     * @param schedule_fn function called to schedule an action. You can use thread_pool scheduler
+     * @return result of future
+     */
+    template<typename T, std::invocable<SchItem> Fn>
+    T run_until(coro::future<T> &&fut, Fn &&schedule_fn) {
+        return run_until(fut, std::forward<Fn>(schedule_fn));
+    }
+
+    ///start context in foregrount, stop it, when future is resolved
+    /**
+     * @param fut future to test
+     * @return result of future
+     */
+    template<typename T>
+    T run_until(coro::future<T> &fut) {return run_until(fut, [](auto){});}
+    ///start context in foregrount, stop it, when future is resolved
+    /**
+     * @param fut future to test
+     * @return result of future
+     */
+    template<typename T>
+    T run_until(coro::future<T> &&fut) {return run_until(fut);}
+
+
+    static auto thread_pool(std::shared_ptr<coro::thread_pool> tpool) {
+        return [tpool](SchItem item) mutable {tpool->enqueue(std::move(item));};
+    }
+    static auto thread_pool(unsigned int thread_count) {
+        return thread_pool(std::make_shared<coro::thread_pool>(thread_count));
+    }
+
     ///Create listening socket at given peer
     AsyncSocket listen_socket(const PeerName &addr);
     ///Create connected socket. Connection is asynchronous, you need to check status of socket
@@ -212,6 +260,8 @@ public:
     }
 
 };
+
+
 
 
 ///Declaration of factor, which is able to create connection to given host:port

@@ -34,7 +34,7 @@ coro::async<void> test_write() {
 }
 
 int main() {
-    test_read().join();
-    test_write().join();
+    test_read().run();
+    test_write().run();
 
 }
