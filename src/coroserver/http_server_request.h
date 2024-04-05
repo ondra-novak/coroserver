@@ -37,7 +37,7 @@ public:
      * this status. In all cases, keep_alive is disabled, you should disconnect the stream
      * right after response.
      */
-    coro::lazy_future<bool> load();
+    coro::deferred_future<bool> load();
 
     ///retrieve method
     Method get_method() const {return _method;}
@@ -182,9 +182,9 @@ public:
      *
      * You should avoid to call function by multiple times
      */
-    coro::lazy_future<Stream> get_body();
+    coro::deferred_future<Stream> get_body();
     ///Send response and retrieve stream to send response body
-    coro::future<Stream> send();
+    coro::deferred_future<Stream> send();
     ///Send response prepared in content of std::ostringstream
     /**
      * @param body in stringstream. Function moves the content to the internal buffer
@@ -323,11 +323,6 @@ protected:
     using ReadFuture = coro::future<std::string_view>;
     using WriteFuture = coro::future<bool>;
     using StreamFuture = coro::future<Stream>;
-    using ReadTarget = ReadFuture::target_type;
-    using WriteTarget = WriteFuture::target_type;
-    using StreamTarget = StreamFuture::target_type;
-    using LazyLoadTarget = coro::lazy_future<bool>::promise_target_type;
-    using LazyGetStreamTarget = coro::lazy_future<Stream>::promise_target_type;
 
     struct OutputHdrs {
         bool _has_ctxtp;
@@ -371,23 +366,20 @@ protected:
     Stream _body_stream;
     Logger _logger;
 
-
-    coro::any_target<> _target;
-    coro::any_promise _promise;
-    coro::variant_future<std::string_view, bool> _fut;
-
-
-
     kmp_search<char>_search_hdr_state;
     std::string_view _send_body_data;
 
-    void load_cycle(ReadFuture *f);
+
+    coro::future<bool> _write_fut;
+    coro::future<std::string_view> _read_fut;
+    coro::future<Stream> _send_fut;
+    coro::function<void(bool)> _discard_body_cb;
+
+    void load_request(coro::promise<bool> promise);
 
 
-
-
-
-
+    coro::future<bool> discard_body();
+    void discard_body_next(coro::promise<bool> promise);
 
     std::string_view prepare_output_headers();
     template<auto cont>

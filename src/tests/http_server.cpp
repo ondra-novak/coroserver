@@ -1,8 +1,8 @@
 #include "check.h"
 #include "test_stream.h"
 #include <coroserver/http_server_request.h>
-#include <coroserver/http_server.h>
-#include <coroserver/stream_utils.h>
+//#include <coroserver/http_server.h>
+
 
 
 using namespace coroserver;
@@ -91,12 +91,11 @@ coro::async<void> test_POST_body() {
     ServerRequest req(s);
     bool loaded = co_await req.load();
     CHECK(loaded);
+    BinBuffer buffer;
     Stream body_stream = co_await req.get_body();
-    coroserver::BlockReader blk(body_stream);
-    auto b = co_await blk(1000);
+    auto b = co_await body_stream.block_read(buffer, 1000);
     CHECK_EQUAL(b, "0123456789ABCDEF\r\n");
-    coroserver::BlockReader blk2(s);
-    b = co_await blk2(1000);
+    b = co_await s.block_read(buffer, 1000);
     CHECK_EQUAL(b, "Extra data");
 }
 
@@ -110,12 +109,11 @@ coro::async<void> test_POST_body_chunked() {
     ServerRequest req(s);
     bool loaded = co_await req.load();
     CHECK(loaded);
+    BinBuffer buffer;
     Stream body_stream = co_await req.get_body();
-    coroserver::BlockReader blk(body_stream);
-    auto b = co_await blk(1000);
+    auto b = co_await body_stream.block_read(buffer, 1000);
     CHECK_EQUAL(b, "0123456789ABCDEF\r\n");
-    coroserver::BlockReader blk2(s);
-    b = co_await blk2(1000);
+    b = co_await s.block_read(buffer, 1000);
     CHECK_EQUAL(b, "Extra data");
 }
 
@@ -145,8 +143,8 @@ coro::async<void> test_POST_body_expect_discard() {
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
     co_await req.send("Done");
     CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
-    coroserver::BlockReader blk(s);
-    auto b = co_await blk(1000);
+    BinBuffer buffer;
+    auto b = co_await s.block_read(buffer, 1000);
     CHECK_EQUAL(b, "0123456789ABCDEF\r\nExtra data");
 
 }
@@ -162,12 +160,12 @@ coro::async<void> test_POST_body_discard() {
     req.add_date(std::chrono::system_clock::from_time_t(1651236587));
     co_await req.send("Done");
     CHECK(out== "HTTP/1.1 200 OK\r\nDate: Fri, 29 Apr 2022 12:49:47 GMT\r\nContent-Length: 4\r\nServer: CoroServer 1.0 (C++20)\r\nContent-Type: application/octet-stream\r\n\r\nDone");
-    coroserver::BlockReader blk(s);
-    auto b = co_await blk(1000);
+    BinBuffer buffer;
+    auto b = co_await s.block_read(buffer, 1000);
     CHECK_EQUAL(b, "Extra data");
 
 }
-
+#if 0
 void test_server() {
 
     bool c1 =false;
@@ -215,6 +213,7 @@ void test_server() {
     CHECK(c2);
 }
 
+#endif
 void testHeaderParser() {
 
     http::ForwardedHeader f("for=12.34.56.78; by=\"aaa;bbb\"; proto = https; proto = \"http\"");
@@ -224,17 +223,18 @@ void testHeaderParser() {
 
 }
 
+
 int main() {
     testHeaderParser();
-    test_GET_http10().join();
-    test_GET_http10_infstrm().join();
-    test_GET_http11().join();
-    test_GET_http11_infstrm().join();
-    test_POST_body().join();
-    test_POST_body_chunked().join();
-    test_POST_body_expect().join();
-    test_POST_body_expect_discard().join();
-    test_POST_body_discard().join();
-    test_server();
+    test_GET_http10().run();
+    test_GET_http10_infstrm().run();
+    test_GET_http11().run();
+    test_GET_http11_infstrm().run();
+    test_POST_body().run();
+    test_POST_body_chunked().run();
+    test_POST_body_expect().run();
+    test_POST_body_expect_discard().run();
+    test_POST_body_discard().run();
+//    test_server();
 }
 

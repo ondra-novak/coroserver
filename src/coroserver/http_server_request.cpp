@@ -26,9 +26,8 @@ ServerRequest::ServerRequest(Stream s, bool secure)
 ServerRequest::~ServerRequest() {
 }
 
-coro::lazy_future<bool> ServerRequest::load() {
-    return _target.init_as<LazyLoadTarget>([&](auto promise) {
-        _promise = std::move(promise);
+coro::deferred_future<bool> ServerRequest::load() {
+    return [this](auto promise) {
         _status_code = 0;
         _status_message = {};
         _search_hdr_state.reset();
@@ -41,19 +40,21 @@ coro::lazy_future<bool> ServerRequest::load() {
         _output_headers.resize(status_response_max_len);
         _output_headers_summary = {};
         _url_cache.clear();
-
-        auto &f = _fut.as<std::string_view>();
-        f << [&]{return _cur_stream.read();};
-        f.register_target(_target.call([&](auto *f){load_cycle(f);}));
-    });
-
+        _read_fut << [this]{return _cur_stream.read();};
+        _read_fut >> [this, promise = std::move(promise)]() mutable {
+            load_request(std::move(promise));
+        };
+    };
 }
 
-void ServerRequest::load_cycle(ReadFuture *f) {
+
+
+void ServerRequest::load_request(coro::promise<bool> promise) {
+
     try {
-        std::string_view data = *f;
+        std::string_view data = _read_fut;
         if (data.empty()) {
-            _promise.as<bool>()(false);
+            promise(false);
             return;
         }
         for (std::size_t cnt = data.size(), i = 0; i < cnt; i++) {
@@ -64,16 +65,17 @@ void ServerRequest::load_cycle(ReadFuture *f) {
                 _header_data.resize(_header_data.size()-_search_hdr_state.size());
                 bool b = parse_request({_header_data.data(), _header_data.size()});
                 if (!b) _keep_alive = false;
-                _promise.as<bool>()(b);
+                promise(b);
                 return;
             }
         }
-        *f << [&]{return _cur_stream.read();};
-        f->register_target(_target.call([&](auto *f){load_cycle(f);}));
-        return;
+        _read_fut << [&]{return _cur_stream.read();};
+        _read_fut >> [this, promise = std::move(promise)]() mutable {
+            load_request(std::move(promise));
+        };
 
     } catch (...) {
-        _promise.as<bool>().reject();
+        promise.reject();
     }
 }
 
@@ -368,22 +370,76 @@ void ServerRequest::content_type_from_extension(const std::string_view &path) {
     }
 }
 
+coro::future<bool> ServerRequest::discard_body() {
+    return [&](auto promise) {
+        if (_has_body && !_expect_100_continue) {
+            _read_fut << [this] {
+                return _body_stream.read();
+            };
+            _read_fut >> [this, promise = std::move(promise)]() mutable {
+                discard_body_next(std::move(promise));
+            };
+        } else {
+            promise(true);
+        }
+    };
+}
+
+void ServerRequest::discard_body_next(coro::promise<bool> promise) {
+    try {
+        std::string_view s = _read_fut;
+        if (s.empty()) {
+            promise(true);
+        } else {
+            _read_fut << [this]{return _body_stream.read();};
+            _read_fut >> [this, promise = std::move(promise)]() mutable {
+                discard_body_next(std::move(promise));
+            };
+        }
+    } catch (...) {
+        promise.reject();
+    }
+}
+
 
 coro::future<bool> ServerRequest::send(std::string &&body) {
     _user_buffer = std::move(body);
-    _send_body_data = _user_buffer;
-    add_header(strtable::hdr_content_length, _send_body_data.size());
-    return [&](auto prom) {
-        _promise = std::move(prom);
-        if (_has_body && !_expect_100_continue) {
-            auto &f = _fut.as<std::string_view>();
-            f << [&]{return _body_stream.read();};
-            f.register_target(_target.call([&](auto f) {
-                send_discard_body<&ServerRequest::send_body_continue>(f);
-            }));
-            return;
-        }
-        send_body_continue();
+    add_header(strtable::hdr_content_length, _user_buffer.size());
+    return [this](auto prom) {
+        _write_fut << [this]{return discard_body();};
+        _write_fut >> [this, prom = std::move(prom)]() mutable {
+            //separate closure
+            [this,prom = std::move(prom)]() mutable {
+                try {
+                    _write_fut.get();
+                    _write_fut << [this]{return _cur_stream.write(prepare_output_headers());};
+                    _write_fut >> [this, prom = std::move(prom)]() mutable {
+                        //separate closure
+                        [this,prom = std::move(prom)]() mutable {
+                            try {
+                                bool b = _write_fut;
+                                if (!b) {
+                                    prom(false);
+                                } else {
+                                    _write_fut << [this]{return _cur_stream.write(_user_buffer);};
+                                    _write_fut >> [this, prom = std::move(prom)]() mutable {
+                                        try {
+                                            prom(_write_fut);
+                                        } catch (...) {
+                                            prom.reject();
+                                        }
+                                    };
+                                }
+                            } catch (...) {
+                                prom.reject();
+                            }
+                        }();
+                    };
+                } catch (...) {
+                    prom.reject();
+                }
+            }();
+        };
     };
 }
 
@@ -391,96 +447,38 @@ coro::future<bool> ServerRequest::send(std::ostringstream &body) {
     return send(body.str());
 }
 
-template<auto cont>
-void ServerRequest::send_discard_body(ReadFuture *f) {
-    try {
-        std::string_view data = *f;
-        if (data.empty()) {
-            (this->*cont)();
-        } else {
-            *f << [&]{return _body_stream.read();};
-            f->register_target(_target);
-        }
-    } catch (...) {
-        _promise.as<Stream>().reject();
-    }
-}
-
-void ServerRequest::send_continue() {
-    if (!_headers_sent) {
-        _headers_sent = true;
-        auto &f = _fut.as<bool>();
-        f << [&]{return _cur_stream.write(prepare_output_headers());};
-        f.register_target(_target.call(
-                [&](auto f) {
-                    try {
-                        bool b = f;
-                        auto &res = _promise.as<Stream>();
-                        if (!b) {
-                            res(LimitedStream::write(_cur_stream, 0));
-                        } else {
-                            if (_output_headers_summary._has_te && _output_headers_summary._has_te_chunked) {
-                                res(ChunkedStream::write(_cur_stream));
-                            } else if (_output_headers_summary._has_ctlen) {
-                                res(LimitedStream::write(_cur_stream, _output_headers_summary._ctlen));
+coro::deferred_future<Stream> ServerRequest::send() {
+    return [this](auto prom) {
+        _write_fut << [this]{return discard_body();};
+        _write_fut >> [this, prom = std::move(prom)]() mutable {
+            //separate closure
+            [this,prom = std::move(prom)]() mutable {
+                try {
+                    _write_fut.get();
+                    _write_fut << [this]{return _cur_stream.write(prepare_output_headers());};
+                    _write_fut >> [this, prom = std::move(prom)]() mutable {
+                        try {
+                            bool b = _write_fut;
+                            if (!b) {
+                                prom(LimitedStream::write(_cur_stream, 0));
                             } else {
-                                res(_cur_stream);
+                                if (_output_headers_summary._has_te && _output_headers_summary._has_te_chunked) {
+                                    prom(ChunkedStream::write(_cur_stream));
+                                } else if (_output_headers_summary._has_ctlen) {
+                                    prom(LimitedStream::write(_cur_stream, _output_headers_summary._ctlen));
+                                } else {
+                                    prom(_cur_stream);
+                                }
                             }
+                        } catch (...) {
+                            prom.reject();
                         }
-                    } catch (...) {
-                        _promise.as<Stream>().reject();
-                    }
+                    };
+                } catch(...) {
+                    prom.reject();
                 }
-        ));
-    }
-}
-
-void ServerRequest::send_body_continue() {
-    if (!_headers_sent) {
-        _headers_sent = true;
-        auto &f = _fut.as<bool>();
-        f << [&]{return _cur_stream.write(prepare_output_headers());};
-        f.register_target(_target.call(
-                [&](auto f) {
-                    try {
-                        bool b = *f;
-                        auto &res = _promise.as<bool>();
-                        if (!b) {
-                            res(false);
-                        } else {
-                            *f << [&]{return _cur_stream.write(_send_body_data);};
-                            f->register_target(_target.call(
-                                    [&](auto f) {
-                                            auto &res = _promise.as<bool>();
-                                            try {
-                                                res(f->get());
-                                            } catch (...) {
-                                                res.reject();
-                                            }
-                            }));
-                        }
-                    } catch (...) {
-                        _promise.as<Stream>().reject();
-                    }
-                }
-        ));
-    }
-}
-
-coro::future<Stream> ServerRequest::send() {
-    return [&](auto prom) {
-        _promise = std::move(prom);
-        if (_has_body && !_expect_100_continue) {
-            auto &f = _fut.as<std::string_view>();
-            f << [&]{return _body_stream.read();};
-            f.register_target(
-                    _target.call(
-                            [&](auto f) {
-                send_discard_body<&ServerRequest::send_continue>(f);
-            }));
-            return;
-        }
-        send_continue();
+            }();
+        };
     };
 }
 
@@ -531,9 +529,8 @@ std::string_view ServerRequest::prepare_output_headers() {
 
 }
 
-
-coro::lazy_future<Stream> ServerRequest::get_body() {
-    return _target.init_as<LazyGetStreamTarget>([&](auto promise) {
+coro::deferred_future<Stream> ServerRequest::get_body() {
+    return [this](auto promise) {
         if (!_has_body) {
             promise(LimitedStream::read(_cur_stream, 0));
             return;
@@ -547,22 +544,21 @@ coro::lazy_future<Stream> ServerRequest::get_body() {
             iter = std::copy(ver.begin(), ver.end(), iter);
             iter = std::copy(txt.begin(), txt.end(), iter);
             std::string_view out(_output_headers.data(), std::distance(_output_headers.begin(), iter));
-            _promise = std::move(promise);
-            auto &f = _fut.as<bool>();
-            f << [&]{return _cur_stream.write(out);};
-            f.register_target(_target.call([&](auto f){
+            _write_fut << [this,&out]{return _cur_stream.write(out);};
+            _write_fut >> [this,promise = std::move(promise)]() mutable {
                 try {
-                    bool b = *f;
-                    if (b) _promise.as<Stream>()(_body_stream);
-                    else _promise.as<Stream>()(LimitedStream::read(_cur_stream, 0));
+                    bool b = _write_fut;
+                    if (b) promise(_body_stream);
+                    else promise(LimitedStream::read(_cur_stream, 0));
                 } catch (...) {
-                    _promise.as<Stream>().reject();
+                    promise.reject();
                 }
-            }));
-            return;
+            };
+
         }
         promise(_body_stream);
-    });
+    };
+
 }
 
 coro::future<bool> ServerRequest::send_file(const std::string &path, bool use_chunked) {
