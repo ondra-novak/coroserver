@@ -4,6 +4,7 @@
 #include "static_lookup.h"
 #include "strutils.h"
 #include <cctype>
+#include <cstdint>
 #include <charconv>
 #include <optional>
 #include <string>
@@ -280,13 +281,27 @@ using SupportedQueryValueVariant = typename _details::MakeQueryValuesVariant<T, 
  * with the variable in question
  */
 template<typename T>
-class QueryValueRef: public SupportedQueryValueVariant<T> {
+class QueryValueRef: private SupportedQueryValueVariant<T> {
 public:
     using SupportedQueryValueVariant<T>::SupportedQueryValueVariant;
     bool operator<(const QueryValueRef &) = delete;
     bool operator>(const QueryValueRef &) = delete;
     bool operator<=(const QueryValueRef &) = delete;
     bool operator>=(const QueryValueRef &) = delete;
+
+
+    template<typename X>
+    friend bool holds_alternative(const QueryValueRef &x) {
+        return std::holds_alternative<X>(x);
+    }
+    template<typename Fn>
+    auto visit(Fn &&fn) {
+        return std::visit<Fn, SupportedQueryValueVariant<T> &>(std::forward<Fn>(fn), *this);
+    }
+    template<typename Fn>
+    auto visit(Fn &&fn) const {
+        return std::visit<Fn, const SupportedQueryValueVariant<T> &>(std::forward<Fn>(fn), *this);
+    }
 };
 
 ///Declaration of type, which contains mapping table from string keys to variable names
@@ -348,8 +363,8 @@ std::size_t parse_form_urlencoded(std::string_view content, const QueryFieldMap<
     std::size_t fld_count = 0;
     parse_form_urlencoded_enum_kv(content, [&](const std::string &key, const std::string &value){
         QueryValueRef<T> fldref = map[key];
-        if (std::holds_alternative<std::monostate>(fldref)) return;
-        std::visit([&](auto ref){
+        if (holds_alternative<std::monostate>(fldref)) return;
+        fldref.visit([&](auto ref){
             using ItemT = decltype(ref);
             if constexpr(std::is_member_object_pointer_v<ItemT>) {
                 using PtrType = std::remove_reference_t<decltype(target.*ref)>;
@@ -384,7 +399,7 @@ std::size_t parse_form_urlencoded(std::string_view content, const QueryFieldMap<
                 }
                 ++fld_count;
             }
-        }, fldref);
+        });
     });
     return fld_count;
 
@@ -432,7 +447,7 @@ void build_query(const T &source, const QueryFieldMap<T, N> &map, Fn &&output) {
     bool print_sep = false;
     for (const auto &pair: map) {
         if (print_sep) output('&');
-        print_sep = std::visit([&](auto ref){
+        print_sep = pair.value.visit([&](auto ref){
             using ItemT = decltype(ref);
             if constexpr(std::is_member_object_pointer_v<ItemT>) {
                 using PtrType = std::decay_t<decltype(source.*ref)>;
@@ -454,7 +469,7 @@ void build_query(const T &source, const QueryFieldMap<T, N> &map, Fn &&output) {
                 }
             }
             return false;
-        }, pair.value);
+        });
     }
 }
 

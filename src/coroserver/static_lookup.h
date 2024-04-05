@@ -1,34 +1,39 @@
+
+#pragma once
+
 #ifndef SRC_COROSERVER_STATIC_LOOKUP_H_
 #define SRC_COROSERVER_STATIC_LOOKUP_H_
 
-
 #include <algorithm>
-#include <optional>
 #include <iterator>
-#include <coro.h>
+#include <concepts>
+#include <optional>
 
 namespace coroserver {
 
-namespace _detail {
-    template<typename T>
-    concept Comparable = requires(T a, T b) {
-        { a < b } -> std::same_as<bool>;
-        { a <= b } -> std::same_as<bool>;
-        { a > b } -> std::same_as<bool>;
-        { a >= b } -> std::same_as<bool>;
-    };
-}
-
-///Construct mapping table for enum to specified value type
+///Implements a statically allocated bidirectional search table between values of different types
 /**
- * @tparam EnumType type of enum to be mapped. Can be any enum, however it is also possible to use any integral type.
- * @tparam ValueType type of value mapped to specified enum value
- * @tparam Count Count of items
+ * @tparam KeyType Type of the key. It is required that the type is an integral type or values of this type can be compared and sorted.
+ * @tparam ValueType Type of the value. It is recommended that this type defines a comparison operator, ideally making values sortable.
+ * @tparam Count Number of elements in the table. This value needs to be known in advance. For greater convenience, the function makeStaticLookupTable() can be used, which allows the class to be constructed while the number of elements is automatically calculated.
  *
- * @note for convience, you can use makeStaticLookupTable<EnumType,ValueType>({...}) which also fills correct count
- * of items.
+ * @code
+ * constexpr auto intToStringLookup = makeStaticLookupTable<int, std::string_view>({
+ *    {1, "one"},
+ *    {2, "two"},
+ *    {3, "three"}
+ * });
+ * @endcode
+ *
+ * If you need to declare the instance using the extern declaration, you cannot use makeStaticLookupTable.
+ * Instead, you need to manually count the items.
+ *
+ * @code
+ * extern StaticLookupTable<int, std::string_view, 3> intToStringLookup;
+ * @endcode
+ *
 */
-template<typename EnumType, typename ValueType, int Count>
+template<std::totally_ordered KeyType, typename ValueType, int Count>
 class StaticLookupTable {
 public:
 
@@ -42,34 +47,37 @@ public:
     */
     struct Item {
         ///enum type - key
-        EnumType key;
+        KeyType key;
         ///value type - value
         ValueType value;
     };
 
-    ///contains underlying enum type, for non-enum type, contains EnumType
-    using EnumUnderlyingType = typename std::conditional_t<std::is_enum_v<EnumType>,std::underlying_type<std::decay_t<EnumType> >, std::decay<EnumType> >::type;
+    ///contains underlying enum type, for non-enum type, contains KeyType
+    using EnumUnderlyingType = typename std::conditional_t<std::is_enum_v<KeyType>,std::underlying_type<std::decay_t<KeyType> >, std::decay<KeyType> >::type;
     ///Contains true, if ValueType can be ordered. For large set of items it is better to support ordering, otherwise fullrow scan is used.
-    #if defined( __cpp_concepts) and not defined (__CDT_PARSER__)
-    constexpr static bool is_ordered =  _detail::Comparable<ValueType>;
-    #else
-    constexpr static bool is_ordered =  false;
-    #endif
+    constexpr static bool is_ordered =  std::totally_ordered<ValueType>;
+    ///Contains true, if ValueType can be compared
+    constexpr static bool is_equal_comparable=  std::equality_comparable<ValueType>;
+    ///contains true, if the KeyType can be sequence, so it need to be integral type or enum
+    constexpr static bool can_be_sequence =std::is_integral_v<KeyType> || std::is_enum_v<KeyType>;
+
     constexpr static int log2(int x) {
         int c = 0;
         while (x) {++c; x>>=1;}
         return c;
     }
 
-    constexpr static bool can_be_sequence =std::is_integral_v<EnumType> || std::is_enum_v<EnumType>;
-
+    ///Calculates count of search cycles for lower_bound search
     constexpr static int search_cycles = log2(Count);
 
     ///Declaration of storage
     /**
-     * Main reason for this structure is to allow types without default constructor.
-     * We need unitialized array of items before the constructor body is executed
-     * The constructor does initialization fer item
+     * The main reason for using a union is to avoid requiring
+     * the declaration of a default constructor. A union allows
+     * for initialization at a later point. It works similarly
+     * to std::optional, but without the need to keep track
+     * of whether the value is initialized, as this information
+     * can be inferred from the execution of further code.
      */
     union ItemStorage {
         Item x;
@@ -97,9 +105,7 @@ public:
      * @param items array of items. Count of items must be exact as declared by Count variable. However
      * for convience you can use makeStaticLookupTable()
     */
-    template<std::size_t c>
-    requires (c == Count)
-    constexpr StaticLookupTable(const Item (&items)[c]) {
+    constexpr StaticLookupTable(const Item (&items)[Count]) {
         int order[Count];
         for (int i = 0; i < Count; i++) {
             order[i] = i;
@@ -111,7 +117,7 @@ public:
             else return ia.key < ib.key;
         });
         for (int i = 0; i < Count; i++) {
-            std::construct_at(&_items[i].x, items[order[i]]);
+            std::construct_at(&_items[i].x, Item(items[order[i]]));
         }
         initIndex();
     }
@@ -119,6 +125,8 @@ public:
     ///Destructs the object
     /** Need to non-constexpr object work correctly */
     constexpr ~StaticLookupTable() {
+
+
         for (auto &x: _items) {
             x.x.~Item();
         }
@@ -127,7 +135,7 @@ public:
     ///Contains default value if enum is not registered in the table, you can redefine this in specialization
     static constexpr ValueType defaultValue = {};
     ///Contains default enum if value is not found in the table, you can redefine this in specialization
-    static constexpr EnumType defaultEnum = {};
+    static constexpr KeyType defaultEnum = {};
 
     /// Get value registered for given enum value
     /**
@@ -138,7 +146,7 @@ public:
      * @note if the underlying value of each registered enum is sequence of numbers 1,2,3,4,5,6, the lookup
      * has O(1) complexity, otherwise it has O(log n) complexity
     */
-    constexpr const ValueType &get(const EnumType &evalue, const ValueType &defval = defaultValue) const {
+    constexpr const ValueType &get(const KeyType &evalue, const ValueType &defval = defaultValue) const {
         auto iter = find(evalue);
         if (iter == end()) return defval;
         else return iter->value;
@@ -152,16 +160,16 @@ public:
      *
      * @note if the value type is ordered, the lookup has O(log n) complexity otherwise it has O(n) complexity
     */
-    constexpr const EnumType &get(const ValueType &v, const EnumType &defval = defaultEnum) const {
+    constexpr const KeyType &get(const ValueType &v, const KeyType &defval = defaultEnum) const {
         auto iter = find(v);
         if (iter == end()) return defval;
         else return iter->key;
     }
 
     ///@see get();
-    constexpr const ValueType &operator[](const EnumType &evalue) const {return get(evalue);}
+    constexpr const ValueType &operator[](const KeyType &evalue) const {return get(evalue);}
     ///@see get();
-    constexpr const EnumType &operator[](const ValueType &v) const {return get(v);}
+    constexpr const KeyType &operator[](const ValueType &v) const {return get(v);}
 
 
     ///return count of items
@@ -206,7 +214,7 @@ public:
      * @param evalue value to find
      * @return returns iterator or end() if not found
     */
-    constexpr Iterator find(const EnumType &evalue) const {
+    constexpr Iterator find(const KeyType &evalue) const {
         if constexpr(can_be_sequence) {
             if (_sequence) {
                 if (evalue >= _items[0]->key && evalue <= _items[Count-1]->key) {
@@ -216,7 +224,7 @@ public:
                 return end();
             }
         }
-        return Iterator(_items+lower_bound([&](int idx){return _items[idx]->key;}, evalue));
+        return Iterator(_items+lower_bound([&](int idx) { return _items[idx]->key; }, evalue));
     }
 
     ///finds record for given  value
@@ -226,14 +234,15 @@ public:
     */
     constexpr Iterator find(const ValueType &v) const {
         if constexpr(is_ordered) {
-            int pos = lower_bound([&](int idx){return _items[_valueIndex.pos[idx]]->value;}, v);
+            int pos = lower_bound([&](int idx) { return _items[_valueIndex.pos[idx]]->value; }, v);
             if (pos == Count) return Iterator(_items+Count);
             else return Iterator(_items+_valueIndex.pos[pos]);
-        } else {
+        } else if constexpr(is_equal_comparable) {
             int it = 0;
             while (it < Count && _items[it]->value != v) ++it;
-            return Iterator(it);
-        }
+            return Iterator(_items+it);
+        } else
+            return end();
     }
 
 protected:
@@ -252,7 +261,7 @@ protected:
             for (int i = 0; i < Count; i++) {
                 _valueIndex.pos[i] = i;
             }
-            std::sort(std::begin(_valueIndex.pos),std::end(_valueIndex.pos), [&](int a, int b){
+            std::sort(std::begin(_valueIndex.pos), std::end(_valueIndex.pos), [&](int a, int b) {
                 return _items[a]->value < _items[b]->value;
             });
         }
@@ -260,10 +269,10 @@ protected:
     ///
     constexpr bool is_sequence() const {
         if constexpr(can_be_sequence) {
-            EnumType itr = _items[0]->key;
+            KeyType itr = _items[0]->key;
             for (int i = 1; i < Count; i++) {
-                if constexpr(std::is_enum_v<EnumType>) {
-                    itr = static_cast<EnumType>(static_cast<EnumUnderlyingType>(itr)+1);
+                if constexpr(std::is_enum_v<KeyType>) {
+                    itr = static_cast<KeyType>(static_cast<EnumUnderlyingType>(itr)+1);
                 } else {
                     ++itr;
                 }
@@ -277,34 +286,33 @@ protected:
 
     template<typename Field, typename Value>
     constexpr int lower_bound(Field &&field, Value &&value) const {
+        //branchless lower_bound
         int first = 0;
         int count = Count;
-        for (int i = 0; i < search_cycles; i++) {
+        for (int i = 0; i < search_cycles; i++) { //unrolled out by compiler
             auto step = count / 2;
             auto it = first + step;
-            int res[4] = {first, step, it+1, count - step-1};
-            int sel = 2 * (field(it) < value);
-            first = res[sel];
-            count = res[sel+1];
+            int cmp_res = -(field(it) < value);          // 0xFFFFFFFF when true
+            first += (it - first) & cmp_res;             //cmp_res?it:first
+            count = step + ((count - 2*step) & cmp_res); //cmp_res?count-step:step
         }
-        int r1 = (first >= Count);
-        int r2 = field(first-r1) != value;
-        int outs[] = {first, Count};
-        return outs[r1 | r2];
-
+        first+=count;
+        int r1 = (first >= Count);                       // first>=Count?1:0
+        int r2 = field(first-r1) != value;               // !found?1:0
+        return Count - ((Count - first) & ((r1|r2)-1));  // (r1 || r2)?Count:first
     }
 
 };
 
-///Create NamedEnum instance
+///Create StaticLookupTableInstance instance
 /**
- * @tparam EnumType type of enum value
+ * @tparam KeyType type of enum value
  * @tparam ValueType type of associated value
  * @param x array of items key-value pairs - {enum, value}
 */
-template<typename EnumType, typename ValueType, int N>
-inline constexpr auto makeStaticLookupTable(const typename StaticLookupTable<EnumType, ValueType, N>::Item (&x)[N]) {
-    return StaticLookupTable<EnumType,ValueType, N>(x);
+template<typename KeyType, typename ValueType, int N>
+inline constexpr auto makeStaticLookupTable(const typename StaticLookupTable<KeyType, ValueType, N>::Item (&x)[N]) {
+    return StaticLookupTable<KeyType,ValueType, N>(x);
 }
 
 namespace _named_enum_details {
@@ -481,7 +489,6 @@ protected:
  */
 #define NAMED_ENUM(Typename, ...) enum class Typename { __VA_ARGS__}; \
 using NamedEnum_##Typename =  ::coroserver::EnumToStringLookupTable<Typename, []{return #__VA_ARGS__;}>;
-
 
 }
 

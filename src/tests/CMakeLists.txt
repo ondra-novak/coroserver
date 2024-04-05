@@ -14,9 +14,9 @@ set(testFiles
      chunked_stream.cpp
      limited_stream.cpp
      http_server.cpp
-#    prefixmap.cpp
-#    named_enum.cpp
-#    query.cpp
+     prefixmap.cpp
+     named_enum.cpp
+     query.cpp
 #    http_client.cpp
 #    mt_stream.cpp
 #    shared_lockable_ptr.cpp

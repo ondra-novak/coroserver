@@ -54,11 +54,11 @@ public:
     }
     template<typename A1, typename B1>
     constexpr void set_read_timeout(std::chrono::duration<A1, B1> timeout) {
-        read = std::chrono::duration<Dur>(timeout);
+        read = Dur(timeout);
     }
     template<typename A1, typename B1>
     constexpr void set_write_timeout(std::chrono::duration<A1, B1> timeout) {
-        write = std::chrono::duration<Dur>(timeout);
+        write = Dur(timeout);
     }
 
 
