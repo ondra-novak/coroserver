@@ -223,7 +223,7 @@ struct ForwardedHeader{
  */
 inline auto split_path(std::string_view vpath) {
     vpath = vpath.substr(0,std::min(vpath.find('?'), vpath.length()));
-    return [vpath, buffer = std::string(), splt = splitAt<char>(vpath, "/")]() mutable {
+    return [buffer = std::string(), splt = splitAt<char>(vpath, "/")]() mutable {
         while (splt) {
             auto part = splt();
             if (!part.empty()) {
@@ -236,16 +236,147 @@ inline auto split_path(std::string_view vpath) {
     };
 }
 
+template<typename T>
+struct QueryField {
+
+    enum class Type {
+        empty,
+        u_short_v,
+        s_short_v,
+        u_int_v,
+        s_int_v,
+        u_long_v,
+        s_long_v,
+        u_long_long_v,
+        s_long_long_v,
+        float_v,
+        double_v,
+        string_v,
+        bool_v,
+        char_v,
+        u_short_opt,
+        s_short_opt,
+        u_int_opt,
+        s_int_opt,
+        u_long_opt,
+        s_long_opt,
+        u_long_long_opt,
+        s_long_long_opt,
+        float_opt,
+        double_opt,
+        string_opt,
+        bool_opt,
+        char_opt
+    };
+
+    constexpr QueryField():_type(Type::empty) {}
+    constexpr QueryField(unsigned short T::* u_short_v):_type(Type::u_short_v),_u_short_v(u_short_v) {}
+    constexpr QueryField(short T::* s_short_v):_type(Type::s_short_v),_s_short_v(s_short_v) {}
+    constexpr QueryField(unsigned long T::* u_long_v):_type(Type::u_long_v),_u_long_v(u_long_v) {}
+    constexpr QueryField(long T::* s_long_v):_type(Type::s_long_v),_s_long_v(s_long_v) {}
+    constexpr QueryField(unsigned int T::* u_int_v):_type(Type::u_int_v),_u_int_v(u_int_v) {}
+    constexpr QueryField(int T::* s_int_v):_type(Type::s_int_v),_s_int_v(s_int_v) {}
+    constexpr QueryField(unsigned long long T::* u_long_long_v):_type(Type::u_long_long_v),_u_long_long_v(u_long_long_v) {}
+    constexpr QueryField(long long T::* s_long_long_v):_type(Type::s_long_long_v),_s_long_long_v(s_long_long_v) {}
+    constexpr QueryField(double T::* double_v):_type(Type::double_v),_double_v(double_v) {}
+    constexpr QueryField(float T::* float_v):_type(Type::float_v),_float_v(float_v) {}
+    constexpr QueryField(std::string T::* string_v):_type(Type::string_v),_string_v(string_v) {}
+    constexpr QueryField(bool T::* bool_v):_type(Type::bool_v),_bool_v(bool_v) {}
+    constexpr QueryField(char T::* char_v):_type(Type::char_v),_char_v(char_v) {}
+    constexpr QueryField(std::optional<unsigned short> T::* u_short_opt):_type(Type::u_short_opt),_u_short_opt(u_short_opt) {}
+    constexpr QueryField(std::optional<short> T::* s_short_opt):_type(Type::s_short_opt),_s_short_opt(s_short_opt) {}
+    constexpr QueryField(std::optional<unsigned long> T::* u_long_opt):_type(Type::u_long_opt),_u_long_opt(u_long_opt) {}
+    constexpr QueryField(std::optional<long> T::* s_long_opt):_type(Type::s_long_opt),_s_long_opt(s_long_opt) {}
+    constexpr QueryField(std::optional<unsigned int> T::* u_int_opt):_type(Type::u_int_opt),_u_int_opt(u_int_opt) {}
+    constexpr QueryField(std::optional<int> T::* s_int_opt):_type(Type::s_int_opt),_s_int_opt(s_int_opt) {}
+    constexpr QueryField(std::optional<unsigned long long> T::* u_long_long_opt):_type(Type::u_long_long_opt),_u_long_long_opt(u_long_long_opt) {}
+    constexpr QueryField(std::optional<long long> T::* s_long_long_opt):_type(Type::s_long_long_opt),_s_long_long_opt(s_long_long_opt) {}
+    constexpr QueryField(std::optional<double> T::* double_opt):_type(Type::double_opt),_double_opt(double_opt) {}
+    constexpr QueryField(std::optional<float> T::* float_opt):_type(Type::float_opt),_float_opt(float_opt) {}
+    constexpr QueryField(std::optional<std::string> T::* string_opt):_type(Type::string_opt),_string_opt(string_opt) {}
+    constexpr QueryField(std::optional<bool> T::* bool_opt):_type(Type::bool_opt),_bool_opt(bool_opt) {}
+    constexpr QueryField(std::optional<char> T::* char_opt):_type(Type::char_opt),_char_opt(char_opt) {}
+
+    template<typename Fn, typename Me>
+    static constexpr auto visit(Fn &&fn, Me &&me) {
+        switch (me._type) {
+            case Type::u_short_v: return fn(me._u_short_v);
+            case Type::s_short_v: return fn(me._s_short_v);
+            case Type::u_int_v: return fn(me._u_int_v);
+            case Type::s_int_v: return fn(me._s_int_v);
+            case Type::u_long_v: return fn(me._u_long_v);
+            case Type::s_long_v: return fn(me._s_long_v);
+            case Type::u_long_long_v: return fn(me._u_long_long_v);
+            case Type::s_long_long_v: return fn(me._s_long_long_v);
+            case Type::float_v: return fn(me._float_v);
+            case Type::double_v: return fn(me._double_v);
+            case Type::string_v: return fn(me._string_v);
+            case Type::bool_v: return fn(me._bool_v);
+            case Type::char_v: return fn(me._char_v);
+            case Type::u_short_opt: return fn(me._u_short_opt);
+            case Type::s_short_opt: return fn(me._s_short_opt);
+            case Type::u_int_opt: return fn(me._u_int_opt);
+            case Type::s_int_opt: return fn(me._s_int_opt);
+            case Type::u_long_opt: return fn(me._u_long_opt);
+            case Type::s_long_opt: return fn(me._s_long_opt);
+            case Type::u_long_long_opt: return fn(me._u_long_long_opt);
+            case Type::s_long_long_opt: return fn(me._s_long_long_opt);
+            case Type::float_opt: return fn(me._float_opt);
+            case Type::double_opt: return fn(me._double_opt);
+            case Type::string_opt: return fn(me._string_opt);
+            case Type::bool_opt: return fn(me._bool_opt);
+            case Type::char_opt: return fn(me._char_opt);
+            default: return fn(nullptr);
+        };
+    }
+
+    Type get_type() const {return _type;}
+    template<typename Fn>
+    auto visit(Fn &&fn) {
+        return visit(std::forward<Fn>(fn), *this);
+    }
+    template<typename Fn>
+    auto visit(Fn &&fn) const {
+        return visit(std::forward<Fn>(fn), *this);
+    }
+    bool empty() const {return _type == Type::empty;}
+
+protected:
+    Type _type;
+
+    union {
+        unsigned short T::*_u_short_v;
+        short T::*_s_short_v;
+        unsigned long T::*_u_long_v;
+        long T::*_s_long_v;
+        unsigned int T::*_u_int_v;
+        int T::*_s_int_v;
+        unsigned long long T::*_u_long_long_v;
+        long long T::*_s_long_long_v;
+        double T::*_double_v;
+        float T::*_float_v;
+        std::string T::*_string_v;
+        bool T::*_bool_v;
+        char T::*_char_v;
+        std::optional<unsigned short> T::*_u_short_opt;
+        std::optional<short> T::*_s_short_opt;
+        std::optional<unsigned long> T::*_u_long_opt;
+        std::optional<long> T::*_s_long_opt;
+        std::optional<unsigned int> T::*_u_int_opt;
+        std::optional<int> T::*_s_int_opt;
+        std::optional<unsigned long long> T::*_u_long_long_opt;
+        std::optional<long long> T::*_s_long_long_opt;
+        std::optional<double> T::*_double_opt;
+        std::optional<float> T::*_float_opt;
+        std::optional<std::string> T::*_string_opt;
+        std::optional<bool> T::*_bool_opt;
+        std::optional<char> T::*_char_opt;
+    };
+
+};
+
 namespace _details {
 
-    template<typename ... Args> class TypeList;
-
-    template<typename T, typename X> struct MakeQueryValuesVariant;
-
-    template<typename T, typename ... Args> struct MakeQueryValuesVariant<T, TypeList<Args...>> {
-    using Type = std::variant<std::monostate, Args T::* ..., std::optional<Args> T::* ...>;
-
-    };
 
     template<typename X>
     struct is_optional {
@@ -262,48 +393,6 @@ namespace _details {
 
 }
 
-///Contains list of supported types fields that can appear in query
-using SupportedQueryValueTypes = _details::TypeList<std::uint16_t, std::int16_t, std::uint32_t, std::int32_t, std::uint64_t, std::int64_t, float, double, char, std::string, bool>;
-
-///Contains std::variant of all possible references to fields of given type T
-template<typename T>
-using SupportedQueryValueVariant = typename _details::MakeQueryValuesVariant<T, SupportedQueryValueTypes>::Type;
-
-
-///Contains reference to a field in object T
-/**
- * @tparam T structure or object where values from the query will be stored
- *
- * The supported types are specified in SupportedQueryValueTypes. The reference to a
- * field is specified as pointer to a member variable (T::*). The variable can
- * have one of supported type or std::optional of supported type. The std::optional
- * template allows to detect, whether the query contained the field associated
- * with the variable in question
- */
-template<typename T>
-class QueryValueRef: private SupportedQueryValueVariant<T> {
-public:
-    using SupportedQueryValueVariant<T>::SupportedQueryValueVariant;
-    bool operator<(const QueryValueRef &) = delete;
-    bool operator>(const QueryValueRef &) = delete;
-    bool operator<=(const QueryValueRef &) = delete;
-    bool operator>=(const QueryValueRef &) = delete;
-
-
-    template<typename X>
-    friend bool holds_alternative(const QueryValueRef &x) {
-        return std::holds_alternative<X>(x);
-    }
-    template<typename Fn>
-    auto visit(Fn &&fn) {
-        return std::visit<Fn, SupportedQueryValueVariant<T> &>(std::forward<Fn>(fn), *this);
-    }
-    template<typename Fn>
-    auto visit(Fn &&fn) const {
-        return std::visit<Fn, const SupportedQueryValueVariant<T> &>(std::forward<Fn>(fn), *this);
-    }
-};
-
 ///Declaration of type, which contains mapping table from string keys to variable names
 /**
  *
@@ -316,7 +405,7 @@ public:
  * To construct variable if this type, use makeQueryFieldMap
  */
 template<typename T, int N>
-using QueryFieldMap = StaticLookupTable<std::string_view, QueryValueRef<T>, N>;
+using QueryFieldMap = StaticLookupTable<std::string_view, QueryField<T>, N>;
 
 
 ///Parse form urlencoded content and enumerate key/value pairs
@@ -362,40 +451,40 @@ std::size_t parse_form_urlencoded(std::string_view content, const QueryFieldMap<
     if (content.empty()) return 0;
     std::size_t fld_count = 0;
     parse_form_urlencoded_enum_kv(content, [&](const std::string &key, const std::string &value){
-        QueryValueRef<T> fldref = map[key];
-        if (holds_alternative<std::monostate>(fldref)) return;
+        QueryField<T> fldref = map[key];
+        if (fldref.empty()) return;
         fldref.visit([&](auto ref){
             using ItemT = decltype(ref);
             if constexpr(std::is_member_object_pointer_v<ItemT>) {
                 using PtrType = std::remove_reference_t<decltype(target.*ref)>;
                 using Type = std::remove_reference_t<typename _details::is_optional<PtrType>::Type>;
-                if constexpr(std::is_same_v<Type,std::uint16_t>) {
-                    target.*ref =  static_cast<std::uint16_t>(std::strtoul(value.c_str(),nullptr,10));
-                } else if constexpr(std::is_same_v<Type,std::int16_t>) {
-                    target.*ref =  static_cast<std::int16_t>(std::strtol(value.c_str(),nullptr,10));
-                } else if constexpr(std::is_same_v<Type,std::uint32_t>) {
-                    target.*ref =  static_cast<std::uint32_t>(std::strtoul(value.c_str(),nullptr,10));
-                } else if constexpr(std::is_same_v<Type,std::int32_t>) {
-                    target.*ref =  static_cast<std::int32_t>(std::strtol(value.c_str(),nullptr,10));
-                } else if constexpr(std::is_same_v<Type,std::uint64_t>) {
-                    target.*ref =  static_cast<std::uint64_t>(std::strtoull(value.c_str(),nullptr,10));
-                } else if constexpr(std::is_same_v<Type,std::int64_t>) {
-                    target.*ref =  static_cast<std::int64_t>(std::strtoll(value.c_str(),nullptr,10));
-                } else if constexpr(std::is_same_v<Type,float>) {
-                    target.*ref =  static_cast<float>(std::strtod(value.c_str(),nullptr));
-                } else if constexpr(std::is_same_v<Type,double>) {
-                    target.*ref =  static_cast<double>(std::strtod(value.c_str(),nullptr));
-                } else if constexpr(std::is_same_v<Type,char>) {
+                if constexpr(std::is_same_v<Type,char>){
                     target.*ref =  value.c_str()[0];
                 } else if constexpr(std::is_same_v<Type,std::string>) {
                     target.*ref =  value;
-                } else  {
-                    static_assert(std::is_same_v<Type,bool>);
+                } else if constexpr(std::is_same_v<Type, bool>) {
                     if (value == "true" || value == "1" || value == "yes" || value == "on") {
                         target.*ref = true;
                     } else if (value == "false" || value == "0" || value == "no" || value == "off") {
                         target.*ref = false;
                     } else return;
+                } else if constexpr(std::is_floating_point_v<Type>) {
+                    target.*ref = static_cast<Type>(std::strtod(value.c_str(),nullptr));
+                } else {
+                    static_assert(std::is_integral_v<Type>);
+                    if constexpr(std::is_unsigned_v<Type>) {
+                        if constexpr(std::is_same_v<Type, unsigned long long>) {
+                            target.*ref = std::strtoull(value.c_str(),nullptr,10);
+                        } else {
+                            target.*ref = static_cast<Type>(std::strtoul(value.c_str(),nullptr,10));
+                        }
+                    } else {
+                        if constexpr(std::is_same_v<Type, long long>) {
+                            target.*ref = std::strtoll(value.c_str(),nullptr,10);
+                        } else {
+                            target.*ref = static_cast<Type>(std::strtol(value.c_str(),nullptr,10));
+                        }
+                    }
                 }
                 ++fld_count;
             }

@@ -35,7 +35,7 @@ public:
      */
     MTStreamWriter(std::shared_ptr<IStream> device)
         :stream(std::move(device)) {
-        init();
+
     }
 
     ///Construct the object
@@ -43,36 +43,35 @@ public:
      * @param s stream
      */
     MTStreamWriter(Stream s):MTStreamWriter(s.getStreamDevice()) {
-        init();
+
     }
 
     using WriteIterator = std::back_insert_iterator<std::vector<char> >;
 
 
+    ///write to buffer and eventually send written data
+    /**
+     * @param fn function which receives output iterator, which can be used to write data
+     * to the buffer
+     * @return optional future, which is resolved, when data are written to the
+     * stream (they are left buffer). The future can be discarded. Return value of the future
+     * is equal to true, when success or false when stream is closed or error. The
+     * future can also throw an exception
+     *
+     * @note MT Safe.
+     * @note there is a lock inside of the function
+     */
     template<std::invocable<WriteIterator> Fn>
-    coro::lazy_future<bool> write(Fn &&fn) {
+    coro::deferred_future<bool> write(Fn &&fn) {
+        coro::promise<bool>::notify ntf;
         std::unique_lock lk(_mx);
-        if (_e) std::rethrow_exception(_e);
-        if (_closed) return false;
-        fn(std::back_inserter(_prepared));
-        if (_pending) {
-            lk.release(); //release mutex in locked state - we handle it as lazy target
-            return _lazy_write_target2;
+        if (!_closed) {
+            fn(std::back_inserter(_prepared));
+            if (!_pending) {
+                ntf = do_write();
+            }
         }
-        _pending = true;
-        std::swap(_prepared,_pending_write);
-        if (_pending_write.empty()) {
-            return !_closed;
-        }
-        _write_fut << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
-        if (_write_fut.register_target_async(_write_fut_target)) {
-            lk.release(); //release mutex in locked state - we handle it as lazy target
-            return _lazy_write_target1;
-        }
-        _pending = false;
-        _pending_write.clear();
-        _closed = !_write_fut.get();
-        return !_closed;
+        return get_return_value();
     }
 
 
@@ -80,11 +79,14 @@ public:
     /**
      * @param obj data to write
      *
-     * @retval true data written to buffer
-     * @retval false write is impossible
+     * @return optional future, which is resolved, when data are written to the
+     * stream (they are left buffer). The future can be discarded. Return value of the future
+     * is equal to true, when success or false when stream is closed or error. The
+     * future can also throw an exception
+     *
      * @exception any any exception captured during recent flush
      */
-    coro::lazy_future<bool> write(std::string_view txt) {
+    coro::deferred_future<bool> write(std::string_view txt) {
         return write([&](auto iter){
             std::copy(txt.begin(), txt.end(), iter);
         });
@@ -94,7 +96,6 @@ public:
     ///Returns true, if writing is possible
     operator bool () const {
         std::lock_guard _(_mx);
-        if (_e) std::rethrow_exception(_e);
         return !_closed;
     }
 
@@ -102,7 +103,6 @@ public:
     /**
      * @return total size of all currently active buffers represents amount
      * of pending bytes
-     * @exception any any exception captured during recent flush
      *
      */
     std::size_t get_buffered_size() const {
@@ -114,10 +114,14 @@ public:
     /** This function doesn't writes anything to the output, it
      * just sets closing state. Any pending and buffered data will
      * be eventually written
+     *
+     * @return deferred future is resolved when all pending data are written
      */
-    void close() {
+    coro::deferred_future<bool> close() {
         std::lock_guard _(_mx);
         _closed = true;
+        return get_return_value();
+
     }
 
     ///Write eof to the output stream
@@ -126,163 +130,130 @@ public:
      * request is buffered and eof is written when all pending writes
      * are complete.
      *
-     * @return function returns discardable future. The future always returns false as the
-     * stream is closed and no futher writes are posible. You can co_await future to
-     * ensure, that internal buffers are emptied
+     * @note stream is closed after this call
+     *
+     * @return deferred future is resolved when all pending data are written and
+     * eof is sent
      */
-    coro::lazy_future<bool> write_eof() {
+    coro::deferred_future<bool> write_eof() {
+        coro::promise<bool>::notify ntf;
         std::unique_lock lk(_mx);
-        if (_pending) {
+        if (!_closed) {
             _write_eof = true;
             _closed = true;
-            lk.release();
-            return _lazy_write_target2;
+            if (!_pending) {
+                ntf = do_write();
+            }
         }
-        if (_closed) {
-            return false;
-        }
-        _closed = true;
-        _write_fut << [&]{return stream->write_eof();};
-        if (_write_fut.register_target_async(_write_fut_target)) {
-            lk.release();
-            return _lazy_write_target1;
-        }
-        return false;
-    }
-
-
-    ///Destroyes the object. Ensure, that there is no pending operation
-    /**
-     * You can destroy the object when there is no pending operation. Use
-     * wait_for_idle() to synchronize with this state
-     */
-    ~MTStreamWriter() {
-//        assert(!_pending && "Destroying object with pending operation. Use wait_for_idle() to avoid this assert");
+        return get_return_value();
     }
 
     auto getStreamDevice() const {
         return stream;
     }
 
-    ///Create shared version of MTStreamWriter
-    /**
-     * It is recommended instead of calling std::make_shared, as this
-     * also handles correct destruction through the deleter
-     *
-     * @param s
-     * @return
-     */
-    static std::shared_ptr<MTStreamWriter> make_shared(Stream s) {
-        return std::shared_ptr<MTStreamWriter>(new MTStreamWriter(s), Deleter{});
-    }
 
 protected:
+    struct NotifyInfo {
+        long _counter;
+        coro::promise<bool> _prom;
+        static bool cmp(const NotifyInfo &a, const NotifyInfo &b) {
+            return a._counter > b._counter;
+        }
+    };
+
+
     std::shared_ptr<IStream> stream;
-    mutable AtomicMutex _mx;
-    std::vector<char> _prepared;
-    std::vector<char> _pending_write;
-    std::vector<coro::promise<bool> > _flush1_ntf;
-    std::vector<coro::promise<bool> > _flush2_ntf;
+    mutable std::mutex _mx;
+    std::vector<char> _prepared;    //<prepared buffer
+    std::vector<char> _pending_write; //<pending write buffer
+    std::vector<NotifyInfo> _notify;
+    long _counter = 0;
     bool _closed = false;
     bool _pending = false;
     bool _write_eof = false;
     bool _destroy_on_done = false;
-    std::exception_ptr _e;
     coro::future<bool> _write_fut;
-    coro::future<bool>::target_type _write_fut_target;
-    coro::lazy_future<bool>::promise_target_type _lazy_write_target1;
-    coro::lazy_future<bool>::promise_target_type _lazy_write_target2;
 
-
-
-    void init() {
-        coro::target_member_fn_activation<&MTStreamWriter::finish_write>(_write_fut_target, this);
-        coro::target_simple_activation(_lazy_write_target1, [&](auto promise){
-            if (promise) _flush1_ntf.push_back(std::move(promise));
-            _mx.unlock();
-        });
-        coro::target_simple_activation(_lazy_write_target2, [&](auto promise){
-            if (promise) _flush2_ntf.push_back(std::move(promise));
-            _mx.unlock();
-        });
-    }
-
-    template<typename X, typename ... Ranges>
-    static void notify_flush(std::unique_lock<AtomicMutex> &lk, X &&val, Ranges && ... rngs) {
-        using PROM = coro::promise<bool>::pending_notify;
-        std::size_t sz = (0 + ... +std::distance(rngs.begin(), rngs.end()));
-        auto ntf = reinterpret_cast<PROM *>(alloca(sizeof(PROM)*sz));
-        int n = 0;
-
-        auto fill = [&](auto &r) {
-            for (auto &p: r) {
-                std::construct_at(ntf+n, p(val));
-                ++n;
-            }
-            r.clear();
-        };
-        (fill(rngs),...);
-        lk.unlock();
-        for (int i = 0; i < n; ++i) {
-            std::destroy_at(ntf+i);
-        }
-    }
-
-    void finish_write(coro::future<bool> *val) noexcept {
-        std::unique_lock lk(_mx);
-        try {
-            _pending_write.clear();
-            bool to_close = !val->get();
-            if (to_close) {
-                _closed = true;
-                _prepared.clear();
-                _pending = false;
-                 notify_flush(lk, true, _flush1_ntf, _flush2_ntf);
-            } else if (_prepared.empty()) {
-                if (_write_eof) {
-                    _write_eof = false;
-                    _write_fut << [&]{return stream->write_eof();};
-                    lk.unlock();
-                    _write_fut.register_target(_write_fut_target);
-                    return;
-                }
-                _pending = false;
-                notify_flush(lk, true, _flush1_ntf, _flush2_ntf);
-            } else {
-                std::swap(_pending_write,_prepared);
-                std::swap(_flush1_ntf, _flush2_ntf);
-                notify_flush(lk, true, _flush2_ntf);
-                _write_fut << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
-                _write_fut.register_target(_write_fut_target);
-            }
-        } catch (...) {
-            _e = std::current_exception();
-            _prepared.clear();
-            _pending = false;
-            _closed = true;
-            notify_flush(lk, _e, _flush1_ntf, _flush2_ntf);
-        }
-        if (_destroy_on_done) {
-            lk.unlock();
-            delete this;
-        }
-    }
-
-    void destroy() {
-        std::unique_lock lk(_mx);
-        if (_pending) {
-            _destroy_on_done = true;
+    void reg_promise(long cntr, coro::promise<bool> prom) {
+        if (_counter >= cntr) {
+            prom(!_closed);
         } else {
-            lk.unlock();
-            delete this;
+            _notify.push_back({cntr, std::move(prom)});
+            std::push_heap(_notify.begin(), _notify.end(), NotifyInfo::cmp);
         }
     }
 
-    struct Deleter {
-        void operator()(MTStreamWriter *inst) {
-            inst->destroy();
+    coro::promise<bool>::notify notify_done() {
+        coro::promise<bool> p;
+        if (_notify.empty() || _notify.front()._counter > _counter) return {};
+        while (!_notify.empty() && _notify.front()._counter <= _counter) {
+            p += _notify.front()._prom;
+            std::pop_heap(_notify.begin(), _notify.end(), NotifyInfo::cmp);
+            _notify.pop_back();
         }
-    };
+        return p(true);
+    }
+
+    coro::promise<bool>::notify notify_error(bool except) {
+        coro::promise<bool> p;
+        for (auto &x: _notify) p+=x._prom;
+        _notify.clear();
+        if (except) return p.reject();
+        else return p(false);
+    }
+
+    coro::deferred_future<bool> get_return_value() {
+        double newcnt = _counter+_prepared.size() + _pending_write.size() + _write_eof;
+        return [this,newcnt](auto promise)  {
+            reg_promise(newcnt, std::move(promise));
+        };
+    }
+
+    coro::promise<bool>::notify do_write() {
+        std::swap(_prepared, _pending_write);
+        if (!_pending_write.empty()) {
+            _pending = true;
+            _write_fut << [&]{return stream->write({_pending_write.data(),_pending_write.size()});};
+        } else if (_write_eof) {
+            _pending = true;
+            _write_fut << [&]{return stream->write_eof();};
+        } else {
+            return notify_done();
+        }
+        if (_write_fut.set_callback([this] {
+                            std::unique_lock lk(_mx);
+                            return finish_write(); })) return notify_done();
+        return finish_write();
+    }
+
+    coro::promise<bool>::notify finish_write() noexcept {
+        _pending = false;
+        try {
+            bool b = _write_fut;
+            if (b) {
+                if (_pending_write.empty()) {
+                    ++_counter;
+                    _write_eof = false;
+                    _closed = true;
+                    return notify_done();
+                } else {
+                    _counter += _pending_write.size();
+                    _pending_write.clear();
+                    return do_write();
+                }
+            } else {
+                _closed = true;
+                return notify_error(false);
+            }
+
+        } catch (...) {
+            _closed = true;
+            return notify_error(true);
+        }
+    }
+
+
 };
 
 
