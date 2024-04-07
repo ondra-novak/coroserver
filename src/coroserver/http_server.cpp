@@ -4,7 +4,8 @@ namespace coroserver {
 
 namespace http {
 
-std::string_view Server::error_handler_prefix ( "error_");
+
+
 
 void Server::send_error_page(ServerRequest &req, HandlerReturn &ret) {
     //lock the lock
@@ -22,7 +23,7 @@ void Server::send_error_page(ServerRequest &req, HandlerReturn &ret) {
     custom_page_name.append(std::to_string(status));
     //find whether there is such handler
     auto r = _endpoints.find(custom_page_name);
-    Handler h;
+    MethodMap::Handler h;
     //process results and finish with empty container or with handler
     while (!h && !r.empty()) {
         auto m = r.top();
@@ -33,56 +34,29 @@ void Server::send_error_page(ServerRequest &req, HandlerReturn &ret) {
     }
     //we did not find error handler
     if (!h){
-        //generate own version of error page
-        //xhtml page
-        req.content_type(ContentType::xhtml);
-        std::ostringstream text;
-        text << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-                "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
-                "<html xmlns=\"http://www.w3.org/1999/xhtml\">"
-                "<head>"
-                "<title>" << req.get_status() << " " << req.get_status_message() <<"</title>"
-                "</head>"
-                "<body>"
-                "<h1>"  << req.get_status() << " " << req.get_status_message() <<"</h1>"
-                "</body>"
-                "</html>";
-        //send the stream
-        ret.emplace<coro::future<bool> >([&]{return req.send(text);});
-        return;
+        static auto defaultErrorPage = MethodMap::make_handler([](ServerRequest &req){
+            //generate own version of error page
+            //xhtml page
+            req.content_type(ContentType::xhtml);
+            std::ostringstream text;
+            text << "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                    "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
+                    "<html xmlns=\"http://www.w3.org/1999/xhtml\">"
+                    "<head>"
+                    "<title>" << req.get_status() << " " << req.get_status_message() <<"</title>"
+                    "</head>"
+                    "<body>"
+                    "<h1>"  << req.get_status() << " " << req.get_status_message() <<"</h1>"
+                    "</body>"
+                    "</html>";
+            //send the stream
+            return req.send(text);
+        });
+        h = defaultErrorPage;
     }
-    h(req, req.get_path(), ret);
+    ret << [&]{return h->call(req, req.get_path());};
 }
 
-void Router::set_handler(std::string_view path, Handler h) {
-    set_handler(path, Method::not_set, h);
-}
-
-void Router::set_handler(std::string_view path, Method m, Handler h) {
-    MethodMap *mm = _endpoints.find_exact(path);
-    if (mm) {
-        mm->set(m, std::move(h));
-    } else {
-        MethodMap smm;
-        smm.set(m, std::move(h));
-        _endpoints.insert(std::string(path), std::move(smm));
-    }
-}
-
-void Router::set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h) {
-    MethodMap *mm = _endpoints.find_exact(path);
-    if (mm) {
-        for (auto x: methods) {
-            mm->set(x, h);
-        }
-    } else {
-        MethodMap smm;
-        for (auto x: methods) {
-            smm.set(x, h);
-        }
-        _endpoints.insert(std::string(path), std::move(smm));
-    }
-}
 
 std::size_t Router::call_handler(ServerRequest &req, HandlerReturn &fut) {
     return call_handler(req, req.get_path(), fut);
@@ -108,7 +82,7 @@ std::size_t Router::call_handler(ServerRequest &req, Method method, std::string_
         //calculate vpath
         std::string_view vpath = path.substr(ep.path.length());
         //retrieve handler for given method
-        Handler h = ep.payload.get(method);
+        auto h = ep.payload.get(method);
         //if no handler registered
         if (!h) {
             //try to retrieve global handler
@@ -122,15 +96,8 @@ std::size_t Router::call_handler(ServerRequest &req, Method method, std::string_
             }
         }
         //call handler
-        h(req, vpath, fut);
-
-        bool is_ready = std::visit([&](auto &x){
-            if constexpr(std::is_same_v<std::decay_t<decltype(x)>, std::monostate>) {
-                return true;
-            } else {
-                return !x.is_pending();
-            }
-        }, fut);
+        fut << [&]{return h->call(req, vpath);};
+        bool is_ready = !fut.is_pending();
 
         //explore result
         //if the result is not ready  (continued asynchronously) or is touched (modified state)

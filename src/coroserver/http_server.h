@@ -22,129 +22,6 @@ namespace ssl {
 namespace http {
 
 
-using HandlerReturn = std::variant<
-        std::monostate,
-        coro::future<void>,
-        coro::future<bool>
->;
-
-class HandlerAwaiter {
-
-    struct always_ready: std::suspend_never {
-        bool await_suspend(std::coroutine_handle<>)  {
-            return false;
-        }
-    };
-
-    using AWT = std::variant<always_ready, coro::future<void>::value_awaiter, coro::future<bool>::value_awaiter>;
-public:
-
-    bool await_ready() const {
-        return std::visit([&](auto &x){
-           return x.await_ready();
-        },_awt);
-    }
-    auto await_suspend(std::coroutine_handle<> h) {
-        return std::visit([&](auto &x) -> bool{
-            return x.await_suspend(h);
-        },_awt);
-    }
-
-    void await_resume() const {
-        return std::visit([&](auto &x){
-            x.await_resume();
-        },_awt);
-    }
-
-    HandlerAwaiter(HandlerReturn &r):_awt(std::visit([&](auto &x)->AWT{
-        if constexpr(std::is_same_v<std::decay_t<decltype(x)>, std::monostate>) {
-            return always_ready();
-        } else {
-            return x.operator co_await();
-        }
-    },r)) {}
-    HandlerAwaiter(const HandlerAwaiter &) = default;
-    HandlerAwaiter &operator=(const HandlerAwaiter &) = delete;
-
-protected:
-    AWT _awt;
-
-};
-
-class Handler {
-public:
-
-    template<std::invocable<ServerRequest &, std::string_view> Fn>
-    Handler(Fn &&fn);
-    template<std::invocable<ServerRequest &> Fn>
-    Handler(Fn &&fn);
-    Handler() = default;
-
-    void operator()(ServerRequest &req, std::string_view vpath, HandlerReturn &ret) const noexcept {
-        _ptr->call(req, vpath, ret);
-    }
-
-    explicit operator bool() const {return _ptr != nullptr;}
-
-protected:
-
-    class IHandler {
-    public:
-        virtual void call(ServerRequest &req, std::string_view vpath, HandlerReturn &ret) const noexcept = 0;
-        virtual ~IHandler() = default;
-    };
-
-    std::shared_ptr<IHandler> _ptr;
-
-};
-
-template<std::invocable<ServerRequest &, std::string_view> Fn>
-Handler::Handler(Fn &&fn) {
-
-    class Impl: public IHandler {
-    public:
-        Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
-        virtual void call(ServerRequest &req, std::string_view vpath, HandlerReturn &ret) const noexcept {
-            using RetT = decltype(_fn(req,vpath));
-            if constexpr(std::is_same_v<RetT, coro::future<void> >) {
-                ret.emplace<coro::future<void> >([&]{return _fn(req,vpath);});
-            } else if constexpr(std::is_same_v<RetT, coro::future<bool> >) {
-                ret.emplace<coro::future<bool> >([&]{return _fn(req,vpath);});
-            } else {
-                _fn(req,vpath);
-                ret.emplace<std::monostate>();
-            }
-        }
-    protected:
-        std::decay_t<Fn> _fn;
-    };
-    _ptr = std::make_shared<Impl>(std::forward<Fn>(fn));
-}
-
-template<std::invocable<ServerRequest &> Fn>
-Handler::Handler(Fn &&fn) {
-
-    class Impl: public IHandler {
-    public:
-        Impl(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
-        virtual void call(ServerRequest &req, std::string_view , HandlerReturn &ret) const noexcept {
-            using RetT = decltype(_fn(req));
-            if constexpr(std::is_same_v<RetT, coro::future<void> >) {
-                ret.emplace<coro::future<void> >([&]{return _fn(req);});
-            } else if constexpr(std::is_same_v<RetT, coro::future<bool> >) {
-                ret.emplace<coro::future<bool> >([&]{return _fn(req);});
-            } else {
-                _fn(req);
-                ret.emplace<std::monostate>();
-            }
-        }
-    protected:
-        std::decay_t<Fn> _fn;
-    };
-    _ptr = std::make_shared<Impl>(std::forward<Fn>(fn));
-}
-
-
 
 enum class TraceEvent {
     ///request is opened for an connection
@@ -163,8 +40,118 @@ enum class TraceEvent {
 
 
 
+
+
+namespace _details {
+
+    template<typename X> struct is_future_t {
+        static constexpr bool value = false;
+    };
+    template<typename X> struct is_future_t<coro::future<X> > {
+        static constexpr bool value = true;
+    };
+    template<typename X> struct is_future_t<coro::deferred_future<X> > {
+        static constexpr bool value = true;
+    };
+    template<typename X> struct is_future_t<coro::shared_future<X> > {
+        static constexpr bool value = true;
+    };
+
+    template<typename X>
+    inline constexpr bool is_future = is_future_t<X>::value;
+
+
+    coro::prepared_coro deliver(coro::promise<void>::notify &&ntf) {
+        coro::prepared_coro out;
+        ntf.deliver([&](auto &&fn){out = fn();});
+        return out;
+    }
+
+    template<std::invocable<ServerRequest &> Fn>
+    auto convert_handler(Fn &&fn) {
+        using Ret = std::invoke_result_t<Fn, ServerRequest &>;
+        if constexpr(std::is_same_v<Ret, coro::future<void> >) {
+            return [fn = std::move(fn)](ServerRequest &req, std::string_view) mutable-> coro::future<void> {
+                return fn(req);
+            };
+        } else if constexpr(is_future<Ret>) {
+            return [fut = Ret(), fn = std::move(fn)](ServerRequest &req, std::string_view) mutable -> coro::future<void> {
+                return [&](auto promise) {
+                    fut << [&]{return fn(req);};
+                    fut >> [&fut, promise = std::move(promise)]() mutable {
+                        try {
+                            fut.get();
+                            return deliver(promise());
+                        } catch (...) {
+                            return deliver(promise.reject());
+                        }
+                    };
+                };
+            };
+        } else {
+            return [fn = std::move(fn)](ServerRequest &req, std::string_view) mutable-> coro::future<void> {
+                fn(req);
+                return coro::future<void>(std::in_place);
+            };
+        }
+    }
+    template<std::invocable<ServerRequest &, std::string_view> Fn>
+    auto convert_handler(Fn &&fn) {
+        using Ret = std::invoke_result_t<Fn, ServerRequest &, std::string_view>;
+        if constexpr(std::is_same_v<Ret, coro::future<void> >) {
+            return Fn(std::move(fn));
+        } else if constexpr(is_future<Ret>) {
+            return [fut = Ret(), fn = std::move(fn)](ServerRequest &req, std::string_view vpath) mutable -> coro::future<void> {
+                return [&](auto promise) {
+                    fut << [&]{return fn(req, vpath);};
+                    fut >> [&fut, promise = std::move(promise)]() mutable {
+                        try {
+                            fut.get();
+                            return deliver(promise());
+                        } catch (...) {
+                            return deliver(promise.reject());
+                        }
+                    };
+                };
+            };
+        } else {
+            return [fn = std::move(fn)](ServerRequest &req, std::string_view vpath) mutable-> coro::future<void> {
+                fn(req, vpath);
+                return coro::future<void>(std::in_place);
+            };
+        }
+    }
+}
+
+template<typename Fn>
+concept HandlerFn = (std::invocable<Fn, ServerRequest &> || std::invocable<Fn, ServerRequest &, std::string_view>);
+
+
 class MethodMap {
 public:
+
+    class IHandler {
+    public:
+        virtual coro::future<void> call(ServerRequest &, std::string_view) = 0;
+        virtual ~IHandler() = default;
+    };
+
+    using Handler = std::shared_ptr<IHandler>;
+
+    template<HandlerFn Fn>
+    static Handler make_handler(Fn &&fn) {
+        using TargetFn = decltype(_details::convert_handler(std::forward<Fn>(fn)));
+        class HFn: public IHandler {
+        public:
+            HFn(Fn &&fn):_fn(_details::convert_handler(std::forward<Fn>(fn))) {}
+            virtual coro::future<void> call(ServerRequest &req, std::string_view vpath) {
+                return _fn(req, vpath);
+            }
+        protected:
+            TargetFn _fn;
+        };
+        return std::make_shared<HFn>(std::forward<Fn>(fn));
+    }
 
     MethodMap() = default;
     void set(Method m, Handler h) {
@@ -213,12 +200,15 @@ protected:
     std::array<Handler,static_cast<int>(Method::unknown)+1> methods;
 };
 
+
 ///Base routing, base class for Server
 /**
  * You can create additional routing tables for cascade routing
  */
 class Router {
 public:
+
+    using HandlerReturn = coro::future<void>;
 
     ///Register a handler to a given path
     /**
@@ -228,7 +218,10 @@ public:
      *
      * @note It registers handler for all methods.
      */
-    void set_handler(std::string_view path, Handler h);
+    template<HandlerFn Fn>
+    void set_handler(std::string_view path, Fn &&h) {
+        set_handler(path, Method::not_set, std::forward<Fn>(h));
+    }
     ///Register a handler to given path and method
     /**
      * @param path Path to register. Note that path is always starts with /. To register
@@ -236,7 +229,18 @@ public:
      * @param m method
      * @param h handler. Set empty to remove handler
      */
-    void set_handler(std::string_view path, Method m, Handler h);
+    template<HandlerFn Fn>
+    void set_handler(std::string_view path, Method m, Fn &&fn) {
+        auto h = MethodMap::make_handler(std::forward<Fn>(fn));
+        MethodMap *mm = _endpoints.find_exact(path);
+        if (mm) {
+            mm->set(m, h);
+        } else {
+            MethodMap smm;
+            smm.set(m, h);
+            _endpoints.insert(std::string(path), std::move(smm));
+        }
+    }
     ///Register a handler to given path and method
     /**
      * @param path Path to register. Note that path is always starts with /. To register
@@ -244,7 +248,22 @@ public:
      * @param m method
      * @param h handler. Set empty to remove handler
      */
-    void set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h);
+    template<HandlerFn Fn>
+    void set_handler(std::string_view path, std::initializer_list<Method> methods, Fn &&fn) {
+        auto h = MethodMap::make_handler(std::forward<Fn>(fn));
+        MethodMap *mm = _endpoints.find_exact(path);
+        if (mm) {
+            for (auto x: methods) {
+                mm->set(x, h);
+            }
+        } else {
+            MethodMap smm;
+            for (auto x: methods) {
+                smm.set(x, h);
+            }
+            _endpoints.insert(std::string(path), std::move(smm));
+        }
+    }
 
 
     ///Calls handler for given request
@@ -317,7 +336,7 @@ public:
     Server() = default;
 
 
-    static std::string_view error_handler_prefix;
+    static constexpr std::string_view error_handler_prefix = "error_";
 
 
     ///Start the server (serve requests)
@@ -381,17 +400,20 @@ public:
         return serve_req_coro(std::move(s), std::move(tracer));
     }
 
-    void set_handler(std::string_view path, Handler h) {
+    template<HandlerFn Fn>
+    void set_handler(std::string_view path, Fn &&h) {
         std::unique_lock lk(_mx);
-        Router::set_handler(path, std::move(h));
+        Router::set_handler(path, std::forward<Fn>(h));
     }
-    void set_handler(std::string_view path, Method m, Handler h) {
+    template<HandlerFn Fn>
+    void set_handler(std::string_view path, Method m, Fn &&h) {
         std::unique_lock lk(_mx);
-        Router::set_handler(path, m, std::move(h));
+        Router::set_handler(path, m, std::forward<Fn>(h));
     }
-    void set_handler(std::string_view path, std::initializer_list<Method> methods, Handler h) {
+    template<HandlerFn Fn>
+    void set_handler(std::string_view path, std::initializer_list<Method> methods, Fn &&h) {
         std::unique_lock lk(_mx);
-        Router::set_handler(path, methods, std::move(h));
+        Router::set_handler(path, methods, std::forward<Fn>(h));
     }
 
 
@@ -418,7 +440,7 @@ protected:
     coro::async<void> serve_gen(coro::generator<Stream> tcp_server, Tracer tracer) {
         std::lock_guard _(*this);
         auto v = tcp_server();
-        while (co_await v.has_value()) {
+        while (co_await !!v) {
             serve_req_coro(std::move(v.get()), tracer).detach();
             v = tcp_server();
         }
@@ -458,7 +480,7 @@ protected:
                     //select matching handler and call it, set future with result
                     select_handler(req, fut);
                     //await for future
-                    co_await HandlerAwaiter(fut);
+                    co_await fut;
                     //handler can optionally not send the request
                     //if the request is error page
                     //if headers was sent - so request is complete
@@ -498,7 +520,7 @@ protected:
                 //we are here, when request is processed, but response was not sent
                 //so explore status and generate error page
                 send_error_page(req, fut);
-                co_await HandlerAwaiter(fut);
+                co_await fut;
                 //report finish request
                 tracer(TraceEvent::finish, req);
                 //if keep alive isn't active
@@ -518,7 +540,7 @@ protected:
                 //send error page
                 HandlerReturn fut;
                 send_error_page(req, fut);
-                co_await HandlerAwaiter(fut);
+                co_await fut;
                 //and report finish
                 tracer(TraceEvent::finish, req);
                 //keep alive is impossible here

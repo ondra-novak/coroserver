@@ -17,8 +17,8 @@ add_library(coroserver
 #   json/json.cpp
     http_common.cpp
     http_server_request.cpp
-#   http_server.cpp
-#   http_static_page.cpp
+    http_server.cpp
+    http_static_page.cpp
 #   websocket.cpp
 #   websocket_stream.cpp
 #   http_ws_server.cpp

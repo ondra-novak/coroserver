@@ -29,7 +29,9 @@ void AsyncEPoll::register_socket(coro::promise<bool> prom, int fd, Operation op,
 void AsyncEPoll::do_serve(ICb &&scheduler, std::stop_token stoken) {
     std::vector<coro::promise<bool>::notify> output;
     std::stop_callback _cb(stoken, [&]{
+        SocketMap regs;
         std::lock_guard _(_mx);
+        regs = std::move(_regs);
         _stopped = true;
         _notify.add(1);
     });

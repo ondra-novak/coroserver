@@ -244,19 +244,49 @@ protected:
 
 
 public:
+
+    template<typename Fn>
+    class TCPServer: public coro::future<void> {
+    public:
+        TCPServer(Context &ctx, Fn &&fn, std::vector<PeerName> &lsn_peers,
+                TimeoutSettings tms, std::stop_token stp)
+            :_main_fn(std::forward<Fn>(fn))
+            ,_gen(ctx.accept(lsn_peers, stp, tms)) {
+            _fin = get_promise();
+            charge();
+        }
+
+
+    protected:
+        Fn _main_fn;
+        coro::generator<Stream> _gen;
+        coro::deferred_future<Stream> _fut;
+        coro::promise<void> _fin;
+
+        void charge() {
+            _fut = _gen();
+            _fut >> [this] {
+                try {
+                    if (_fut.has_value()) {
+                        _main_fn(std::move(_fut.get()));
+                        charge();
+                    } else {
+                        _fin();
+                    }
+                } catch (...) {
+                    _fin.reject();
+                }
+            };
+        }
+    };
+
     template<std::invocable<Stream> Fn>
-    coro::future<void> tcp_server(Fn &&main_fn, std::vector<PeerName> lsn_peers,
-            std::stop_token stoptoken = {},
-            TimeoutSettings tms = defaultTimeout) {
-        auto gen = accept(std::move(lsn_peers),stoptoken, tms);
-        auto fn = [](coro::generator<Stream> gen, Fn main_fn) -> coro::async<void> {
-            auto f = gen();
-            while (co_await f.has_value()) {
-                main_fn(std::move(f.get()));
-                f = gen();
-            }
-        };
-        return fn(std::move(gen), std::move(main_fn));
+    auto tcp_server(Fn &&fn, std::vector<PeerName> &lsn_peers, std::stop_token stp = {}, TimeoutSettings tms = defaultTimeout) {
+        return TCPServer<Fn>(*this, std::forward<Fn>(fn), lsn_peers, tms, stp);
+    }
+    template<std::invocable<Stream> Fn>
+    auto tcp_server(Fn &&fn, std::vector<PeerName> &&lsn_peers, std::stop_token stp = {}, TimeoutSettings tms = defaultTimeout) {
+        return TCPServer<Fn>(*this, std::forward<Fn>(fn), lsn_peers, tms, stp);
     }
 
 };
