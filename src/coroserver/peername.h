@@ -141,7 +141,7 @@ public:
     static PeerName capture_sockaddr(Fn &&fn) {
         unsigned int sz = max_sockaddr_size;
         void *buff = alloca(max_sockaddr_size);
-        unsigned int capsz = fn(buff, sz);
+        unsigned int capsz = fn(reinterpret_cast<sockaddr *>(buff), sz);
         if (capsz == 0) return PeerName();
         else return from_sockaddr(buff);
     }
@@ -260,6 +260,8 @@ protected:
 
     struct ToStringHlp;
     struct HasherHelper;
+
+
 };
 
 
