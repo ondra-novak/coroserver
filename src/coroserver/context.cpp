@@ -14,7 +14,7 @@
 #include <system_error>
 #include <coro.h>
 
-#include "local_stream.h"
+
 #include "atomic_mutex.h"
 
 #include <atomic>
@@ -31,12 +31,65 @@
 #include <tuple>
 namespace coroserver {
 
+Context::Context()
+        :_scheduler(CondVar{this}) {}
+
+Context::Context(std::size_t iothreads)
+        :_scheduler(CondVar{this})
+{
+    if (iothreads > 0) {
+        if (iothreads > 1) {
+            _tpool.emplace(iothreads-1);
+            _scheduler.start([&](auto &&cb){
+                _tpool->enqueue(std::move(cb));
+            });
+        } else {
+            _scheduler.start([&](auto &&){});
+        }
+    }
+}
+
+void Context::CondVar::notify_all() {
+    _owner->_engine.cancel_wait_for_next_event();
+}
+void Context::CondVar::wait_until(std::unique_lock<std::mutex> &lk, std::chrono::system_clock::time_point tp) {
+    lk.unlock();
+    auto ntf = _owner->_engine.wait_for_next_event(tp);
+    if (_owner->_tpool.has_value()) {
+        _owner->_tpool->enqueue(std::move(ntf));
+    } else {
+        ntf();
+    }
+    lk.lock();
+
+}
+void Context::CondVar::wait(std::unique_lock<std::mutex> &lk) {
+    lk.unlock();
+    auto ntf = _owner->_engine.wait_for_next_event();
+    if (_owner->_tpool.has_value()) {
+        _owner->_tpool->enqueue(std::move(ntf));
+    } else {
+        ntf();
+    }
+    lk.lock();
+
+}
+
+
+Context::~Context() {
+    _engine.block_all(true);
+    _scheduler.stop();
+}
+
+#if 0
+
 static void init_signals(__sighandler_t h) {
     for (int i: std::initializer_list<int>{SIGTERM, SIGINT, SIGHUP, SIGQUIT}) {
         signal(i, h);
     }
 
 }
+
 
 
 class ContextIOImpl: public IAsyncSupport, public std::enable_shared_from_this<ContextIOImpl> {
@@ -533,6 +586,7 @@ std::pair<Stream, Stream> Context::create_pair(TimeoutSettings tms) {
 }
 
 
+#endif
 
 }
 

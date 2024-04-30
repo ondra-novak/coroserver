@@ -8,7 +8,7 @@
 #ifndef SRC_COROSERVER_SOCKET_STREAM_H_
 #define SRC_COROSERVER_SOCKET_STREAM_H_
 
-#include "async_support.h"
+#include "async_engine.h"
 #include "defs.h"
 #include "stream.h"
 #include <coro.h>
@@ -21,7 +21,10 @@ class ContextIOImpl;
 
 class SocketStream: public AbstractStreamWithMetadata {
 public:
-    SocketStream(AsyncSocket socket, PeerName peer, TimeoutSettings tms);
+    SocketStream(AsyncResource *socket,
+                 AsyncEngine engine,
+                 PeerName peer,
+                 TimeoutSettings tms);
 
     virtual coro::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;
@@ -32,7 +35,10 @@ public:
     virtual Counters get_counters() const noexcept override;
     virtual PeerName get_peer_name() const override;
 
-    static Stream create(AsyncSocket socket, PeerName peer, TimeoutSettings tms);
+    static Stream create(AsyncResource *socket,
+            AsyncEngine engine,
+            PeerName peer,
+            TimeoutSettings tms);
     virtual ~SocketStream();
 
 
@@ -40,12 +46,13 @@ public:
 
 protected:
 
-    AsyncSocket _socket;
+    AsyncResource *_socket;
+    AsyncEngine _engine;
     Counters _cntr;
     PeerName _peer;
 
-    coro::future<bool> _wait_read_result;
-    coro::future<bool> _wait_write_result;
+    coro::future<int> _wait_read_result;
+    coro::future<int> _wait_write_result;
     coro::promise<std::string_view> _read_promise;
     coro::promise<bool> _write_promise;
 

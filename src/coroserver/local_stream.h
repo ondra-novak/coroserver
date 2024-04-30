@@ -10,11 +10,12 @@
 
 
 
-#include "async_support.h"
+
 #include "defs.h"
 #include "stream.h"
 #include <coro.h>
 
+#include "async_engine.h"
 
 namespace coroserver {
 
@@ -23,7 +24,7 @@ class Context;
 
 class LocalStream: public AbstractStreamWithMetadata {
 public:
-    LocalStream(AsyncSocket read_fd,  AsyncSocket write_fd, PeerName peer, TimeoutSettings tms);
+    LocalStream(AsyncResource *read_fd,  AsyncResource *write_fd, AsyncEngine engine,  PeerName peer, TimeoutSettings tms);
 
     virtual coro::future<std::string_view> read() override;
     virtual std::string_view read_nb() override;

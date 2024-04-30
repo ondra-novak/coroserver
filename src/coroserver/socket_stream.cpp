@@ -7,17 +7,30 @@
 #include <linux/sockios.h>
 namespace coroserver {
 
-SocketStream::SocketStream(AsyncSocket socket, PeerName peer, TimeoutSettings tms)
+SocketStream::SocketStream(AsyncResource *socket,
+        AsyncEngine engine,
+        PeerName peer,
+        TimeoutSettings tms)
 :AbstractStreamWithMetadata(std::move(tms))
 ,_socket(std::move(socket))
+,_engine(std::move(engine))
 ,_peer(std::move(peer)) {
 }
 
+#if 0
 bool SocketStream::read_begin(std::string_view &buff) {
     buff = this->read_putback_buffer();
     if (!buff.empty() || _is_eof) return true;
     _read_buffer.resize(_new_buffer_size);
-    int r = ::recv(_socket, _read_buffer.data(), _read_buffer.size(), MSG_DONTWAIT| MSG_NOSIGNAL);
+    _wait_read_result << [&]{
+        return _engine.recv(_socket,_read_buffer.data(), _read_buffer.size());
+    };
+    if (!_wait_read_result.is_pending())
+        int r = f.get();
+        if (r > 0 && static_cast<std::size_t>(r) == _read_buffer.size()) {
+            _new_buffer_size = _new_buffer_size*3/2;
+        }
+    }
     if (r>0) {
         buff = std::string_view(_read_buffer.data(), r);
         if (buff.size() == _read_buffer.size()) {
@@ -53,28 +66,41 @@ void SocketStream::disable_nagle() {
    setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
 }
 
+#endif
+
 coro::future<std::string_view> SocketStream::read() {
-    std::string_view buff;
-    if (read_begin(buff)) return buff;
     return [&](auto p) {
-        disable_nagle();
+        std::string_view buff = this->read_putback_buffer();
+        if (_is_eof || !buff.empty()) {
+            p(buff);
+            return;
+        }
         _read_promise = std::move(p);
-        _wait_read_result << [&]{return _socket.input(_tms.get_read_timeout());};
-        _wait_read_result >> [&]{
-            try {
-                if (_wait_read_result.has_value()) {
-                    bool st = _wait_read_result;
-                    if (st) {
-                        _read_promise(read_nb());
-                    } else {
-                        _read_promise();
-                    }
-                } else {
+        _read_buffer.resize(_new_buffer_size);
+        _wait_read_result << [&]{
+            return _engine.recv(_socket, _read_buffer.data(), _read_buffer.size(),
+                    _tms.get_read_timeout());
+        };
+        if (!_wait_read_result.is_pending() && _wait_read_result.has_value()) {
+            int r = _wait_read_result.get();
+            if (r > 0 && static_cast<std::size_t>(r) == _read_buffer.size()) {
+                _new_buffer_size = _new_buffer_size*3/2;
+            }
+        }
+        _wait_read_result >> [this]{
+            if (_wait_read_result.has_value()) {
+                int r = _wait_read_result.get();
+                if (r < 0) {
+                    _read_promise();
+                } else if (r == 0) {
                     _is_eof = true;
                     _read_promise();
+                } else {
+                    _read_promise(_read_buffer.data(), static_cast<std::size_t>(r));
                 }
-            } catch (...) {
-                _read_promise.reject();
+            } else {
+                _is_eof = true;
+                _read_promise();
             }
         };
     };
@@ -103,61 +129,36 @@ void SocketStream::write_begin() {
         _write_promise(false);
         return;
     }
-    int r;
-    do {
-        enable_nagle();
-        r = ::send(_socket, _write_buffer.data(), _write_buffer.size(), MSG_DONTWAIT|MSG_NOSIGNAL);
-        if (r > 0) {
-            auto sub = _write_buffer.substr(r);
-            _cntr.write+=r;
-            if (sub.empty()) {
-                _write_promise(true);
-                return ;
+    _wait_write_result << [&]{
+        return _engine.send(_socket, _write_buffer.data(), _write_buffer.size(),
+                _tms.get_write_timeout());
+    };
+    _wait_write_result >> [this]{
+        if (_wait_write_result.has_value()) {
+            int r = _wait_write_result.get();
+            if (r > 0) {
+                _write_buffer = _write_buffer.substr(r);
+                if (_write_buffer.empty()) _write_promise(true);
+                this->write_begin();
+            } else {
+                _write_promise(false);
             }
-            _write_buffer = sub;
-        }
-    } while (r > 0);
-    if (r < 0) {
-        int e = errno;
-        if (e == EWOULDBLOCK|| e == EAGAIN) {
-            _wait_write_result << [&]{return _socket.output(_tms.get_write_timeout());};
-            _wait_write_result >> [&]{
-                try {
-                    if (_wait_write_result.has_value()) {
-                        bool st = _wait_write_result;
-                        if (st) {
-                            write_begin();
-                        } else {
-                            _write_promise(false);
-                        }
-                    } else {
-                        _is_closed = true;
-                        _write_promise(false);
-                    }
-                } catch (...) {
-                    _write_promise.reject();
-                }
-            };
-        } else if (e == EPIPE) {
-            _is_closed = true;
-            _write_promise(false);
         } else {
-            throw std::system_error(e, std::system_category(), "send failed");
+            _write_promise(false);
         }
-    } else {
-        throw std::system_error(EPIPE, std::system_category(), "send returned 0");
-    }
+    };
+
 }
 
 coro::future<bool> SocketStream::write_eof() {
     if (_is_closed) return false;
-    ::shutdown(_socket, SHUT_WR);
+    _engine.send_eof(_socket);
     _is_closed = true;
     return true;
 }
 
 void SocketStream::shutdown() {
-    return _socket.shutdown();
+    return _engine.shutdown(_socket);
 }
 
 
@@ -169,79 +170,50 @@ PeerName SocketStream::get_peer_name() const {
     return _peer;
 }
 
-static int get_siocoutq(SocketHandle socket) {
-    int value = 0;
-    ioctl(socket, SIOCOUTQ, &value);
-    return value;
-}
 
-///discards any input data from the socket
-/**
- * @param socket socket
- * @retval true continue
- * @retval false peer closed/error
- */
-static bool discard_read(int socket) {
-    char buff[100];
-    do {
-        //read
-        int r = ::recv(socket, buff,100, MSG_DONTWAIT);
-        //check result
-        if (r < 0) {
-            int err = errno;
-            //in case of wouldblock, return true
-            if (err == EWOULDBLOCK || err == EAGAIN) {
-                return true;
-            } else {
-                //any other error
-                return false;
-            }
-        }
-        //if result is zero - other side closed socket, so nothing need to be done
-        if (r == 0) {
-            return false;
-        }
-        //repeat if there are stil data
-    } while (true);
-
-}
-
-static coro::async<void> shutdown_slow(AsyncSocket sock) {
+static coro::coroutine shutdown_slow(AsyncResource *h, AsyncEngine engine) {
     auto max_wait = std::chrono::system_clock::now()+std::chrono::seconds(30);
     //if there still some data
-    while (get_siocoutq(sock) > 0 && max_wait > std::chrono::system_clock::now()) {
-        //wait for
-        auto p = sock.input(std::chrono::milliseconds(500));
-        //co_await and check status - no value mean, we can no longer wait
-        if (co_await !p)
-            break;
-        //check status
-        bool st = p;
-        //if there are data, discard them
-        if (st) discard_read(sock);
-    }
-    //AsyncSocket performs ::close on socket
+    try {
+        while (engine.get_siocoutq(h) > 0 && max_wait > std::chrono::system_clock::now()) {
+            //wait for
+            char buff[1024];
+            auto p = engine.recv(h, buff, sizeof(buff), TimeoutSettings::from_duration(std::chrono::milliseconds(100)));
+            //co_await and check status - no value mean, we can no longer wait
+            if (co_await !p )
+                break;
+            if (p.get() == 0) { //if connection has been closed, than exit too
+                break;
+            }
 
+        }
+    } catch (...) {
+        //empty
+    }
+    engine.close_handle(h);
 }
 
 
 
 SocketStream::~SocketStream() {
-    //disable nagle - no more data will be send
-    disable_nagle();
-    //shutdown output ( send FIN )
-    ::shutdown(_socket, SHUT_WR);
-    //check output queue, if output queue is non-empty, discard any input data
-    if (get_siocoutq(_socket) > 0 && discard_read(_socket)) {
-        //and linger asynchronously in a coroutine
-        shutdown_slow(std::move(_socket)).detach();
+    _engine.send_eof(_socket);
+    if (_engine.get_siocoutq(_socket)> 0) {
+        shutdown_slow(_socket, std::move(_engine));
+    } else {
+        _engine.close_handle(_socket);
     }
-    //AsyncSocket performs ::close on socket
 }
 
 
-Stream SocketStream::create(AsyncSocket socket, PeerName peer, TimeoutSettings tms) {
-    return Stream(std::make_shared<SocketStream>(std::move(socket), std::move(peer), std::move(tms)));
+Stream SocketStream::create(AsyncResource *socket,
+        AsyncEngine engine,
+        PeerName peer,
+        TimeoutSettings tms) {
+    return Stream(std::make_shared<SocketStream>(
+            std::move(socket),
+            std::move(engine),
+            std::move(peer),
+            std::move(tms)));
 }
 
 }

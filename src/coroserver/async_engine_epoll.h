@@ -1,0 +1,128 @@
+#pragma once
+#ifndef SRC_COROSERVER_ASYNC_ENGINE_EPOLL_H_
+#define SRC_COROSERVER_ASYNC_ENGINE_EPOLL_H_
+
+#include "peername.h"
+#include "event_fd.h"
+#include "async_engine.h"
+#include <coro.h>
+#include <mutex>
+#include <set>
+#include <chrono>
+namespace coroserver {
+
+
+class AsyncEngineImpl {
+public:
+
+    AsyncEngineImpl();
+    ~AsyncEngineImpl();
+
+    AsyncEngineImpl(const AsyncEngineImpl &) = delete;
+    AsyncEngineImpl &operator=(const AsyncEngineImpl &) = delete;
+
+
+    using Handle = AsyncEngine::Handle;
+
+
+    using RetVal = coro::future<int>;
+    using Promise = coro::promise<int>;
+    using Notify = coro::promise<int>::notify;
+    using Timepoint = std::chrono::system_clock::time_point;
+
+    static Handle connect(const PeerName &target);
+    static Handle listen(const PeerName &ifc);
+
+    RetVal recv(Handle h, void *buffer, std::size_t size, Timepoint timeout);
+    RetVal send(Handle h, const void *buffer, std::size_t size, Timepoint timeout);
+    RetVal wait_connect(Handle h, Timepoint timeout);
+    RetVal accept(Handle h, Handle &retHandle, PeerName &retPeerName, Timepoint timeout);
+    static void send_eof(Handle h);
+    void close_handle(Handle h);
+    void block(Handle h, bool blocked);
+
+    Notify wait_for_next_event(Timepoint timeout);
+    Notify wait_for_next_event();
+    void cancel_wait_for_next_event();
+    static int get_siocoutq(Handle h);
+
+    void block_all(bool block);
+
+protected:
+
+    static constexpr Timepoint maxtp = Timepoint::max();
+
+    struct InfoBase {
+        Promise _prom = {};
+        Timepoint _tp = maxtp;
+    };
+
+    struct InfoEmpty: InfoBase {};
+
+    struct AcceptInfo: InfoBase {
+        Handle *_handle = nullptr;
+        PeerName *_peerName = nullptr;
+    };
+
+    struct ConnectInfo: InfoBase {
+    };
+
+    struct RecvInfo: InfoBase {
+        void *_buffer = nullptr;
+        std::size_t _buffer_size = 0;
+    };
+
+    struct SendInfo: InfoBase {
+        const void *_buffer = nullptr;
+        std::size_t _buffer_size = 9;
+    };
+
+
+    class SocketReg : public AsyncResource {
+    public:
+
+        SocketReg (FileDescriptor socket):_socket(std::move(socket)) {}
+
+
+        ///associated socket
+        FileDescriptor _socket;
+
+        ///blocked async io
+        bool _blocked = false;
+
+        ///current timeout - as registered in timeout map;
+        Timepoint _timeout;
+        std::variant<InfoEmpty, AcceptInfo, RecvInfo> _recv_state {std::in_place_index<0>};
+        std::variant<InfoEmpty, ConnectInfo, SendInfo> _send_state {std::in_place_index<0>};
+        static SocketReg &from_handle(Handle h);
+    };
+
+    struct TimeoutMapCmp {
+        bool operator()(SocketReg *a, SocketReg *b) const {
+            return (a->_timeout < b->_timeout)
+                    || (a->_timeout == b->_timeout && a < b);
+        }
+    };
+
+    using TimeoutMap = std::set<SocketReg *, TimeoutMapCmp>;
+    TimeoutMap _tm_map;
+
+    FileDescriptor _epoll;
+    EFDEventRegister _notify;
+    std::mutex _mx;
+    bool _blocked_all = false;
+    std::queue<Notify> _ready;
+
+
+    void update_socket(SocketReg &reg);
+    bool update_timeout(SocketReg &reg);
+    bool is_blocked(SocketReg &reg);
+};
+
+
+
+}
+
+
+
+#endif /* SRC_COROSERVER_ASYNC_ENGINE_EPOLL_H_ */

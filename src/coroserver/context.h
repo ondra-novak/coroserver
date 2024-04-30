@@ -7,13 +7,14 @@
 
 #ifndef SRC_USERVER_IO_CONTEXT_H_
 #define SRC_USERVER_IO_CONTEXT_H_
-#include "timer.h"
 #include "defs.h"
-#include "ipoller.h"
 #include "stream.h"
 #include "peername.h"
 
 #include <coro.h>
+
+#include "async_engine.h"
+
 #include <functional>
 
 #include <stop_token>
@@ -43,95 +44,18 @@ class Context {
 public:
 
     Context();
+    explicit Context(std::size_t iothreads);
 
-    Context(Context &&other);
-    Context &operator=(Context &&other);
-
+    Context(const Context &) = delete;
+    Context &operator=(const Context &) = delete;
 
     ~Context();
 
 
-    using SchItem = coro::promise<bool>::notify;
-
-    ///Run foreground (single threaded)
-    void run();
-
-    ///Run control thread foreground, use custom scheduler
-    void run(coro::function<void(SchItem)> schedule_fn);
-
-    ///start background thread - single threaded execution
-    void start();
-
-    ///Start thread at background, use custom scheduler
-    void start(coro::function<void(SchItem)> schedule_fn);
-
-    ///start using thread pool
-    void start(std::shared_ptr<coro::thread_pool> thread_pool);
-
-    ///start and create thread pool - use specified count threads
-    /**
-     * @param threads count of threads allocated for the thread pool. Note that
-     * there is always one extra thread for control thread
-     */
-    void start(unsigned int threads);
-
-
-    ///start context in foregrount, stop it, when future is resolved
-    /**
-     * @param fut future to test
-     * @param schedule_fn function called to schedule an action. You can use thread_pool scheduler
-     * @return result of future
-     */
-    template<typename T, std::invocable<SchItem> Fn>
-    T run_until(coro::future<T> &fut, Fn &&schedule_fn) {
-        if (fut.set_callback([&]{stop();})) {
-            run(std::forward<Fn>(schedule_fn));
-        }
-        return fut.get();
-
-    }
-    ///start context in foregrount, stop it, when future is resolved
-    /**
-     * @param fut future to test
-     * @param schedule_fn function called to schedule an action. You can use thread_pool scheduler
-     * @return result of future
-     */
-    template<typename T, std::invocable<SchItem> Fn>
-    T run_until(coro::future<T> &&fut, Fn &&schedule_fn) {
-        return run_until(fut, std::forward<Fn>(schedule_fn));
-    }
-
-    ///start context in foregrount, stop it, when future is resolved
-    /**
-     * @param fut future to test
-     * @return result of future
-     */
     template<typename T>
-    T run_until(coro::future<T> &fut) {return run_until(fut, [](auto){});}
-    ///start context in foregrount, stop it, when future is resolved
-    /**
-     * @param fut future to test
-     * @return result of future
-     */
-    template<typename T>
-    T run_until(coro::future<T> &&fut) {return run_until(fut);}
+    auto run_until(coro::future<T> &fut) {
 
-
-    static auto thread_pool(std::shared_ptr<coro::thread_pool> tpool) {
-        return [tpool](SchItem item) mutable {tpool->enqueue(std::move(item));};
     }
-    static auto thread_pool(unsigned int thread_count) {
-        return thread_pool(std::make_shared<coro::thread_pool>(thread_count));
-    }
-
-    ///Create listening socket at given peer
-    AsyncSocket listen_socket(const PeerName &addr);
-    ///Create connected socket. Connection is asynchronous, you need to check status of socket
-    AsyncSocket create_connected_socket(const PeerName &addr);
-
-
-
-
 
     ///Create accept generator
     /**
@@ -191,24 +115,6 @@ public:
 
 
 
-    ///Stop the running context
-    /**
-     * - marks all connections closed
-     * - disables io_wait, it always resolves connection as closed
-     * - stops any accept-generator
-     * - resumes all suspended coroutines waiting for io with an error state
-     *
-     * Internally the context and associated thread pool is left running to allows coroutines
-     * to finish their work. You need to join all pending coroutines to ensure, that
-     * everything is stopped. The context itself is destroyed once all references are removed
-     */
-    void stop();
-
-
-    ///Create timer
-    /** The timer provides scheduling features, such a sleep_for and sleep_until for coroutines */
-    Timer create_timer();
-
     ///create stream which serves as pipe
     Stream create_pipe(TimeoutSettings tms = {});
 
@@ -240,7 +146,21 @@ public:
 
 
 protected:
-      std::shared_ptr<ContextIOImpl> _ptr;
+
+    struct CondVar {
+        Context *_owner;
+        void notify_all();
+        void wait_until(std::unique_lock<std::mutex> &lk, std::chrono::system_clock::time_point tp);
+        void wait(std::unique_lock<std::mutex> &lk);
+    };
+
+
+    std::optional<coro::thread_pool> _tpool;
+    AsyncEngine _engine;
+    coro::scheduler_t<CondVar> _scheduler;
+
+
+
 
 
 public:
