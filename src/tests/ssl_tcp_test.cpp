@@ -114,9 +114,7 @@ int main() {
     auto listener = ctx.accept(addr);
 
     write_task(ctx, addr[0].get_port(), client_sslctx).detach();
-    coro::future<void> r = server_task(listener(), server_sslctx);
-    r >> [&]{ctx.stop();};
-    ctx.run();
+    ctx.start(server_task(listener(), server_sslctx));
 
 
 }

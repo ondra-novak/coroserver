@@ -16,6 +16,10 @@ AsyncEngine::RetVal AsyncEngine::recv(Handle h, void *buffer, std::size_t size,
     return _ptr->recv(h, buffer, size, timeout);
 }
 
+int AsyncEngine::recv_nb(Handle h, void *buffer, std::size_t size) {
+    return _ptr->recv_nb(h, buffer, size);
+}
+
 AsyncEngine::RetVal AsyncEngine::send(Handle h, const void *buffer,
         std::size_t size, Timepoint timeout) {
     return _ptr->send(h, buffer, size, timeout);
@@ -47,31 +51,61 @@ AsyncEngine::Task AsyncEngine::wait_for_next_event(Timepoint timeout) {
     return _ptr->wait_for_next_event(timeout);
 }
 
-coro::future<AsyncEngine::Handle> AsyncEngine::connect(const PeerName &target, Timepoint timeout) {
+coro::future<AsyncEngine::UniqueHandle> AsyncEngine::connect(const PeerName &target, Timepoint timeout, std::stop_token cancel) {
     Handle h = _ptr->connect(target);
+
+    std::stop_callback _(cancel, [&]{
+        _ptr->block(h,true);
+    });
+
     try {
         int r = co_await _ptr->wait_connect(h, timeout);
         if (r == -1) throw std::system_error(ETIMEDOUT, std::system_category(), "Connect timeout");
-        co_return h;
+        if (r == 0) throw coro::await_canceled_exception();
+        co_return UniqueHandle(h, _ptr);
     } catch (...) {
         _ptr->close_handle(h);
         throw;
     }
 }
 
-AsyncEngine::Handle AsyncEngine::listen(const PeerName &ifc) {
-    return _ptr->listen(ifc);
+AsyncEngine::UniqueHandle AsyncEngine::listen(const PeerName &ifc) {
+    return {_ptr->listen(ifc), _ptr};
 }
 
 AsyncEngine::Task AsyncEngine::wait_for_next_event() {
     return _ptr->wait_for_next_event();
 }
 
+void AsyncEngine::cancel_wait_for_next_event() {
+    _ptr->cancel_wait_for_next_event();
+}
+
+
 void AsyncEngine::BlockingDeleter::operator ()(AsyncEngine *ptr) {
     ptr->_ptr->block(h, false);
 }
 
 int AsyncEngine::get_siocoutq(Handle h) {
+    return _ptr->get_siocoutq(h);
+}
+
+PeerName AsyncEngine::get_name(Handle h) {
+    return _ptr->get_name(h);
+}
+
+
+void AsyncEngine::UniqueHandleDeleter::operator()(AsyncResource *h) {
+    _ptr->close_handle(h);
+}
+
+AsyncEngine::AsyncEngine(std::shared_ptr<AsyncEngineImpl> ptr):_ptr(ptr) {}
+
+AsyncEngine AsyncEngine::get_engine(const UniqueHandle &h) {
+    return AsyncEngine(h.get_deleter()._ptr);
+}
+void AsyncEngine::block_all(bool block) {
+    _ptr->block_all(block);
 }
 
 }

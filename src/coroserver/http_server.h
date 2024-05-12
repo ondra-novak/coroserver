@@ -61,7 +61,7 @@ namespace _details {
     inline constexpr bool is_future = is_future_t<X>::value;
 
 
-    coro::prepared_coro deliver(coro::promise<void>::notify &&ntf) {
+    inline coro::prepared_coro deliver(coro::promise<void>::notify &&ntf) {
         coro::prepared_coro out;
         ntf.deliver([&](auto &&fn){out = fn();});
         return out;

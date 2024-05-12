@@ -107,9 +107,13 @@ coro::future<std::string_view> SocketStream::read() {
 }
 
 std::string_view SocketStream::read_nb() {
-    std::string_view buff;
-    read_begin(buff);
-    return buff;
+    std::string_view buff = this->read_putback_buffer();
+    if (_is_eof || !buff.empty()) {
+        return buff;
+    }
+    _read_buffer.resize(_new_buffer_size);
+    int r = _engine.recv_nb(_socket, _read_buffer.data(), _read_buffer.size());
+    return {_read_buffer.data(), static_cast<std::size_t>(r)};
 }
 
 

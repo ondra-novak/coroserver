@@ -34,6 +34,7 @@ public:
     static Handle listen(const PeerName &ifc);
 
     RetVal recv(Handle h, void *buffer, std::size_t size, Timepoint timeout);
+    int recv_nb(Handle h, void *buffer, std::size_t size);
     RetVal send(Handle h, const void *buffer, std::size_t size, Timepoint timeout);
     RetVal wait_connect(Handle h, Timepoint timeout);
     RetVal accept(Handle h, Handle &retHandle, PeerName &retPeerName, Timepoint timeout);
@@ -45,6 +46,7 @@ public:
     Notify wait_for_next_event();
     void cancel_wait_for_next_event();
     static int get_siocoutq(Handle h);
+    PeerName get_name(Handle h);
 
     void block_all(bool block);
 
@@ -55,6 +57,7 @@ protected:
     struct InfoBase {
         Promise _prom = {};
         Timepoint _tp = maxtp;
+        InfoBase ():_prom(),_tp(maxtp) {} //GCC-13 bug prevent default
     };
 
     struct InfoEmpty: InfoBase {};
@@ -92,8 +95,8 @@ protected:
 
         ///current timeout - as registered in timeout map;
         Timepoint _timeout;
-        std::variant<InfoEmpty, AcceptInfo, RecvInfo> _recv_state {std::in_place_index<0>};
-        std::variant<InfoEmpty, ConnectInfo, SendInfo> _send_state {std::in_place_index<0>};
+        std::variant<InfoEmpty, AcceptInfo, RecvInfo> _recv_state {};
+        std::variant<InfoEmpty, ConnectInfo, SendInfo> _send_state {};
         static SocketReg &from_handle(Handle h);
     };
 
@@ -112,6 +115,7 @@ protected:
     std::mutex _mx;
     bool _blocked_all = false;
     std::queue<Notify> _ready;
+    std::vector<std::unique_ptr<SocketReg> > _to_free;
 
 
     void update_socket(SocketReg &reg);

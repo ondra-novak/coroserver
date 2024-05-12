@@ -269,7 +269,7 @@ struct QueryField {
         char_opt
     };
 
-    constexpr QueryField():_type(Type::empty) {}
+    constexpr QueryField():_type(Type::empty),_u_short_v(nullptr) {} //GCC-13 bug requires at least 1 variant active
     constexpr QueryField(unsigned short T::* u_short_v):_type(Type::u_short_v),_u_short_v(u_short_v) {}
     constexpr QueryField(short T::* s_short_v):_type(Type::s_short_v),_s_short_v(s_short_v) {}
     constexpr QueryField(unsigned long T::* u_long_v):_type(Type::u_long_v),_u_long_v(u_long_v) {}

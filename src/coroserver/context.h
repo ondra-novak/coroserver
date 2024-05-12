@@ -43,19 +43,42 @@ class ContextIOImpl;
 class Context {
 public:
 
+    ///create dorman context
+    /**
+     * Context can't handle asynchronous operations. You need to call start()
+     */
     Context();
+    ///create context and start n-threads
     explicit Context(std::size_t iothreads);
-
-    Context(const Context &) = delete;
-    Context &operator=(const Context &) = delete;
 
     ~Context();
 
 
-    template<typename T>
-    auto run_until(coro::future<T> &fut) {
+    template<coro::awaitable Awt>
+    auto start(Awt &&awt) -> coro::awaitable_result<Awt> {
 
+        auto stop_coro = [&]()->coro::future<coro::awaitable_result<Awt> > {
+            co_return co_await awt;
+        };
+        coro::future<coro::awaitable_result<Awt> > r = stop_coro();
+        _scheduler.run(r);
+        return r.get();
     }
+
+
+    ///stop context
+    /**
+     * Stops context canceling all asynchronous operations. The context is not destroyed,
+     * however it can no longer be used to perform async IO operations. All opened conections
+     * are reported as closed by peer. Some service can throw an exception
+     * coro::await_canceled_exception.
+     *
+     * This function is useful when you need to cleanup any still opened connection to
+     * ensure context termination. However this doesn't garantee that termination
+     * happens, it only disables blocking.
+     */
+    void stop();
+
 
     ///Create accept generator
     /**

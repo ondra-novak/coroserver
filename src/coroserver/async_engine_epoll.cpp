@@ -16,7 +16,7 @@ AsyncEngineImpl::AsyncEngineImpl():_epoll(epoll_create1(EPOLL_CLOEXEC)) {
         int e = errno;
         throw std::system_error(e, std::system_category(), "epoll_create1");
     }
-    epoll_event ev = {EPOLLONESHOT|EPOLLIN, {.ptr = nullptr}};
+    epoll_event ev = {EPOLLIN, {.ptr = nullptr}};
     epoll_ctl(_epoll, EPOLL_CTL_ADD, _notify.getFD(), &ev);
 }
 
@@ -54,6 +54,20 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::recv(Handle h, void *buffer, std::size_
     } else {
         return std::make_exception_ptr(std::system_error(e, std::system_category(), "recv"));
     }
+}
+
+int AsyncEngineImpl::recv_nb(Handle h, void *buffer, std::size_t size) {
+    auto &reg = SocketReg::from_handle(h);
+    int r = ::read(reg._socket, buffer, size);
+    if (r >= 0) {
+        return r;
+    }
+    int e = errno;
+    if (e == EWOULDBLOCK || e == EPIPE) {
+        return 0;
+    }
+    throw std::system_error(e, std::system_category(), "recv_nb");
+
 }
 
 AsyncEngineImpl::RetVal AsyncEngineImpl::send(Handle h,const void *buffer, std::size_t size, Timepoint timeout) {
@@ -209,6 +223,8 @@ void AsyncEngineImpl::block_all(bool block) {
                 to_cancel += s._prom;
                 to_cancel += r._prom;
             }, reg->_send_state, reg->_recv_state);
+            reg->_recv_state.emplace<InfoEmpty>();
+            reg->_send_state.emplace<InfoEmpty>();
         }
         _tm_map.clear();
     }
@@ -256,7 +272,7 @@ void AsyncEngineImpl::close_handle(Handle h) {
         std::lock_guard _(_mx);
         _tm_map.erase(&reg);
     }
-    delete (&reg);
+    _to_free.push_back(std::unique_ptr<SocketReg>(&reg));
 }
 
 
@@ -316,9 +332,8 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                 if (ev.events & (EPOLLIN| EPOLLERR)) {
                     if (std::holds_alternative<AcceptInfo>(reg._recv_state)) {
                         auto &a = std::get<AcceptInfo>(reg._recv_state);
-                        int r;
                         *a._peerName = PeerName::capture_sockaddr([&](sockaddr *addr, socklen_t slen){
-                            r = ::accept4(ev.data.fd,addr, &slen, SOCK_CLOEXEC|SOCK_NONBLOCK);
+                            r = ::accept4(reg._socket,addr, &slen, SOCK_CLOEXEC|SOCK_NONBLOCK);
                             return r<0?0:slen;
                         });
                         if (r >= 0) {
@@ -339,7 +354,7 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                     }
                     else if (std::holds_alternative<RecvInfo>(reg._recv_state)) {
                         auto &me = std::get<RecvInfo>(reg._recv_state);
-                        int r = ::read(ev.data.fd, me._buffer, me._buffer_size);
+                        int r = ::read(reg._socket, me._buffer, me._buffer_size);
                         if (r >= 0) {
                             _ready.push(me._prom(r));
                             reg._recv_state.emplace<InfoEmpty>();
@@ -358,7 +373,7 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                         auto &me = std::get<ConnectInfo>(reg._send_state);
                         int error_code;
                         socklen_t error_code_size = sizeof(error_code);
-                        ::getsockopt(ev.data.fd, SOL_SOCKET, SO_ERROR, &error_code, &error_code_size);
+                        ::getsockopt(reg._socket, SOL_SOCKET, SO_ERROR, &error_code, &error_code_size);
                         if (!error_code) {
                             _ready.push(me._prom(1));
                         } else {
@@ -370,7 +385,7 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                     }
                     else if (std::holds_alternative<SendInfo>(reg._send_state)) {
                         auto &me = std::get<SendInfo>(reg._send_state);
-                        int r = ::write(ev.data.fd, me._buffer, me._buffer_size);
+                        int r = ::write(reg._socket, me._buffer, me._buffer_size);
                         if (r >= 0) {
                             _ready.push(me._prom(r));
                             me._tp = maxtp;
@@ -395,6 +410,7 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
     }
     auto n = std::move(_ready.front());
     _ready.pop();
+    _to_free.clear();
     return n;
 
 }
@@ -412,6 +428,16 @@ int AsyncEngineImpl::get_siocoutq(Handle h) {
     int value = 0;
     ioctl(reg._socket, SIOCOUTQ, &value);
     return value;
+}
+
+PeerName AsyncEngineImpl::get_name(Handle h) {
+    auto &reg = SocketReg::from_handle(h);
+    return PeerName::capture_sockaddr([&](sockaddr *saddr, socklen_t slen){
+        if (getsockname(reg._socket, saddr, &slen)<0) {
+            throw std::system_error(errno, std::system_category(), "getsockname failed");
+        }
+        return slen;
+    });
 }
 
 }

@@ -34,8 +34,7 @@ namespace coroserver {
 Context::Context()
         :_scheduler(CondVar{this}) {}
 
-Context::Context(std::size_t iothreads)
-        :_scheduler(CondVar{this})
+Context::Context(std::size_t iothreads):Context()
 {
     if (iothreads > 0) {
         if (iothreads > 1) {
@@ -47,6 +46,15 @@ Context::Context(std::size_t iothreads)
             _scheduler.start([&](auto &&){});
         }
     }
+}
+
+void Context::stop() {
+    _engine.block_all(true);
+}
+
+Context::~Context() {
+    stop();
+    _scheduler.stop();
 }
 
 void Context::CondVar::notify_all() {
@@ -75,11 +83,90 @@ void Context::CondVar::wait(std::unique_lock<std::mutex> &lk) {
 
 }
 
+static coro::generator<Stream> listen_generator(AsyncEngine::UniqueHandle socket,
+        TimeoutSettings tmcfg,
+        std::stop_token stoken,
+        int group_id) {
 
-Context::~Context() {
-    _engine.block_all(true);
-    _scheduler.stop();
+    AsyncEngine eng = AsyncEngine::get_engine(socket);
+
+    std::stop_callback stopcb(stoken, [&]{
+        eng.shutdown(socket.get());
+    });
+
+    while (true) {
+        AsyncEngine::Handle retHandle;
+        PeerName retPeerName;
+        int r = co_await eng.accept(socket.get(), retHandle, retPeerName, std::chrono::system_clock::time_point::max());
+        if (r < 1) break;
+        retPeerName.set_group_id(group_id);
+        co_yield Stream(SocketStream::create(retHandle, eng, retPeerName, tmcfg));
+    }
 }
+
+
+coro::generator<Stream> Context::accept(std::vector<PeerName> &list,
+                                std::stop_token token, TimeoutSettings tms) {
+
+    std::vector<coro::generator<Stream> > gens;
+    std::vector<SocketHandle> handles;
+    for (PeerName &x: list) {
+        auto h  = _engine.listen(x);
+        int id =x.get_group_id();
+        x = _engine.get_name(h.get()).set_group_id(id);
+        gens.push_back(listen_generator(std::move(h), tms, token,  id));
+    }
+    return coro::aggregator(std::move(gens));
+}
+
+coro::generator<Stream> Context::accept(
+        std::vector<PeerName> &&list,std::stop_token token,TimeoutSettings tms) {
+    return accept(list, token, tms);
+}
+
+
+using ConnectToResult = std::pair<AsyncEngine::UniqueHandle, const PeerName &>;
+
+template<typename Scheduler, typename Engine>
+static coro::async<ConnectToResult>connect_to(Scheduler &sch, Engine &eng,
+        const PeerName &peer, int delay_sec,
+        TimeoutSettings::Dur timeout,
+        std::stop_token stop) {
+
+
+    if (delay_sec) {
+        std::stop_callback _(stop, [&]{
+            sch.cancel(&stop);
+        });
+        co_await sch.sleep_for(std::chrono::seconds(delay_sec), &stop);
+    }
+    auto h =  co_await eng.connect(peer, TimeoutSettings::from_duration(timeout), std::move(stop));
+    co_return ConnectToResult (std::move(h),peer);
+
+}
+
+coro::future<Stream> Context::connect(std::vector<PeerName> list, TimeoutSettings::Dur connect_timeout, TimeoutSettings tms) {
+    std::stop_source stop;
+
+    coro::task_list<coro::future<ConnectToResult> > tasks;
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        tasks.push_back(connect_to(_scheduler, _engine, list[i], i, connect_timeout, stop.get_token()));
+    }
+    std::optional<ConnectToResult> r;
+    std::exception_ptr e;
+    for (auto &f : coro::when_each(tasks)) {
+        try {
+            r.emplace(std::move(co_await f));
+            stop.request_stop();
+        } catch (...) {
+            e = std::current_exception();
+        }
+    }
+    if (!r.has_value()) std::rethrow_exception(e);
+    co_return Stream(SocketStream::create(r->first.release(), _engine, r->second, tms));
+
+}
+
 
 #if 0
 
@@ -258,20 +345,6 @@ static coro::generator<Stream> listen_generator(AsyncSocket socket,
 }
 
 
-
-coro::generator<Stream> Context::accept(std::vector<PeerName> &list,
-                                std::stop_token token, TimeoutSettings tms) {
-
-    std::vector<coro::generator<Stream> > gens;
-    std::vector<SocketHandle> handles;
-    for (PeerName &x: list) {
-        AsyncSocket socket = Context::listen_socket(x);
-        int id =x.get_group_id();
-        x = PeerName::from_socket(socket,false).set_group_id(id);
-        gens.push_back(listen_generator(std::move(socket), tms, token,  id));
-    }
-    return coro::aggregator(std::move(gens));
-}
 
 coro::generator<Stream> Context::accept(std::vector<PeerName> &&list,
                                 std::stop_token token, TimeoutSettings tms) {

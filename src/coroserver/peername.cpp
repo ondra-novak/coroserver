@@ -367,17 +367,6 @@ bool PeerName::Unix::operator ==(const Unix &x) const {
     return path == x.path;
 }
 
-PeerName PeerName::from_socket(SocketHandle h, bool peer_name) {
-    sockaddr_storage saddr;
-    socklen_t slen = sizeof(saddr);
-    auto fn = peer_name?&getpeername:&getsockname;
-    if (fn(h,reinterpret_cast<sockaddr *>(&saddr), &slen) == -1) {
-        int err = errno;
-        throw std::system_error(err, std::system_category(), "getsockname");
-    }
-    return from_sockaddr(reinterpret_cast<sockaddr *>(&saddr));
-
-}
 
 std::string PeerName::get_port() {
     return std::visit([](const auto &x)->std::string {

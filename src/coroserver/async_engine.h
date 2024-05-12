@@ -27,6 +27,15 @@ public:
     ///Connection handle
     using Handle = AsyncResource *;
 
+    struct UniqueHandleDeleter {
+        std::shared_ptr<AsyncEngineImpl> _ptr;
+        UniqueHandleDeleter(std::shared_ptr<AsyncEngineImpl> ptr):_ptr(std::move(ptr)) {}
+
+        void operator()(AsyncResource *h);
+    };
+
+    using UniqueHandle = std::unique_ptr<AsyncResource, UniqueHandleDeleter>;
+
     ///Return value of most operations
     /**
      * @retval -1 timeout
@@ -53,10 +62,12 @@ public:
     /**
      * @param target target address
      * @param timeout timeout point when operation expires
+     * @param cancel a stop token which allows to cancel operation.
      * @return connection handle
      * @exception system_error any error including timeout.
+     * @exception await_canceled_exception if token is used to cancel operation
      */
-    coro::future<Handle> connect(const PeerName &target, Timepoint timeout);
+    coro::future<UniqueHandle> connect(const PeerName &target, Timepoint timeout, std::stop_token cancel);
 
 
     ///Listen for incomming connection
@@ -64,10 +75,14 @@ public:
      * @param ifc interface name
      * @return a handle, which must be passed to accept to listen first connection
      */
-    Handle listen(const PeerName &ifc);
+    UniqueHandle listen(const PeerName &ifc);
+
+    static AsyncEngine get_engine(const UniqueHandle &h);
 
     ///Recieve
     RetVal recv(Handle h, void *buffer, std::size_t size, Timepoint timeout);
+    int recv_nb(Handle h, void *buffer, std::size_t size);
+
     ///Send
     RetVal send(Handle h, const void *buffer, std::size_t size, Timepoint timeout);
     ///Accept incomming
@@ -79,6 +94,9 @@ public:
 
     ///retrieve length of output queue (at OS level);
     int get_siocoutq(Handle h);
+
+    PeerName get_name(Handle h);
+
 
     ///Waits for the next event to arrive, and then returns it.
     /**
@@ -130,10 +148,13 @@ public:
 
 protected:
 
+    AsyncEngine(std::shared_ptr<AsyncEngineImpl> ptr);
+
     std::shared_ptr<AsyncEngineImpl> _ptr;
-
-
 };
+
+
+
 
 
 
