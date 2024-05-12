@@ -55,14 +55,14 @@ public:
 
 
     template<coro::awaitable Awt>
-    auto start(Awt &&awt) -> coro::awaitable_result<Awt> {
+    auto start(Awt &&awt)  {
 
         auto stop_coro = [&]()->coro::future<coro::awaitable_result<Awt> > {
             co_return co_await awt;
         };
         coro::future<coro::awaitable_result<Awt> > r = stop_coro();
         _scheduler.run(r);
-        return r.get();
+        return r.await_resume();
     }
 
 
@@ -182,6 +182,9 @@ protected:
     AsyncEngine _engine;
     coro::scheduler_t<CondVar> _scheduler;
 
+
+    std::once_flag _signal_init;
+    Stream _signal_stream;
 
 
 

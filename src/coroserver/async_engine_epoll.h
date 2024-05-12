@@ -117,9 +117,11 @@ protected:
     std::queue<Notify> _ready;
     std::vector<std::unique_ptr<SocketReg> > _to_free;
 
+    Timepoint _next_wakeup = {};
 
     void update_socket(SocketReg &reg);
     bool update_timeout(SocketReg &reg);
+    bool insert_timeout(SocketReg &reg);
     bool is_blocked(SocketReg &reg);
 };
 

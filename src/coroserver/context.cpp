@@ -10,6 +10,7 @@
 #include "epoll.h"
 
 #include "socket_stream.h"
+#include "local_stream.h"
 
 #include <system_error>
 #include <coro.h>
@@ -102,6 +103,8 @@ static coro::generator<Stream> listen_generator(AsyncEngine::UniqueHandle socket
         retPeerName.set_group_id(group_id);
         co_yield Stream(SocketStream::create(retHandle, eng, retPeerName, tmcfg));
     }
+
+    co_return;
 }
 
 
@@ -167,8 +170,7 @@ coro::future<Stream> Context::connect(std::vector<PeerName> list, TimeoutSetting
 
 }
 
-
-#if 0
+static int signal_fd = -1;
 
 static void init_signals(__sighandler_t h) {
     for (int i: std::initializer_list<int>{SIGTERM, SIGINT, SIGHUP, SIGQUIT}) {
@@ -176,6 +178,33 @@ static void init_signals(__sighandler_t h) {
     }
 
 }
+
+
+static void signal_hndl(int sig) {
+    std::ignore = ::write(signal_fd, &sig, sizeof(sig));
+}
+
+
+Stream Context::create_intr_listener() {
+    std::call_once(_signal_init, [&]{
+        int fds[2];
+        if (pipe2(fds,O_CLOEXEC|O_NONBLOCK) < 0)
+            throw std::system_error(errno, std::system_category());
+
+        signal_fd = fds[1];
+        init_signals(signal_hndl);
+        _signal_stream = Stream(std::make_shared<LocalStream>(
+                AsyncSocket(fds[0],shared_from_this()),
+                AsyncSocket(fds[1],shared_from_this()),
+                PeerName(),TimeoutSettings{}));
+    });
+    return _signal_stream;
+
+}
+
+
+#if 0
+
 
 
 
@@ -549,19 +578,6 @@ Timer Context::create_timer() {
 }
 
 
-static int signal_fd = -1;
-
-
-static void signal_hndl(int sig) {
-    std::ignore = ::write(signal_fd, &sig, sizeof(sig));
-}
-
-
-
-Stream Context::create_intr_listener() {
-    return _ptr->get_signal_stream();
-
-}
 
 void ContextIOImpl::run() {
     _epoll.serve([](auto){}, _stp.get_token());

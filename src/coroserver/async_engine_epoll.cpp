@@ -181,6 +181,13 @@ AsyncEngineImpl::Handle AsyncEngineImpl::listen(const PeerName &ifc) {
         if (!fd) {
             throw std::system_error(errno, std::system_category(), "::socket failed (listen)");
         }
+        if (addr->sa_family == AF_INET6) {
+           int on = 1;
+           if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const void *)&on, sizeof(on)) == -1) {
+               throw std::system_error(errno, std::system_category(), "can't disable IPv4-mapped (setsockopt)");
+           }
+        }
+
         if (::bind(fd, addr, slen)) {
             throw std::system_error(errno, std::system_category(), "Unable to bind listening socket to " + ifc.to_string());
         }
@@ -233,7 +240,10 @@ void AsyncEngineImpl::block_all(bool block) {
 
 bool AsyncEngineImpl::update_timeout(SocketReg &reg) {
     _tm_map.erase(&reg);
+    return insert_timeout(reg);
+}
 
+bool AsyncEngineImpl::insert_timeout(SocketReg &reg) {
     if (std::holds_alternative<InfoEmpty>(reg._send_state)
         && std::holds_alternative<InfoEmpty>(reg._recv_state)) {
         return false;
@@ -244,8 +254,12 @@ bool AsyncEngineImpl::update_timeout(SocketReg &reg) {
     }, reg._recv_state, reg._send_state);
 
 
+    if (reg._timeout == maxtp) return false;
+    bool updated = _next_wakeup > reg._timeout;
+    if (updated) _next_wakeup == reg._timeout;
 
-    return _tm_map.insert(&reg).first == _tm_map.begin();
+    _tm_map.insert(&reg).first == _tm_map.begin();
+    return updated;
 }
 
 void AsyncEngineImpl::block(Handle h, bool blocked) {
@@ -285,6 +299,7 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
         do {
             Timepoint wakeup_time = _tm_map.empty()?maxtp:(*_tm_map.begin())->_timeout;
             timeout = std::min(timeout, wakeup_time);
+            _next_wakeup = timeout;
             lk.unlock();
             auto now = std::chrono::system_clock::now();
             if (timeout < now) {
@@ -322,7 +337,8 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                     std::visit([&](auto &x){_ready.push(x._prom(-1));}, reg._recv_state);
                     reg._recv_state.emplace<InfoEmpty>();
                 }
-                update_timeout(reg);
+                iter = _tm_map.erase(iter);
+                insert_timeout(reg);
             }
         } else {
             if (ev.data.ptr == nullptr) {
