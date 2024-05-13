@@ -159,7 +159,7 @@ public:
      *
      * @return stream
      *
-     * @note Under linux, one byte is carried which contains signal number
+     * @note function is not MT Safe.
      */
     Stream create_intr_listener();
 
@@ -183,8 +183,6 @@ protected:
     coro::scheduler_t<CondVar> _scheduler;
 
 
-    std::once_flag _signal_init;
-    Stream _signal_stream;
 
 
 

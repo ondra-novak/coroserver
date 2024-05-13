@@ -32,6 +32,14 @@ public:
 
     static Handle connect(const PeerName &target);
     static Handle listen(const PeerName &ifc);
+    static Handle from_fd(int fd);
+
+    static Handle connect_special(SpecialDevice dev);
+    static Handle create_named_pipe(OperationMode mode, std::string name);
+    static Handle open_file(OperationMode mode, std::string name, bool append);
+    static Handle install_intr_signal();
+
+
 
     RetVal recv(Handle h, void *buffer, std::size_t size, Timepoint timeout);
     int recv_nb(Handle h, void *buffer, std::size_t size);
@@ -49,6 +57,7 @@ public:
     PeerName get_name(Handle h);
 
     void block_all(bool block);
+
 
 protected:
 
@@ -80,23 +89,27 @@ protected:
         std::size_t _buffer_size = 9;
     };
 
+    struct ConnectNamedPipeInfo: InfoBase {
+    };
+
 
     class SocketReg : public AsyncResource {
     public:
 
         SocketReg (FileDescriptor socket):_socket(std::move(socket)) {}
 
-
         ///associated socket
         FileDescriptor _socket;
 
         ///blocked async io
         bool _blocked = false;
+        ///this is pipe, some operations are wired differently
+        bool _pipe = false;
 
         ///current timeout - as registered in timeout map;
         Timepoint _timeout;
-        std::variant<InfoEmpty, AcceptInfo, RecvInfo> _recv_state {};
-        std::variant<InfoEmpty, ConnectInfo, SendInfo> _send_state {};
+        std::variant<InfoEmpty, AcceptInfo, RecvInfo, ConnectNamedPipeInfo> _recv_state {};
+        std::variant<InfoEmpty, ConnectInfo, SendInfo, ConnectNamedPipeInfo> _send_state {};
         static SocketReg &from_handle(Handle h);
     };
 
@@ -123,6 +136,9 @@ protected:
     bool update_timeout(SocketReg &reg);
     bool insert_timeout(SocketReg &reg);
     bool is_blocked(SocketReg &reg);
+
+    static void install_intr_signal_impl();
+    static void signal_handler(int);
 };
 
 

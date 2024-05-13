@@ -1,10 +1,14 @@
 #include "async_engine_epoll.h"
 
+#include <csignal>
 #include <linux/sockios.h>
+#include <unistd.h>
+#include <sys/fcntl.h>
 #include <netinet/in.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 namespace coroserver {
 
 AsyncEngineImpl::SocketReg &AsyncEngineImpl::SocketReg::from_handle(Handle h) {
@@ -127,14 +131,26 @@ void AsyncEngineImpl::update_socket(SocketReg &reg) {
 
 AsyncEngineImpl::RetVal AsyncEngineImpl::wait_connect(Handle h,Timepoint timeout) {
     auto &reg = SocketReg::from_handle(h);
-    return [&](auto promise) {
-        std::lock_guard lk(_mx);
-        if (is_blocked(reg)) return;
-        auto &connect = reg._send_state.emplace<ConnectInfo>();
-        connect._prom = std::move(promise);
-        connect._tp = timeout;
-        update_socket(reg);
-    };
+    if (std::holds_alternative<ConnectNamedPipeInfo>(reg._recv_state)
+            || std::holds_alternative<ConnectNamedPipeInfo>(reg._send_state)) {
+        return [&](auto promise) {
+            ConnectNamedPipeInfo &connect =
+                    std::holds_alternative<ConnectNamedPipeInfo>(reg._recv_state)?
+                            std::get<ConnectNamedPipeInfo>(reg._recv_state):
+                            std::get<ConnectNamedPipeInfo>(reg._send_state);
+            connect._prom = std::move(promise);
+            connect._tp = timeout;
+        };
+    } else {
+        return [&](auto promise) {
+            std::lock_guard lk(_mx);
+            if (is_blocked(reg)) return;
+            auto &connect = reg._send_state.emplace<ConnectInfo>();
+            connect._prom = std::move(promise);
+            connect._tp = timeout;
+            update_socket(reg);
+        };
+    }
 
 }
 
@@ -148,7 +164,7 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::accept(Handle h, Handle &retHandle,
     });
     if (r>=0) {
         retHandle = new SocketReg(r);
-        return 0;
+        return 1;
     }
     int e = errno;
     if (e == EWOULDBLOCK || e == EINPROGRESS) {
@@ -169,7 +185,11 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::accept(Handle h, Handle &retHandle,
 
 void AsyncEngineImpl::send_eof(Handle h) {
     auto &reg = SocketReg::from_handle(h);
-    ::shutdown(reg._socket,SHUT_WR);
+    if (reg._pipe) {
+        ::close(reg._socket.release());
+    } else {
+        ::shutdown(reg._socket,SHUT_WR);
+    }
 }
 
 AsyncEngineImpl::Handle AsyncEngineImpl::listen(const PeerName &ifc) {
@@ -221,6 +241,101 @@ AsyncEngineImpl::Handle AsyncEngineImpl::connect(const PeerName &target) {
     return new SocketReg(std::move(sock));
 }
 
+static void setnonblocking(int sock) {
+    int opt;
+
+    opt = fcntl(sock, F_GETFL);
+    if (opt < 0) {
+        printf("fcntl(F_GETFL) fail.");
+    }
+    opt |= O_NONBLOCK;
+    if (fcntl(sock, F_SETFL, opt) < 0) {
+        printf("fcntl(F_SETFL) fail.");
+    }
+}
+
+
+AsyncEngineImpl::Handle AsyncEngineImpl::from_fd(int fd) {
+    setnonblocking(fd);
+    return new SocketReg(FileDescriptor(fd));
+}
+
+AsyncEngineImpl::Handle AsyncEngineImpl::connect_special(SpecialDevice dev) {
+    switch (dev) {
+        case SpecialDevice::std_input: return from_fd(0);
+        case SpecialDevice::std_output: return from_fd(1);
+        case SpecialDevice::std_error: return from_fd(2);
+        default: throw std::invalid_argument("Invalid SpecialDevice");
+    }
+}
+
+AsyncEngineImpl::Handle AsyncEngineImpl::open_file(OperationMode mode, std::string name, bool append) {
+
+    int flags = 0;
+    mode_t creat_mode = 0666;
+    switch (mode) {
+        case OperationMode::bidirectional:flags = O_RDWR; break;
+        case OperationMode::read: flags = O_RDONLY;break;
+        case OperationMode::write: flags = O_WRONLY;
+            if (append) {
+                flags |= O_CREAT | O_APPEND;
+            } else {
+                flags |= O_CREAT | O_TRUNC;
+            }
+            break;
+        default: throw std::invalid_argument("Invalid mode");
+    }
+
+    FileDescriptor fd ( ::open(name.c_str(), flags, creat_mode));
+    if (!fd) {
+        int e = errno;
+        throw std::system_error(e, std::system_category(), "Can't open file: " + name);
+    }
+    auto r = new SocketReg(std::move(fd));
+    r->_pipe = true;
+    return r;
+
+}
+
+AsyncEngineImpl::Handle AsyncEngineImpl::create_named_pipe(OperationMode mode, std::string name) {
+    if (mode == OperationMode::bidirectional) {
+        throw std::invalid_argument("OperationMode::bidirectional is not supported here");
+    }
+    if (name.empty()) throw std::invalid_argument("create_named_pipe: <name> is empty");
+    if (name[0] != '/' && name[0] != '.') {
+        auto uid = geteuid();
+        std::ostringstream buff;
+        if (uid) {
+            buff << "/var/run/user/" << uid << "/" << name;
+        } else {
+            buff << "/var/run/" << name;
+        }
+        return create_named_pipe(mode, buff.str());
+    }
+
+    if (mkfifo(name.c_str(),0666) == -1) {
+        int e = errno;
+        if (e == EEXIST) {
+            struct stat buff;
+            if (stat(name.c_str(), &buff) == -1 || !S_ISFIFO(buff.st_mode))
+                throw std::system_error(e, std::system_category(), "mkfifo");
+        } else {
+            throw std::system_error(e, std::system_category(), "mkfifo");
+        }
+    }
+
+    auto h = open_file(mode, name, false);
+    auto &reg = SocketReg::from_handle(h);
+    if (mode == OperationMode::read) {
+        reg._recv_state = ConnectNamedPipeInfo();
+    } else if (mode == OperationMode::write) {
+        reg._send_state = ConnectNamedPipeInfo();
+    }
+    return h;
+
+
+}
+
 void AsyncEngineImpl::block_all(bool block) {
     coro::promise<int> to_cancel;
     std::lock_guard _(_mx);
@@ -254,7 +369,6 @@ bool AsyncEngineImpl::insert_timeout(SocketReg &reg) {
     }, reg._recv_state, reg._send_state);
 
 
-    if (reg._timeout == maxtp) return false;
     bool updated = _next_wakeup > reg._timeout;
     if (updated) _next_wakeup == reg._timeout;
 
@@ -318,6 +432,7 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                 if (e != EINTR) {
                     throw std::system_error(e, std::system_category(), "epoll_wait failed");
                 }
+                lk.lock();
             }
         } while (r < 0);
         lk.lock();
@@ -377,11 +492,20 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                         } else {
                             int e = errno;
                             if (e != EWOULDBLOCK) {
-                                _ready.push(
-                                    me._prom.reject(std::system_error(e,std::system_category(),"recv"))
-                                );
+                                if (e == ECONNRESET) {
+                                    _ready.push(me._prom(0));
+                                } else {
+                                    _ready.push(
+                                        me._prom.reject(std::system_error(e,std::system_category(),"recv"))
+                                    );
+                                }
                                 reg._recv_state.emplace<InfoEmpty>();                            }
                         }
+                    }
+                    else if (std::holds_alternative<ConnectNamedPipeInfo>(reg._recv_state)) {
+                        auto &me = std::get<ConnectNamedPipeInfo>(reg._recv_state);
+                        _ready.push(me._prom(1));
+                        reg._recv_state.emplace<InfoEmpty>();
                     }
                 }
                 if (ev.events & (EPOLLOUT| EPOLLERR)) {
@@ -418,6 +542,11 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                             }
                         }
                     }
+                    else if (std::holds_alternative<ConnectNamedPipeInfo>(reg._send_state)) {
+                        auto &me = std::get<ConnectNamedPipeInfo>(reg._send_state);
+                        _ready.push(me._prom(1));
+                        reg._send_state.emplace<InfoEmpty>();
+                    }
                 }
                 update_socket(reg);
             }
@@ -442,7 +571,7 @@ void AsyncEngineImpl::cancel_wait_for_next_event() {
 int AsyncEngineImpl::get_siocoutq(Handle h) {
     auto &reg = SocketReg::from_handle(h);
     int value = 0;
-    ioctl(reg._socket, SIOCOUTQ, &value);
+    if (!reg._pipe) ioctl(reg._socket, SIOCOUTQ, &value);
     return value;
 }
 
@@ -454,6 +583,26 @@ PeerName AsyncEngineImpl::get_name(Handle h) {
         }
         return slen;
     });
+}
+
+std::optional<EFDEventRegister> _signal_reg;
+
+void AsyncEngineImpl::signal_handler(int) {
+    if (_signal_reg.has_value()) {
+        _signal_reg->add(1);
+    }
+}
+
+void AsyncEngineImpl::install_intr_signal_impl() {
+    _signal_reg.emplace();
+    for (int i: std::initializer_list<int>{SIGTERM, SIGINT, SIGHUP, SIGQUIT}) {
+        signal(i, signal_handler);
+    }
+}
+
+AsyncEngineImpl::Handle AsyncEngineImpl::install_intr_signal() {
+    if (!_signal_reg.has_value()) install_intr_signal_impl();
+    return from_fd(dup(_signal_reg->getFD()));
 }
 
 }

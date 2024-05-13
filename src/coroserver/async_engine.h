@@ -15,6 +15,19 @@ class AsyncResource {};
 class AsyncEngineImpl;
 
 
+enum class SpecialDevice {
+    std_input,
+    std_output,
+    std_error,
+};
+
+enum class OperationMode {
+    read,
+    write,
+    bidirectional
+};
+
+
 ///asynchronous engine - single instance object, however, it is copyable (shared)
 class AsyncEngine {
 public:
@@ -97,6 +110,47 @@ public:
 
     PeerName get_name(Handle h);
 
+    ///connect special device
+    UniqueHandle connect_special(SpecialDevice dev);
+    ///connect named pipe
+    /**
+     * @param mode open mode
+     * @param name name of pipe
+     * @param timeout timeout to wait
+     * @param cancel stop token, useful to cancel operation
+     * @return handle
+     *
+     * connects named pipe and waits for other side. If the named pipe doesn't exists,
+     * it is created. If name doesn't start with dot or slash, the named pipe is created
+     * in default directory. If you need to create named pipe in the current directory, type
+     *  "./name" with "./" as prefix
+     *
+     */
+    coro::future<UniqueHandle> connect_named_pipe(OperationMode mode, const std::string &name, Timepoint timeout, std::stop_token cancel);
+    ///Create connection to new or existing file
+    /**
+     * @param mode operation mode
+     * @param name name of file
+     * @param append if true, and OperationMode is write, then new data are appended. If false
+     * then file is truncated. The flag is ignored while OperationMode is read
+     *
+     * You can open named pipe by this function
+     *
+     * @return handle
+     */
+    UniqueHandle open_file(OperationMode mode, const std::string &name, bool append = false);
+
+    ///Opens SIGINT signal listener.
+    /**
+     * This creates a virtual pipe/file which sends some bytes when interrupt signal is
+     * received. This signal covers SIGINT, SIGTERM, SIGQUIT, SIGHUP and etc. Undef Windows
+     * this signal is implemented by SetConsoleCtrlHandler.
+     * @return handle which is pipe
+     *
+     * @note you can retrieve multiple handles by this call, but only one
+     * can receive signal.
+     */
+    UniqueHandle open_intr_signal_listener();
 
     ///Waits for the next event to arrive, and then returns it.
     /**

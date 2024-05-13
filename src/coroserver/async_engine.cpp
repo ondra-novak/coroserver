@@ -51,6 +51,10 @@ AsyncEngine::Task AsyncEngine::wait_for_next_event(Timepoint timeout) {
     return _ptr->wait_for_next_event(timeout);
 }
 
+AsyncEngine::UniqueHandle AsyncEngine::connect_special(SpecialDevice dev) {
+    return UniqueHandle(_ptr->connect_special(dev), _ptr);
+}
+
 coro::future<AsyncEngine::UniqueHandle> AsyncEngine::connect(const PeerName &target, Timepoint timeout, std::stop_token cancel) {
     Handle h = _ptr->connect(target);
 
@@ -67,6 +71,28 @@ coro::future<AsyncEngine::UniqueHandle> AsyncEngine::connect(const PeerName &tar
         _ptr->close_handle(h);
         throw;
     }
+}
+
+coro::future<AsyncEngine::UniqueHandle> AsyncEngine::connect_named_pipe(OperationMode mode, const std::string &name, Timepoint timeout, std::stop_token cancel) {
+    Handle h = _ptr->create_named_pipe(mode, name);
+
+    std::stop_callback _(cancel, [&]{
+        _ptr->block(h,true);
+    });
+
+    try {
+        int r = co_await _ptr->wait_connect(h, timeout);
+        if (r == -1) throw std::system_error(ETIMEDOUT, std::system_category(), "Connect timeout");
+        if (r == 0) throw coro::await_canceled_exception();
+        co_return UniqueHandle(h, _ptr);
+    } catch (...) {
+        _ptr->close_handle(h);
+        throw;
+    }
+}
+
+AsyncEngine::UniqueHandle AsyncEngine::open_file(OperationMode mode, const std::string &name, bool append) {
+    return UniqueHandle(_ptr->open_file(mode, name, append), _ptr);
 }
 
 AsyncEngine::UniqueHandle AsyncEngine::listen(const PeerName &ifc) {
@@ -106,6 +132,9 @@ AsyncEngine AsyncEngine::get_engine(const UniqueHandle &h) {
 }
 void AsyncEngine::block_all(bool block) {
     _ptr->block_all(block);
+}
+AsyncEngine::UniqueHandle AsyncEngine::open_intr_signal_listener() {
+    return {_ptr->install_intr_signal(), _ptr};
 }
 
 }
