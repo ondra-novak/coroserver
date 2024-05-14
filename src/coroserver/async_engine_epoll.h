@@ -105,6 +105,8 @@ protected:
         bool _blocked = false;
         ///this is pipe, some operations are wired differently
         bool _pipe = false;
+        ///eof detected, futher reads returns 0 immediatelly
+        bool _eof = false;
 
         ///current timeout - as registered in timeout map;
         Timepoint _timeout;

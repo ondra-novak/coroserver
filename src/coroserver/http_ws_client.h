@@ -36,8 +36,7 @@ namespace ws {
         TimeoutSettings _tm;
         bool _need_fragmented;
         coro::promise<Stream> _result;
-        coro::lazy_future<_Stream> _fut;
-        coro::any_target<> _target;
+        coro::deferred_future<_Stream> _fut;
         std::string _digest;
 
 

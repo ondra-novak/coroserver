@@ -53,20 +53,19 @@ Client::Client(http::ClientRequest &req, TimeoutSettings tm,bool need_fragmented
     req("Sec-WebSocket-Key", key);
     req("Sec-WebSocket-Version", 13);
     _fut  = req.send();
-    _fut.register_target(_target.call([this, &req](auto fut){
+    _fut >> [&]{
         try {
-            _Stream s(std::move(fut->get()));
+            _Stream s(std::move(_fut.get()));
             if (req.get_status() == 101 && req["Sec-WebSocket-Accept"] == std::string_view(_digest)) {
                 s.set_timeouts(_tm);
                 return _result(std::move(s),Stream::Cfg{true, _need_fragmented});
             } else {
-                return _result.drop();
+                return _result.cancel();
             }
         } catch (...) {
             return _result.reject();
         }
-
-    }));
+    };
 
 }
 

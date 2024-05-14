@@ -62,8 +62,7 @@ protected:
 
 
     coro::promise<Stream> _result;
-    coro::future<_Stream> _fut;
-    coro::any_target<> _target;
+    coro::deferred_future<_Stream> _fut;
 
     bool _need_fragmented;
     TimeoutSettings _tms;

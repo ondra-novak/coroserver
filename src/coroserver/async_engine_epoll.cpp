@@ -35,8 +35,10 @@ bool AsyncEngineImpl::is_blocked(SocketReg &reg) {
 AsyncEngineImpl::RetVal AsyncEngineImpl::recv(Handle h, void *buffer, std::size_t size, Timepoint timeout) {
 
     auto &reg = SocketReg::from_handle(h);
+    if (reg._eof) return 0;
     int r = ::read(reg._socket, buffer, size);
     if (r >= 0) {
+        if (r == 0) reg._eof = 0;
         return r;
     }
     int e = errno;
@@ -53,7 +55,8 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::recv(Handle h, void *buffer, std::size_
             update_socket(reg);
         };
 
-    } else if (e == EPIPE) {
+    } else if (e == EPIPE || e == ECONNRESET) {
+        reg._eof = true;
         return 0;
     } else {
         return std::make_exception_ptr(std::system_error(e, std::system_category(), "recv"));
@@ -62,12 +65,15 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::recv(Handle h, void *buffer, std::size_
 
 unsigned int AsyncEngineImpl::recv_nb(Handle h, void *buffer, std::size_t size) {
     auto &reg = SocketReg::from_handle(h);
+    if (reg._eof) return 0;
     int r = ::read(reg._socket, buffer, size);
     if (r >= 0) {
+        if (r == 0) reg._eof = true;
         return r;
     }
     int e = errno;
-    if (e == EWOULDBLOCK || e == EPIPE) {
+    if (e == EWOULDBLOCK || e == EPIPE || e == ECONNRESET) {
+        reg._eof = true;
         return 0;
     }
     throw std::system_error(e, std::system_category(), "recv_nb");
@@ -95,7 +101,8 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::send(Handle h,const void *buffer, std::
             update_socket(reg);
         };
 
-    } else if (e == EPIPE) {
+    } else if (e == EPIPE || e == ECONNRESET) {
+        reg._eof = true;
         return 0;
     } else {
         return std::make_exception_ptr(std::system_error(e, std::system_category(), "recv"));
@@ -487,12 +494,14 @@ AsyncEngineImpl::Notify AsyncEngineImpl::wait_for_next_event(Timepoint timeout) 
                         auto &me = std::get<RecvInfo>(reg._recv_state);
                         int r = ::read(reg._socket, me._buffer, me._buffer_size);
                         if (r >= 0) {
+                            if (r == 0) reg._eof = true;
                             _ready.push(me._prom(r));
                             reg._recv_state.emplace<InfoEmpty>();
                         } else {
                             int e = errno;
                             if (e != EWOULDBLOCK) {
                                 if (e == ECONNRESET) {
+                                    reg._eof = true;
                                     _ready.push(me._prom(0));
                                 } else {
                                     _ready.push(

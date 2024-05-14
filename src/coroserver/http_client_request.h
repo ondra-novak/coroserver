@@ -138,7 +138,7 @@ public:
      * function begin_body with the argument
      */
 
-    coro::lazy_future<Stream> begin_body();
+    coro::deferred_future<Stream> begin_body();
 
     ///Sends headers and begin sending of the body
     /**
@@ -158,20 +158,20 @@ public:
      *
      *
      */
-    coro::lazy_future<Stream> begin_body(std::size_t content_length);
+    coro::deferred_future<Stream> begin_body(std::size_t content_length);
 
 
     ///Send request or finish the body and read response.
     /**
      * @return response stream. Function also sets response headers and status code
      */
-    coro::lazy_future<Stream> send();
+    coro::deferred_future<Stream> send();
     ///Send request with body
     /**
      * @param body body to send.
      * @return response stream. Function also sets response headers and status code
      */
-    coro::lazy_future<Stream> send(std::string_view body);
+    coro::deferred_future<Stream> send(std::string_view body);
 
 
     ///Retrieve response status code
@@ -234,9 +234,6 @@ protected:
 
     void prepare_header(Method method, std::string_view path);
     void owr_hdr(std::string_view hdr);
-
-    coro::any_target<> _target;
-    coro::any_target<> _lazy_target;
 
     coro::future<std::string_view> _read_fut;
     coro::future<bool> _write_fut;

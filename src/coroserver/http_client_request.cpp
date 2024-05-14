@@ -60,7 +60,7 @@ void ClientRequest::open(Method method, std::string_view path) {
     _response_stream = Stream(nullptr);
     _body_to_write = {};
     _command = Command::none;
-    _stream_promise.drop();
+    _stream_promise.cancel();
     _hdr_sep_search.reset();
 
     prepare_header(method, path);

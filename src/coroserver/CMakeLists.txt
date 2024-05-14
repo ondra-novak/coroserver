@@ -21,13 +21,13 @@ add_library(coroserver
     http_server_request.cpp
     http_server.cpp
     http_static_page.cpp
-#   websocket.cpp
-#   websocket_stream.cpp
-#   http_ws_server.cpp
-#   http_ws_client.cpp
-#   ssl_http_support.cpp
-#   http_client_request.cpp
-#   http_client.cpp
+    websocket.cpp
+    websocket_stream.cpp
+    http_ws_server.cpp
+    http_ws_client.cpp
+    ssl_http_support.cpp
+    http_client_request.cpp
+    http_client.cpp
 #   umq_stream_connection.cpp
 #   message_stream.cpp
 #   umq_peer.cpp

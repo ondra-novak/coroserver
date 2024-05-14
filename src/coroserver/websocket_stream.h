@@ -60,7 +60,7 @@ public:
      * @retval true successfully sent
      * @retval false failed to send, the stream is closed
      */
-    coro::lazy_future<bool> send(const Message &msg);
+    coro::deferred_future<bool> send(const Message &msg);
 
     ///Read from websocket
     /**
@@ -100,7 +100,7 @@ public:
     /**
      * @return see send()
      */
-    coro::lazy_future<bool> close() {
+    coro::deferred_future<bool> close() {
         return close(ws::Base::closeNormal);
     }
 
@@ -109,7 +109,7 @@ public:
      * @param code error code
      * @return see send()
      */
-    coro::lazy_future<bool> close(std::uint16_t code);
+    coro::deferred_future<bool> close(std::uint16_t code);
 
 
 protected:

@@ -17,13 +17,13 @@ void Server::init(http::ServerRequest &req, TimeoutSettings tm, bool need_fragme
     if (!req.allow({http::Method::GET})
       || req[http::strtable::hdr_upgrade] != http::HeaderValue(http::strtable::val_websocket)
       || req[http::strtable::hdr_connection] != http::HeaderValue(http::strtable::val_upgrade)) {
-        _result.drop();
+        _result.cancel();
         return; //drops promise
     }
 
     std::string_view key = req["Sec-WebSocket-Key"];
     if (key.empty()) {
-        _result.drop();
+        _result.cancel();
         return;
     }
 
@@ -42,17 +42,17 @@ void Server::init(http::ServerRequest &req, TimeoutSettings tm, bool need_fragme
     req("Sec-WebSocket-Accept",digestResult);
     _need_fragmented = need_fragmented;
     _tms = tm;
-    _fut << [&]{return req.send();};
-    _fut.register_target(_target.call([&](auto *fut){
+    _fut = req.send();
+    _fut >> [&]{
         try {
-            _Stream s = *fut;
+            _Stream s = _fut;
             s.set_timeouts(_tms);
             this->_result(s,Stream::Cfg{false, _need_fragmented});
         } catch (...) {
             this->_result.reject();
         }
 
-    }));
+    };
 }
 
 }

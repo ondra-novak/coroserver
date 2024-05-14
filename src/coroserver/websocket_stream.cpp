@@ -12,11 +12,11 @@ public:
     ,_reader(cfg.need_fragmented)
     ,_writer(s)
     ,_builder(cfg.client) {
-        _target.init_as<coro::future<std::string_view>::target_type>([&](auto fut){on_read(fut);});
+        //_target.init_as<coro::future<std::string_view>::target_type>([&](auto fut){on_read(fut);});
     }
     ~InternalState() {}
 
-    coro::lazy_future<bool> write(const Message &msg) {
+    coro::deferred_future<bool> write(const Message &msg) {
         return _writer.write([&](auto iter){
             _builder(msg, [&](char c){
                 *iter = c;
@@ -32,9 +32,10 @@ public:
                 _reader.reset();
             }
             _read_promise = std::move(p);
-            auto &f = _fut.as<std::string_view>();
-            f << [&]{return _s.read();};
-            f.register_target(_target.call([&](auto fut){on_read(fut);}));
+            new (&_read_fut) auto(_s.read());
+            _read_fut >> [&]{
+                on_read();
+            };
         };
     }
 
@@ -50,7 +51,7 @@ public:
         return State::closing;
     }
 
-    coro::lazy_future<bool> close(std::uint16_t code) {
+    coro::deferred_future<bool> close(std::uint16_t code) {
         if (get_state() == State::open) {
             write({{}, Type::connClose, code});
             return _writer.write_eof();
@@ -63,9 +64,10 @@ public:
 
 protected:
 
-    void on_read(coro::future<std::string_view> *fut) noexcept { // @suppress("No return")
+    void on_read() noexcept { // @suppress("No return")
         try {
-            std::string_view data = *fut;
+            std::string_view data = _read_fut;
+            std::destroy_at(&_read_fut);
             if (data.empty()) {
 
                 if (_ping_sent) {
@@ -100,9 +102,8 @@ protected:
                     data = _s.read_nb();
                 }
             }
-            auto &f = _fut.as<std::string_view>();
-            f << [&]{return _s.read();};
-            f.register_target(_target.call([&](auto fut){on_read(fut);}));
+            new (&_read_fut) auto (_s.read());
+            _read_fut >> [&]{on_read();};
         } catch (...) {
             _read_promise.reject();
         }
@@ -113,8 +114,10 @@ protected:
     MTStreamWriter _writer;
     Builder _builder;
     coro::promise<Message> _read_promise;
-    coro::variant_future<std::string_view, void> _fut;
-    coro::any_target<> _target;
+    union {
+        coro::future<std::string_view> _read_fut;
+        coro::deferred_future<void> _close_fut;
+    };
     bool _ping_sent = false;
     bool _closed = false;
 
@@ -129,7 +132,7 @@ struct Stream::Deleter {
 };
 
 
-coro::lazy_future<bool> Stream::send(const Message &msg) {
+coro::deferred_future<bool> Stream::send(const Message &msg) {
     return _ptr->write(msg);
 }
 
@@ -156,22 +159,16 @@ std::shared_ptr<Stream::InternalState> Stream::create(_Stream &s, Cfg &cfg) {
     return std::shared_ptr<InternalState>(new InternalState(s, cfg), Deleter());
 }
 
-coro::lazy_future<bool> Stream::close(std::uint16_t code) {
+coro::deferred_future<bool> Stream::close(std::uint16_t code) {
     return _ptr->close(code);
 }
 
 void Stream::InternalState::destroy() {
-    auto lzf = close(Base::closeNormal);
-    if (!lzf.is_pending()) {
+    new (&_close_fut) auto(close(Base::closeNormal));
+    _close_fut >> [&]{
+        std::destroy_at(&_close_fut);
         delete this;
-        return;
-    }
-    auto &f = _fut.as<void>();
-    f << [&]{return static_cast<coro::future<void> >(lzf);};
-    f.register_target(_target.call([&](auto ){delete this;}));
-
-
-
+    };
 }
 
 }

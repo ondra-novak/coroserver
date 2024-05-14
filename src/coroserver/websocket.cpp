@@ -133,9 +133,6 @@ bool Parser::finalize() {
 
 
 Reader::Reader(Stream s, bool need_fragmented):_s(s), _parser(need_fragmented) {
-    coro::target_simple_activation(_read_fut_target, [&](auto fut){
-        read_next(fut);
-    });
 }
 
 coro::future<Message &> Reader::operator ()() {
@@ -143,16 +140,16 @@ coro::future<Message &> Reader::operator ()() {
     return [&](auto promise) {
         _read_prom = std::move(promise);
         _read_fut << [&]{return _s.read();};
-        _read_fut.register_target(_read_fut_target);
+        _read_fut >> [&]{read_next();};
     };
 }
 
-void Reader::read_next(coro::future<std::string_view> *fut) {
+void Reader::read_next() {
     try {
 
-        std::string_view data = *fut;
+        std::string_view data = _read_fut;;
         if (data.empty()) {
-            _read_prom.drop();
+            _read_prom.cancel();
             return;
         }
 
@@ -163,7 +160,7 @@ void Reader::read_next(coro::future<std::string_view> *fut) {
             _read_prom(msg);
         } else {
             _read_fut << [&]{return _s.read();};
-            _read_fut.register_target(_read_fut_target);
+            _read_fut >> [&]{read_next();};
         }
     }catch (...) {
         _read_prom.reject();

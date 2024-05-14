@@ -239,7 +239,7 @@ public:
 
         if (message.type == Type::connClose) {
             tmp.push_back(static_cast<char>(message.code>>8));
-            tmp.push_back(static_cast<char>(message.code && 0xFF));
+            tmp.push_back(static_cast<char>(message.code & 0xFF));
             if (!message.payload.empty()) {
                 std::copy(message.payload.begin(), message.payload.end(), std::back_inserter(tmp));
             }
@@ -346,13 +346,12 @@ public:
 protected:
 
 
-    void read_next(coro::future<std::string_view> *fut);
+    void read_next();
 
     Stream _s;
     Parser _parser;
     Message msg;
     coro::future<std::string_view> _read_fut;
-    coro::future<std::string_view>::target_type _read_fut_target;
     coro::promise<Message &> _read_prom;
 
 };
