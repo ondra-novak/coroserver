@@ -22,7 +22,7 @@ Client::Client(Config cfg, StaticHeaders hdrs)
 }
 
 
-coro::lazy_future<ClientRequestParams> Client::open(Method method,std::string_view url) {
+coro::deferred_future<ClientRequestParams> Client::open(Method method,std::string_view url) {
     ConnectionFactory *fact = nullptr;
     if (url.compare(0, 7, "http://") == 0) {
         fact = &_cfg.http;
@@ -66,7 +66,7 @@ coro::lazy_future<ClientRequestParams> Client::open(Method method,std::string_vi
                    Method method,
                    std::string host,
                    std::string path,
-                   std::string auth) ->coro::lazy_future<ClientRequestParams>{
+                   std::string auth) ->coro::deferred_future<ClientRequestParams>{
         Stream s = co_await (*fact)(host);
 
         co_return ClientRequestParams{

@@ -187,28 +187,25 @@ coro::future<bool> ClientRequest::send_headers() {
     return _s.write(_req_headers.view());
 }
 
-coro::lazy_future<Stream> ClientRequest::begin_body() {
+coro::deferred_future<Stream> ClientRequest::begin_body() {
     if (!_has_te && _content_length == 0) use_chunked();
-    auto &t = _lazy_target.init_as<coro::lazy_future<Stream>::promise_target_type>([&](auto promise){
+    return [this](auto promise)->coro::prepared_coro{
         if (_req_sent) promise(_body_stream);
         else {
             _command = Command::beginBody;
             _stream_promise = std::move(promise);
-            auto &t = _target.init_as<coro::future<bool>::target_type>([&](auto fut) {
-                after_send_headers(fut);
-            });
-            _write_fut << [&]{return send_headers();};
-            _write_fut.register_target(t);
+            _write_fut << [&]{return send_headers();} >> [this] {after_send_headers();};
+     
         };
-    });
-    return t;
+        return {};
+    };
 
 }
 
 
-void ClientRequest::receive_response(coro::future<std::string_view> *res) noexcept {
+void ClientRequest::receive_response() noexcept {
     try {
-        std::string_view data = *res;
+        std::string_view data = _read_fut;
         if (data.empty()) throw ConnectionReset();
         for (std::size_t i = 0, cnt = data.size(); i < cnt; i++) {
             _response_headers_data.push_back(data[i]);
@@ -219,10 +216,7 @@ void ClientRequest::receive_response(coro::future<std::string_view> *res) noexce
                 return after_receive_headers();
             }
         }
-        _read_fut << [&]{return _s.read();};
-        _read_fut.register_target(
-                _target.init_as<coro::future<std::string_view>::target_type>(
-                        [&](auto fut) {receive_response(fut);}));
+        _read_fut << [&]{return _s.read();} >> [this] {receive_response();};
 
     } catch (...) {
         _stream_promise.reject();
@@ -253,8 +247,7 @@ void ClientRequest::after_receive_headers() {
             return;
         case Command::sendRequest:
             if (_status_code == 100) {
-                coro::future<bool> fakeres(true);
-                return after_send_headers(&fakeres);
+                return after_send_headers();
             }
             prepare_response_stream();
             _stream_promise(_response_stream);
@@ -271,14 +264,13 @@ void ClientRequest::prepare_body_stream() {
     _content_length = 0;
 }
 
-coro::lazy_future<Stream> ClientRequest::begin_body(std::size_t ctl) {
+coro::deferred_future<Stream> ClientRequest::begin_body(std::size_t ctl) {
     content_length(ctl);
     return begin_body();
 }
 
-coro::lazy_future<Stream> ClientRequest::send() {
-    return _lazy_target.init_as<coro::lazy_future<Stream>::promise_target_type>(
-          [&](auto promise) {
+coro::deferred_future<Stream> ClientRequest::send() {
+    return [this](auto promise) -> coro::prepared_coro {
         _stream_promise = std::move(promise);
         _command = Command::sendRequest;
 
@@ -286,48 +278,31 @@ coro::lazy_future<Stream> ClientRequest::send() {
             _stream_promise(_response_stream);
         } else if (_req_sent) {
             if (_custom_te) {
-                _read_fut << [&]{return _s.read();};
-                _read_fut.register_target(
-                        _target.init_as<coro::future<std::string_view>::target_type>(
-                                [&](auto fut){receive_response(fut);}
-                ));
+                _read_fut << [&]{return _s.read();} >> [this]{receive_response();};
             } else {
-                _write_fut << [&]{return _body_stream.write_eof();};
-                _write_fut.register_target(
-                        _target.init_as<coro::future<bool>::target_type>(
-                                [&](auto fut){after_send_headers(fut);}
-                ));
-
-
+                _write_fut << [&]{return _body_stream.write_eof();} >> [this]{after_send_headers();};
             }
         } else {
             _write_fut << [&]{return send_headers();};
-            _write_fut.register_target(
-                        _target.init_as<coro::future<bool>::target_type>(
-                                [&](auto fut){after_send_headers(fut);}
-            ));
-
+            _write_fut >> [this]{after_send_headers();};
         }
-    });
+        return {};
+    };
 }
 
 
 
-coro::lazy_future<Stream> ClientRequest::send(std::string_view body) {
+coro::deferred_future<Stream> ClientRequest::send(std::string_view body) {
     if (!_req_sent) {
         if (_has_te) throw std::logic_error("Invalid request state: Transfer Encoding cannot be used when send(<body>) is called");
         _body_to_write = body;
         content_length(body.size());
-        return _lazy_target.init_as<coro::lazy_future<Stream>::promise_target_type>(
-                [&](auto promise) {
+        return [this](auto promise) -> coro::prepared_coro {
                     _command = Command::sendRequest;
                     _stream_promise = std::move(promise);
-                    _write_fut << [&]{return send_headers();};;
-                    _write_fut.register_target(
-                            _target.init_as<coro::future<bool>::target_type>(
-                                    [&](auto fut){after_send_headers(fut);}
-                    ));
-        });
+                    _write_fut << [&]{return send_headers();} >> [this]{after_send_headers();};
+                    return {};
+        };
     } else {
         return send();
     }
@@ -358,9 +333,9 @@ void ClientRequest::prepare_response_stream() {
     _resp_recv = true;
 }
 
-void ClientRequest::after_send_headers(coro::future<bool> *res) noexcept {
+void ClientRequest::after_send_headers() noexcept {
     try {
-        bool r = *res;
+        bool r = _write_fut;
         if (!r) throw ConnectionReset();
 
         if (!_body_to_write.empty()) {
@@ -368,9 +343,7 @@ void ClientRequest::after_send_headers(coro::future<bool> *res) noexcept {
             _body_to_write = {};
             _content_length = 0;
             _write_fut << [&]{return _s.write(s);};
-            _write_fut.register_target(_target.init_as<coro::future<bool>::target_type>(
-                    [&](auto fut){return after_send_headers(fut);}
-            ));
+            _write_fut >> [this]{return after_send_headers();};
             return;
         }
 
@@ -382,9 +355,7 @@ void ClientRequest::after_send_headers(coro::future<bool> *res) noexcept {
             case Command::beginBody:
                 if (_expect_100) {
                     _read_fut << [&]{return _s.read();};
-                    _read_fut.register_target(_target.init_as<coro::future<std::string_view>::target_type>(
-                            [&](auto fut){receive_response(fut);}
-                    ));
+                    _read_fut >> [this]{receive_response();};
                     return;
                 } else {
                     prepare_body_stream();
@@ -395,15 +366,11 @@ void ClientRequest::after_send_headers(coro::future<bool> *res) noexcept {
                 if (_content_length>0 || _is_te_chunked) {
                     prepare_body_stream();
                     _write_fut << [&]{return _body_stream.write_eof();};
-                    _write_fut.register_target(_target.init_as<coro::future<bool>::target_type>(
-                            [&](auto fut){after_send_headers(fut);}
-                    ));
+                    _write_fut >> [this]{after_send_headers();};
 
                 } else {
                     _read_fut << [&]{return _s.read();};
-                    _read_fut.register_target(_target.init_as<coro::future<std::string_view>::target_type>(
-                            [&](auto fut){receive_response(fut);}
-                    ));
+                    _read_fut >> [this]{receive_response();};
                 }
                 return;
         }

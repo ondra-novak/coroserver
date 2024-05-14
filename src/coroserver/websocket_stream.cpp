@@ -32,10 +32,7 @@ public:
                 _reader.reset();
             }
             _read_promise = std::move(p);
-            new (&_read_fut) auto(_s.read());
-            _read_fut >> [&]{
-                on_read();
-            };
+            _fut << [&]{return _s.read();} >> [&]{on_read();};
         };
     }
 
@@ -66,8 +63,7 @@ protected:
 
     void on_read() noexcept { // @suppress("No return")
         try {
-            std::string_view data = _read_fut;
-            std::destroy_at(&_read_fut);
+            std::string_view data = coro::get<coro::future<std::string_view> >(_fut).get();
             if (data.empty()) {
 
                 if (_ping_sent) {
@@ -102,8 +98,7 @@ protected:
                     data = _s.read_nb();
                 }
             }
-            new (&_read_fut) auto (_s.read());
-            _read_fut >> [&]{on_read();};
+            _fut << [&]{return _s.read();} >> [&]{on_read();};
         } catch (...) {
             _read_promise.reject();
         }
@@ -114,10 +109,7 @@ protected:
     MTStreamWriter _writer;
     Builder _builder;
     coro::promise<Message> _read_promise;
-    union {
-        coro::future<std::string_view> _read_fut;
-        coro::deferred_future<void> _close_fut;
-    };
+    coro::future_variant<std::string_view, void> _fut;
     bool _ping_sent = false;
     bool _closed = false;
 
@@ -164,9 +156,7 @@ coro::deferred_future<bool> Stream::close(std::uint16_t code) {
 }
 
 void Stream::InternalState::destroy() {
-    new (&_close_fut) auto(close(Base::closeNormal));
-    _close_fut >> [&]{
-        std::destroy_at(&_close_fut);
+    _fut << [&]{return close(Base::closeNormal);} >> [&]{
         delete this;
     };
 }

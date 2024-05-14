@@ -239,8 +239,8 @@ protected:
     coro::future<bool> _write_fut;
 
 
-    void after_send_headers(coro::future<bool> *res) noexcept;
-	void receive_response(coro::future<std::string_view> *res) noexcept;
+    void after_send_headers() noexcept;
+	void receive_response() noexcept;
     kmp_search<char> _hdr_sep_search;
     coro::promise<Stream> _stream_promise;
     Command _command = Command::none;
