@@ -94,7 +94,16 @@ public:
 
     ///Recieve
     RetVal recv(Handle h, void *buffer, std::size_t size, Timepoint timeout);
-    int recv_nb(Handle h, void *buffer, std::size_t size);
+    ///Receive in non-blocking mode
+    /**
+     * @param h handle
+     * @param buffer pointer to buffer
+     * @param size buffer size
+     * 
+     * @return count of read bytes. Function can return zero if none bytes were read. This
+     * doesn't indicate end of stream. You need to call recv() to determine this state
+    */
+    unsigned int recv_nb(Handle h, void *buffer, std::size_t size);
 
     ///Send
     RetVal send(Handle h, const void *buffer, std::size_t size, Timepoint timeout);

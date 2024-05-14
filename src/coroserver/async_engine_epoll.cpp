@@ -60,7 +60,7 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::recv(Handle h, void *buffer, std::size_
     }
 }
 
-int AsyncEngineImpl::recv_nb(Handle h, void *buffer, std::size_t size) {
+unsigned int AsyncEngineImpl::recv_nb(Handle h, void *buffer, std::size_t size) {
     auto &reg = SocketReg::from_handle(h);
     int r = ::read(reg._socket, buffer, size);
     if (r >= 0) {
@@ -370,9 +370,9 @@ bool AsyncEngineImpl::insert_timeout(SocketReg &reg) {
 
 
     bool updated = _next_wakeup > reg._timeout;
-    if (updated) _next_wakeup == reg._timeout;
+    if (updated) _next_wakeup = reg._timeout;
 
-    _tm_map.insert(&reg).first == _tm_map.begin();
+    _tm_map.insert(&reg);
     return updated;
 }
 

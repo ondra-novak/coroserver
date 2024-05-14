@@ -16,7 +16,7 @@ AsyncEngine::RetVal AsyncEngine::recv(Handle h, void *buffer, std::size_t size,
     return _ptr->recv(h, buffer, size, timeout);
 }
 
-int AsyncEngine::recv_nb(Handle h, void *buffer, std::size_t size) {
+unsigned int AsyncEngine::recv_nb(Handle h, void *buffer, std::size_t size) {
     return _ptr->recv_nb(h, buffer, size);
 }
 

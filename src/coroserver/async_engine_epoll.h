@@ -42,7 +42,7 @@ public:
 
 
     RetVal recv(Handle h, void *buffer, std::size_t size, Timepoint timeout);
-    int recv_nb(Handle h, void *buffer, std::size_t size);
+    unsigned int recv_nb(Handle h, void *buffer, std::size_t size);
     RetVal send(Handle h, const void *buffer, std::size_t size, Timepoint timeout);
     RetVal wait_connect(Handle h, Timepoint timeout);
     RetVal accept(Handle h, Handle &retHandle, PeerName &retPeerName, Timepoint timeout);

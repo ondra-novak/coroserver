@@ -81,13 +81,7 @@ coro::future<std::string_view> SocketStream::read() {
             return _engine.recv(_socket, _read_buffer.data(), _read_buffer.size(),
                     _tms.get_read_timeout());
         };
-        if (!_wait_read_result.is_pending() && _wait_read_result.has_value()) {
-            int r = _wait_read_result.get();
-            if (r > 0 && static_cast<std::size_t>(r) == _read_buffer.size()) {
-                _new_buffer_size = _new_buffer_size*3/2;
-            }
-        }
-        _wait_read_result >> [this]{
+        auto finish = [this]{
             if (_wait_read_result.has_value()) {
                 int r = _wait_read_result.get();
                 if (r < 0) {
@@ -96,13 +90,22 @@ coro::future<std::string_view> SocketStream::read() {
                     _is_eof = true;
                     _read_promise();
                 } else {
-                    _read_promise(_read_buffer.data(), static_cast<std::size_t>(r));
+                    std::size_t sz = static_cast<std::size_t>(r);
+                    _cntr.read+=sz;
+                    _read_promise(_read_buffer.data(), sz);
                 }
             } else {
                 _is_eof = true;
                 _read_promise();
             }
         };
+        if (!_wait_read_result.set_callback(finish)) {
+            int r = _wait_read_result.get();
+            if (r > 0 && static_cast<std::size_t>(r) == _read_buffer.size()) {
+                _new_buffer_size = _new_buffer_size*3/2;
+            }
+            finish();
+        }
     };
 }
 
@@ -137,11 +140,14 @@ void SocketStream::write_begin() {
         return _engine.send(_socket, _write_buffer.data(), _write_buffer.size(),
                 _tms.get_write_timeout());
     };
+    
     _wait_write_result >> [this]{
         if (_wait_write_result.has_value()) {
             int r = _wait_write_result.get();
             if (r > 0) {
-                _write_buffer = _write_buffer.substr(r);
+                std::size_t sz = static_cast<std::size_t>(r);
+                _write_buffer = _write_buffer.substr(sz);
+                _cntr.write+=sz;
                 if (_write_buffer.empty()) _write_promise(true);
                 this->write_begin();
             } else {
