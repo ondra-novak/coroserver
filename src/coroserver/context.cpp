@@ -7,7 +7,6 @@
 
 #include "context.h"
 #include "exceptions.h"
-#include "epoll.h"
 
 #include "socket_stream.h"
 

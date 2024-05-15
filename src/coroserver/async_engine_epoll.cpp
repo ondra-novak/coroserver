@@ -22,6 +22,7 @@ AsyncEngineImpl::AsyncEngineImpl():_epoll(epoll_create1(EPOLL_CLOEXEC)) {
     }
     epoll_event ev = {EPOLLIN, {.ptr = nullptr}};
     epoll_ctl(_epoll, EPOLL_CTL_ADD, _notify.getFD(), &ev);
+    signal(SIGPIPE, SIG_IGN);
 }
 
 AsyncEngineImpl::~AsyncEngineImpl() {
@@ -38,7 +39,7 @@ AsyncEngineImpl::RetVal AsyncEngineImpl::recv(Handle h, void *buffer, std::size_
     if (reg._eof) return 0;
     int r = ::read(reg._socket, buffer, size);
     if (r >= 0) {
-        if (r == 0) reg._eof = 0;
+        if (r == 0) reg._eof = true;
         return r;
     }
     int e = errno;
@@ -205,12 +206,14 @@ AsyncEngineImpl::Handle AsyncEngineImpl::listen(const PeerName &ifc) {
         FileDescriptor fd = ::socket(addr->sa_family,
                 SOCK_STREAM| SOCK_CLOEXEC|SOCK_NONBLOCK,
                 (addr->sa_family == AF_INET || addr->sa_family == AF_INET6)?IPPROTO_TCP:0);
+           int on = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,&on, sizeof(int));
         if (!fd) {
             throw std::system_error(errno, std::system_category(), "::socket failed (listen)");
         }
         if (addr->sa_family == AF_INET6) {
            int on = 1;
-           if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const void *)&on, sizeof(on)) == -1) {
+           if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,&on, sizeof(on)) == -1) {
                throw std::system_error(errno, std::system_category(), "can't disable IPv4-mapped (setsockopt)");
            }
         }

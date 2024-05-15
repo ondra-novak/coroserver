@@ -12,6 +12,55 @@
 namespace coroserver {
 
 
+template<typename T>
+struct CacheFriendlyAllocator {
+
+    using value_type = T;
+
+    union Item {
+        T _payload;
+        Item *_next_free;
+
+        constexpr Item() {};
+        constexpr ~Item() {};
+    };
+
+    std::deque<Item> _items = {};
+    Item *_first_free = nullptr;
+
+    CacheFriendlyAllocator() = default;
+    CacheFriendlyAllocator(const CacheFriendlyAllocator &) {} //default
+    template<typename U>
+    CacheFriendlyAllocator(const CacheFriendlyAllocator<U> &) {} //default
+
+    T *allocate(int n) {
+       if (n != 1) {
+           return reinterpret_cast<T *>(::operator new(sizeof(T)*n));
+       }
+       if (_first_free) {
+           Item *x = _first_free;
+           _first_free = x->_next_free;
+           return &x->_payload;
+       } else {
+           _items.emplace_back();
+           Item &x = _items.back();
+           return &x._payload;
+       }
+    }
+
+    void deallocate(T *ptr, int n) {
+        if (n != 1) {
+            ::operator delete(ptr);
+            return;
+        }
+        static constexpr Item tst;
+        static auto ofs = reinterpret_cast<const char *>(&tst._payload) - reinterpret_cast<const char *>(&tst);
+        Item *x = reinterpret_cast<Item *>(reinterpret_cast<char *>(ptr)- ofs);
+        x->_next_free = _first_free;
+        _first_free = x;
+    }
+};
+
 class AsyncEngineImpl {
 public:
 
@@ -122,7 +171,7 @@ protected:
         }
     };
 
-    using TimeoutMap = std::set<SocketReg *, TimeoutMapCmp>;
+    using TimeoutMap = std::set<SocketReg *, TimeoutMapCmp, CacheFriendlyAllocator<SocketReg *> >;
     TimeoutMap _tm_map;
 
     FileDescriptor _epoll;

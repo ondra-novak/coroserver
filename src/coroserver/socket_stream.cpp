@@ -136,6 +136,10 @@ void SocketStream::write_begin() {
         _write_promise(false);
         return;
     }
+    if (_write_buffer.empty()) {
+        _write_promise(true);
+        return;
+    }
     _wait_write_result << [&]{
         return _engine.send(_socket, _write_buffer.data(), _write_buffer.size(),
                 _tms.get_write_timeout());

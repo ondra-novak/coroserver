@@ -416,6 +416,7 @@ coro::future<bool> ServerRequest::send(std::string &&body) {
                     _write_fut >> [this, prom = std::move(prom)]() mutable {
                         //separate closure
                         [this,prom = std::move(prom)]() mutable {
+                            _headers_sent = true;
                             try {
                                 bool b = _write_fut;
                                 if (!b) {
@@ -457,6 +458,7 @@ coro::deferred_future<Stream> ServerRequest::send() {
                     _write_fut.get();
                     _write_fut << [this]{return _cur_stream.write(prepare_output_headers());};
                     _write_fut >> [this, prom = std::move(prom)]() mutable {
+                        _headers_sent = true;
                         try {
                             bool b = _write_fut;
                             if (!b) {
