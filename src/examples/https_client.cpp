@@ -1,6 +1,5 @@
 #include <iostream>
 #include <coroserver/https_client.h>
-#include <coroserver/stream_utils.h>
 
 
 
@@ -8,8 +7,8 @@ coro::async<void> make_GET_request(coroserver::https::Client &client) {
     coroserver::http::ClientRequest req(co_await client.open(coroserver::http::Method::GET, "https://eu.httpbin.org/get?aa=10"));
     coroserver::Stream response = co_await req.send();
     std::string data;
-    coroserver::BlockReader brd(response);
-    data = co_await brd.read(-1);
+    coroserver::BinBuffer bbuf;
+    data = co_await response.block_read(bbuf, -1);
     std::cout << "  Status: " << req.get_status() << std::endl;
     std::cout << "  Status Message: " << req.get_status_message() << std::endl;
     for (const auto &x: req.headers()) {
@@ -24,8 +23,8 @@ coro::async<void> make_POST_request(coroserver::https::Client &client) {
     coroserver::http::ClientRequest req(co_await client.open(coroserver::http::Method::POST, "https://eu.httpbin.org/post?aa=10"));
     coroserver::Stream response = co_await req.send("Ahoj=Nazdar");
     std::string data;
-    coroserver::BlockReader brd(response);
-    data = co_await brd.read(-1);
+    coroserver::BinBuffer bbuf;
+    data = co_await response.block_read(bbuf, -1);
     std::cout << "  Status: " << req.get_status() << std::endl;
     std::cout << "  Status Message: " << req.get_status_message() << std::endl;
     for (const auto &x: req.headers()) {
@@ -43,8 +42,8 @@ coro::async<void> make_POST_request_te(coroserver::https::Client &client) {
     co_await body.write("Next chunk");
     coroserver::Stream response = co_await req.send();
     std::string data;
-    coroserver::BlockReader brd(response);
-    data = co_await brd.read(-1);
+    coroserver::BinBuffer bbuf;
+    data = co_await response.block_read(bbuf, -1);
     std::cout << "  Status: " << req.get_status() << std::endl;
     std::cout << "  Status Message: " << req.get_status_message() << std::endl;
     for (const auto &x: req.headers()) {
@@ -66,8 +65,8 @@ coro::async<void> make_POST_request_te_except(coroserver::https::Client &client,
     }
     coroserver::Stream response = co_await req.send();
     std::string data;
-    coroserver::BlockReader brd(response);
-    data = co_await brd.read(-1);
+    coroserver::BinBuffer bbuf;
+    data = co_await response.block_read(bbuf, -1);
     std::cout << "  Status: " << req.get_status() << std::endl;
     std::cout << "  Status Message: " << req.get_status_message() << std::endl;
     for (const auto &x: req.headers()) {
@@ -82,8 +81,8 @@ coro::async<void> make_POST_request_te_except_empty(coroserver::https::Client &c
     req.expect100continue();
     coroserver::Stream response = co_await req.send();
     std::string data;
-    coroserver::BlockReader brd(response);
-    data = co_await brd.read(-1);
+    coroserver::BinBuffer bbuf;
+    data = co_await response.block_read(bbuf, -1);
     std::cout << "  Status: " << req.get_status() << std::endl;
     std::cout << "  Status Message: " << req.get_status_message() << std::endl;
     for (const auto &x: req.headers()) {
@@ -100,12 +99,12 @@ int main() {
     coroserver::ssl::Context ssl = coroserver::ssl::Context::init_client();
     coroserver::Context ctx(2);
     coroserver::https::Client httpc(ctx, ssl, "coroserver/20");
-    make_GET_request(httpc).join();
-    make_POST_request(httpc).join();
-    make_POST_request_te(httpc).join();
-    make_POST_request_te_except(httpc, false).join();
-    make_POST_request_te_except(httpc, true).join();
-    make_POST_request_te_except_empty(httpc).join();
+    make_GET_request(httpc).run();
+    make_POST_request(httpc).run();
+    make_POST_request_te(httpc).run();
+    make_POST_request_te_except(httpc, false).run();
+    make_POST_request_te_except(httpc, true).run();
+    make_POST_request_te_except_empty(httpc).run();
 
     return 0;
 }
