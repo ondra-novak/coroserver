@@ -21,7 +21,7 @@ struct CacheFriendlyAllocator {
         T _payload;
         Item *_next_free;
 
-        constexpr Item() {};
+        constexpr Item():_next_free(nullptr) {};
         constexpr ~Item() {};
     };
 

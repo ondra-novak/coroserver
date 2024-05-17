@@ -22,12 +22,12 @@ using _Stream = Stream;
 
 class Stream: public AbstractProxyStream {
 public:
+
+
     Stream(_Stream target, Context ctx);
-
-
+    ~Stream();
     Stream(const Stream &) = delete;
     Stream &operator=(const Stream &) = delete;
-    ~Stream();
 
     virtual coro::future<std::string_view> read() override;
     virtual coro::future<bool> write(std::string_view data) override;
@@ -65,6 +65,8 @@ public:
 
 protected:
 
+    static std::shared_ptr<Stream> create_stream(_Stream target, Context ctx);
+
     void connect_mode();
     void connect_mode(const std::string &hostname);
     void connect_mode(const std::string &hostname, const Certificate &client_cert);
@@ -72,12 +74,11 @@ protected:
     void accept_mode(const Certificate &server_cert);
     std::mutex _mx;
 
-
     enum class State {
         not_established,
         established,
         closing,
-        closed
+        closed,
     };
 
     enum class Action {
@@ -90,13 +91,15 @@ protected:
     SSLObject _ssl;
     BIO *_read_data;
     BIO *_write_data;
-    State _state = State::not_established;
+    std::atomic<State> _state = State::not_established;
 
     std::vector<char> _read_buffer;
     std::size_t _read_buffer_size = 1024;
+    coro::generator<std::string_view> _reader;
 
     std::string_view _wrbuff;
     std::vector<char> _encrypted_write_buffer;
+    coro::generator<bool> _writer;
 
 
     template<typename RetVal>
@@ -104,35 +107,15 @@ protected:
     Action determine_ssl_state(int r);
     void post_ssl_read(std::string_view buffer);
     bool post_ssl_write(bool st);
-    coro::async<bool> write_eof_coro();
     coro::future<bool> send_encrypted();
     coro::future<std::string_view> read_encrypted();
-
-
-    coro::promise<std::string_view> _read_result;
-    coro::promise<bool> _write_result;
 
     coro::mutex _rdmx;
     coro::mutex _wrmx;
     coro::mutex _handshake;
 
-
-
-    coro::reusable_allocator _rdstor;
-    coro::reusable_allocator _wrstor;
-
-
-    ///special result from run_ssl_io - operation complete, return retval
-    static constexpr int _run_ssl_result_complete = 1;
-    ///special result from run_ssl_io - repeat function call
-    static constexpr int _run_ssl_result_retry = 2;
-
-    enum class Op{
-        read,
-        write,
-        establish_read,
-        establish_write,
-    };
+    coro::deferred_future<bool> _async_destroy_wr;
+    static constexpr std::string_view eof_mark = "eof";
 
 
 

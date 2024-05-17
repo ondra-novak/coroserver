@@ -144,7 +144,7 @@ void SocketStream::write_begin() {
         return _engine.send(_socket, _write_buffer.data(), _write_buffer.size(),
                 _tms.get_write_timeout());
     };
-    
+
     _wait_write_result >> [this]{
         if (_wait_write_result.has_value()) {
             int r = _wait_write_result.get();
@@ -192,7 +192,7 @@ static coro::coroutine shutdown_slow(AsyncResource *h, AsyncEngine engine) {
         while (engine.get_siocoutq(h) > 0 && max_wait > std::chrono::system_clock::now()) {
             //wait for
             char buff[1024];
-            auto p = engine.recv(h, buff, sizeof(buff), TimeoutSettings::from_duration(std::chrono::milliseconds(100)));
+            auto p = engine.recv(h, buff, sizeof(buff), TimeoutSettings::from_duration(std::chrono::milliseconds(200)));
             //co_await and check status - no value mean, we can no longer wait
             if (co_await !p )
                 break;
