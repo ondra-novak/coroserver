@@ -100,11 +100,11 @@ protected:
 
 
     template<typename RetVal>
-    coro::async<RetVal, coro::reusable_allocator> io_coroutine(coro::reusable_allocator &);
+    coro::generator<RetVal> io_coroutine();
     Action determine_ssl_state(int r);
     void post_ssl_read(std::string_view buffer);
     bool post_ssl_write(bool st);
-    coro::async<bool, coro::reusable_allocator> write_eof_coro(coro::reusable_allocator &);
+    coro::async<bool> write_eof_coro();
     coro::future<bool> send_encrypted();
     coro::future<std::string_view> read_encrypted();
 

@@ -38,101 +38,47 @@ enum class TraceEvent {
     logger
 };
 
-
-
-
-
-namespace _details {
-
-    template<typename X> struct is_future_t {
-        static constexpr bool value = false;
-    };
-    template<typename X> struct is_future_t<coro::future<X> > {
-        static constexpr bool value = true;
-    };
-    template<typename X> struct is_future_t<coro::deferred_future<X> > {
-        static constexpr bool value = true;
-    };
-    template<typename X> struct is_future_t<coro::shared_future<X> > {
-        static constexpr bool value = true;
-    };
-
-    template<typename X>
-    inline constexpr bool is_future = is_future_t<X>::value;
-
-
-    inline coro::prepared_coro deliver(coro::promise<void>::notify &&ntf) {
-        coro::prepared_coro out;
-        ntf.deliver([&](auto &&fn){out = fn();});
-        return out;
-    }
-
-    template<std::invocable<ServerRequest &> Fn>
-    auto convert_handler(Fn &&fn) {
-        using Ret = std::invoke_result_t<Fn, ServerRequest &>;
-        if constexpr(std::is_same_v<Ret, coro::future<void> >) {
-            return [fn = std::move(fn)](ServerRequest &req, std::string_view) mutable-> coro::future<void> {
-                return fn(req);
-            };
-        } else if constexpr(is_future<Ret>) {
-            return [fut = Ret(), fn = std::move(fn)](ServerRequest &req, std::string_view) mutable -> coro::future<void> {
-                return [&](auto promise) {
-                    fut << [&]{return fn(req);};
-                    fut >> [&fut, promise = std::move(promise)]() mutable {
-                        try {
-                            fut.get();
-                            return deliver(promise());
-                        } catch (...) {
-                            return deliver(promise.reject());
-                        }
-                    };
-                };
-            };
-        } else {
-            return [fn = std::move(fn)](ServerRequest &req, std::string_view) mutable-> coro::future<void> {
-                fn(req);
-                return coro::future<void>(std::in_place);
-            };
-        }
-    }
-    template<std::invocable<ServerRequest &, std::string_view> Fn>
-    auto convert_handler(Fn &&fn) {
-        using Ret = std::invoke_result_t<Fn, ServerRequest &, std::string_view>;
-        if constexpr(std::is_same_v<Ret, coro::future<void> >) {
-            return Fn(std::move(fn));
-        } else if constexpr(is_future<Ret>) {
-            return [fut = Ret(), fn = std::move(fn)](ServerRequest &req, std::string_view vpath) mutable -> coro::future<void> {
-                return [&](auto promise) {
-                    fut << [&]{return fn(req, vpath);};
-                    fut >> [&fut, promise = std::move(promise)]() mutable {
-                        try {
-                            fut.get();
-                            return deliver(promise());
-                        } catch (...) {
-                            return deliver(promise.reject());
-                        }
-                    };
-                };
-            };
-        } else {
-            return [fn = std::move(fn)](ServerRequest &req, std::string_view vpath) mutable-> coro::future<void> {
-                fn(req, vpath);
-                return coro::future<void>(std::in_place);
-            };
-        }
-    }
-}
-
 template<typename Fn>
 concept HandlerFn = (std::invocable<Fn, ServerRequest &> || std::invocable<Fn, ServerRequest &, std::string_view>);
-
 
 class MethodMap {
 public:
 
+    class HandlerReturn: public coro::future<void> {
+    public:
+        using coro::future<void>::future;
+
+        template<std::invocable<> Fn>
+        auto &operator<< (Fn &&fn) {
+            using Ret = std::invoke_result_t<Fn>;
+            if constexpr(std::is_same_v<Ret, HandlerReturn>) {
+                std::destroy_at(this);
+                new(this) auto(fn());
+            } else {
+                coro::future<void> *stor = this;
+                std::destroy_at(stor);
+                using Ret = std::invoke_result_t<Fn>;
+                if constexpr(std::is_void_v<Ret>) {
+                    fn();
+                    std::construct_at(stor, std::in_place);
+                } else {
+                    static_assert((std::is_same_v<Ret, coro::future<bool> > || std::is_same_v<Ret, coro::future<void> >));
+                    new(stor) auto(fn());
+                }
+            }
+            return *this;
+        }
+        template<std::invocable<> Fn>
+        HandlerReturn (Fn &&fn) {
+            *this << std::forward<Fn>(fn);
+        }
+        
+
+     };
+
     class IHandler {
     public:
-        virtual coro::future<void> call(ServerRequest &, std::string_view) = 0;
+        virtual HandlerReturn call(ServerRequest &, std::string_view) = 0;
         virtual ~IHandler() = default;
     };
 
@@ -140,12 +86,18 @@ public:
 
     template<HandlerFn Fn>
     static Handler make_handler(Fn &&fn) {
-        using TargetFn = decltype(_details::convert_handler(std::forward<Fn>(fn)));
-        class HFn: public IHandler {
-        public:
-            HFn(Fn &&fn):_fn(_details::convert_handler(std::forward<Fn>(fn))) {}
-            virtual coro::future<void> call(ServerRequest &req, std::string_view vpath) {
-                return _fn(req, vpath);
+        using TargetFn = std::decay_t<Fn>;
+       class HFn: public IHandler {
+       public:
+            HFn(Fn &&fn):_fn(std::forward<Fn>(fn)) {}
+            virtual HandlerReturn call(ServerRequest &req, std::string_view vpath) {
+                return [&]{
+                    if constexpr(std::is_invocable_v<Fn, ServerRequest &, std::string_view>) {
+                        return _fn(req, vpath);
+                    } else {
+                        return _fn(req);
+                    }
+                };
             }
         protected:
             TargetFn _fn;
@@ -200,7 +152,6 @@ protected:
     std::array<Handler,static_cast<int>(Method::unknown)+1> methods;
 };
 
-
 ///Base routing, base class for Server
 /**
  * You can create additional routing tables for cascade routing
@@ -208,7 +159,7 @@ protected:
 class Router {
 public:
 
-    using HandlerReturn = coro::future<void>;
+    using HandlerReturn = MethodMap::HandlerReturn;
 
     ///Register a handler to a given path
     /**
@@ -302,7 +253,6 @@ protected:
     PrefixMap<MethodMap> _endpoints;
 
 };
-
 
 class Server: protected Router {
 public:

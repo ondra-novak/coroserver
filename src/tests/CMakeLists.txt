@@ -17,11 +17,11 @@ set(testFiles
      prefixmap.cpp
      named_enum.cpp
      query.cpp
-#    http_client.cpp
+    http_client.cpp
      mt_stream.cpp
 #    shared_lockable_ptr.cpp
 #    umq_basic.cpp
-#    text_buffer.cpp
+    text_buffer.cpp
 
 )
 

@@ -22,7 +22,8 @@ Stream::Stream(_Stream target, Context ctx):AbstractProxyStream(target.getStream
 }
 
 template<typename RetVal>
-coro::async<RetVal, coro::reusable_allocator> Stream::io_coroutine(coro::reusable_allocator &) {
+coro::generator<RetVal> Stream::io_coroutine() {
+
     static constexpr bool reading = std::is_same_v<RetVal, std::string_view>;
     static constexpr bool writing = std::is_same_v<RetVal, bool>;
     static_assert(reading || writing, "Invalid usage");
@@ -67,7 +68,10 @@ coro::async<RetVal, coro::reusable_allocator> Stream::io_coroutine(coro::reusabl
             {//SSL under lock
                 std::lock_guard _(_mx);
                 //return eof, if closed
-                if (_state == State::closed) co_return std::string_view();
+                if (_state == State::closed) {
+                    co_yield std::string_view();
+                    
+                }
                 //prepare buffer
                 _read_buffer.resize(_read_buffer_size);
                 //read from ssl
@@ -80,15 +84,22 @@ coro::async<RetVal, coro::reusable_allocator> Stream::io_coroutine(coro::reusabl
                 if (sz == _read_buffer_size) {
                     _read_buffer_size = _read_buffer_size *3 /2;
                 }
-                co_return std::string_view(_read_buffer.data(), sz);
+                co_yield std::string_view(_read_buffer.data(), sz);
+                goto rep;
             }
         } else if constexpr(writing) {
             {//SSL under lock
                 std::lock_guard _(_mx);
                 //fail write is closing
-                if (_state == State::closing || _state == State::closed) co_return false;
+                if (_state == State::closing || _state == State::closed) {
+                    co_yield false;
+                    goto rep;
+                }
                 //success write if emptyy
-                if (_wrbuff.empty()) co_return true;
+                if (_wrbuff.empty()) {
+                    co_yield true;
+                    goto rep;
+                }
                 //write buffer
                 r = SSL_write(_ssl, _wrbuff.data(), _wrbuff.size());
             }
@@ -109,10 +120,12 @@ coro::async<RetVal, coro::reusable_allocator> Stream::io_coroutine(coro::reusabl
                     if constexpr (reading) {
                         //is empty returned, return also empty
                         //this might be timeout
-                        co_return std::string_view();
+                        co_yield std::string_view();
+                        goto rep;
                     } else {
                         //timeout when write requested is failure
-                        co_return false;
+                        co_yield false;
+                        goto rep;
                     }
                 }
                 //process data
@@ -191,7 +204,7 @@ coro::future<std::string_view> Stream::read_encrypted() {
 }
 
 
-coro::async<bool, coro::reusable_allocator> Stream::write_eof_coro(coro::reusable_allocator &) {
+coro::async<bool> Stream::write_eof_coro() {
     int r;
     {
         std::lock_guard _(_mx);
@@ -213,7 +226,7 @@ coro::async<bool, coro::reusable_allocator> Stream::write_eof_coro(coro::reusabl
 }
 
 coro::future<bool> Stream::write_eof() {
-    return write_eof_coro(_wrstor);
+    return write_eof_coro();
 }
 
 bool Stream::post_ssl_write(bool st) {
@@ -229,12 +242,12 @@ bool Stream::post_ssl_write(bool st) {
 coro::future<std::string_view> Stream::read() {
     std::string_view tmp = AbstractStream::read_putback_buffer();
     if (!tmp.empty() || _state == State::closed) return tmp;
-    return io_coroutine<std::string_view>(_rdstor);
+    return io_coroutine<std::string_view>();
 }
 
 coro::future<bool> Stream::write(std::string_view data) {
     _wrbuff = data;
-    return io_coroutine<bool>(_wrstor);
+    return io_coroutine<bool>();
 }
 
 
