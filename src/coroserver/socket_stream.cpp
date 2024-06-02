@@ -186,6 +186,7 @@ PeerName SocketStream::get_peer_name() const {
 
 
 static coro::coroutine shutdown_slow(AsyncResource *h, AsyncEngine engine) {
+    LIBCORO_TRACE_SET_NAME();
     auto max_wait = std::chrono::system_clock::now()+std::chrono::seconds(30);
     //if there still some data
     try {

@@ -84,6 +84,7 @@ using SubscriberID = MyPublisher::ID;
  * @return asynchronous function (coroutine)
  */
 coro::async<void> reader(ws::Stream stream, MyPublisher &publisher, SubscriberID id) {
+    LIBCORO_TRACE_SET_NAME(id);
     //this is infinite cycle
     while (true) {
         //receive websocket message
@@ -94,6 +95,7 @@ coro::async<void> reader(ws::Stream stream, MyPublisher &publisher, SubscriberID
             case ws::Type::text: {
                 //create string
                 std::string txt(msg.payload);
+                LIBCORO_TRACE_SET_NAME();
                 //publish string
                 publisher.publish(std::move(txt));
             }break;
@@ -121,8 +123,10 @@ coro::async<void> reader(ws::Stream stream, MyPublisher &publisher, SubscriberID
  * @return async function
  */
 coro::async<void> writer(ws::Stream s, MyPublisher &publisher) {
+
     //create queue for published data (because
     MyPublisher::queue<> q;
+    LIBCORO_TRACE_SET_NAME(static_cast<SubscriberID>(&q));
     q.subscribe(publisher);
     reader(s, publisher, &q).detach();
     bool cont;
@@ -140,6 +144,8 @@ coro::async<void> writer(ws::Stream s, MyPublisher &publisher) {
 }
 
 coro::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) {
+    LIBCORO_TRACE_SET_NAME();
+
     try {
         ws::Stream s = co_await ws::Server::accept(req);
         req.log_message("Opened websocket connection");

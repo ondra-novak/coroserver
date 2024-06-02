@@ -87,7 +87,11 @@ static coro::generator<Stream> listen_generator(AsyncEngine::UniqueHandle socket
         std::stop_token stoken,
         int group_id) {
 
+
     AsyncEngine eng = AsyncEngine::get_engine(socket);
+
+    LIBCORO_TRACE_SET_NAME(eng.get_name(socket.get()).to_string());
+
 
     std::stop_callback stopcb(stoken, [&]{
         eng.shutdown(socket.get());
@@ -108,7 +112,6 @@ static coro::generator<Stream> listen_generator(AsyncEngine::UniqueHandle socket
 
 coro::generator<Stream> Context::accept(std::vector<PeerName> &list,
                                 std::stop_token token, TimeoutSettings tms) {
-
     std::vector<coro::generator<Stream> > gens;
     std::vector<SocketHandle> handles;
     for (PeerName &x: list) {
@@ -134,6 +137,7 @@ static coro::async<ConnectToResult>connect_to(Scheduler &sch, Engine &eng,
         TimeoutSettings::Dur timeout,
         std::stop_token stop) {
 
+    LIBCORO_TRACE_SET_NAME(peer.to_string());
 
     if (delay_sec) {
         std::stop_callback _(stop, [&]{
@@ -148,6 +152,9 @@ static coro::async<ConnectToResult>connect_to(Scheduler &sch, Engine &eng,
 
 coro::future<Stream> Context::connect(std::vector<PeerName> list, TimeoutSettings::Dur connect_timeout, TimeoutSettings tms) {
     std::stop_source stop;
+
+    LIBCORO_TRACE_SET_NAME();
+
 
     coro::task_list<coro::future<ConnectToResult> > tasks;
     for (std::size_t i = 0; i < list.size(); ++i) {
