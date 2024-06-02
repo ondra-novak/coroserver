@@ -74,7 +74,6 @@ unsigned int AsyncEngineImpl::recv_nb(Handle h, void *buffer, std::size_t size) 
     }
     int e = errno;
     if (e == EWOULDBLOCK || e == EPIPE || e == ECONNRESET) {
-        reg._eof = true;
         return 0;
     }
     throw std::system_error(e, std::system_category(), "recv_nb");

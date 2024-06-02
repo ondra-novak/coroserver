@@ -627,17 +627,17 @@ protected:
         T *data;
 
         template<typename X>
-        DynamicPart(X beg, X end):sz(std::distance(beg,end)), data(new T[sz]) {
+        constexpr DynamicPart(X beg, X end):sz(std::distance(beg,end)), data(new T[sz]) {
             std::copy(beg, end, data);
         }
-        ~DynamicPart() {
+        constexpr ~DynamicPart() {
             delete [] data;
         }
 
-        DynamicPart(DynamicPart &&other)
+        constexpr DynamicPart(DynamicPart &&other)
             :sz(std::exchange(other.sz,0))
             ,data(std::exchange(other.data, nullptr)) {}
-        DynamicPart(const DynamicPart &other)
+        constexpr DynamicPart(const DynamicPart &other)
             :sz(other.sz)
             ,data(new T[sz]) {
             std::copy(other.data, other.data+sz, data);
@@ -654,6 +654,7 @@ protected:
     StaticPart _st;
     DynamicPart _dyn;
     ViewPart _view;
+
 
 };
 

@@ -128,7 +128,7 @@ coro::async<void> writer(ws::Stream s, MyPublisher &publisher) {
     bool cont;
     do {
         auto msg = q.pop();
-        cont = co_await msg.has_value();
+        cont = co_await !!msg;
         if (cont) {
             std::string str = msg;
             bool st = co_await s.send(ws::Message{str, ws::Type::text});
@@ -145,7 +145,7 @@ coro::future<void> ws_handler(http::ServerRequest &req, MyPublisher &publisher) 
         req.log_message("Opened websocket connection");
         co_await writer(std::move(s), publisher);
         req.log_message("Closed websocket connection");
-    } catch (const coro::broken_promise_exception &) {
+    } catch (const coro::await_canceled_exception &) {
         req.set_status(400);
     }
 }
