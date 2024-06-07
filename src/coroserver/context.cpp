@@ -90,7 +90,7 @@ static coro::generator<Stream> listen_generator(AsyncEngine::UniqueHandle socket
 
     AsyncEngine eng = AsyncEngine::get_engine(socket);
 
-    LIBCORO_TRACE_SET_NAME(eng.get_name(socket.get()).to_string());
+    coro::trace::log(eng.get_name(socket.get()).to_string());
 
 
     std::stop_callback stopcb(stoken, [&]{
@@ -137,7 +137,7 @@ static coro::async<ConnectToResult>connect_to(Scheduler &sch, Engine &eng,
         TimeoutSettings::Dur timeout,
         std::stop_token stop) {
 
-    LIBCORO_TRACE_SET_NAME(peer.to_string());
+    coro::trace::log(peer.to_string());
 
     if (delay_sec) {
         std::stop_callback _(stop, [&]{
@@ -153,7 +153,6 @@ static coro::async<ConnectToResult>connect_to(Scheduler &sch, Engine &eng,
 coro::future<Stream> Context::connect(std::vector<PeerName> list, TimeoutSettings::Dur connect_timeout, TimeoutSettings tms) {
     std::stop_source stop;
 
-    LIBCORO_TRACE_SET_NAME();
 
 
     coro::task_list<coro::future<ConnectToResult> > tasks;

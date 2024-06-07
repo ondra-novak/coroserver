@@ -389,7 +389,6 @@ protected:
     template<typename Tracer>
     coro::async<void> serve_gen(coro::generator<Stream> tcp_server, Tracer tracer) {
 
-        LIBCORO_TRACE_SET_NAME();
 
         std::lock_guard _(*this);
         auto v = tcp_server();
@@ -413,8 +412,6 @@ protected:
     template<typename Tracer>
     coro::async<void> serve_req_coro(Stream s, Tracer tracer) {
 
-        LIBCORO_TRACE_SET_NAME();
-
         //prepare server request
         ServerRequest req = _factory?_factory(std::move(s)):ServerRequest(std::move(s));
 
@@ -429,7 +426,7 @@ protected:
             //load requests from the stream - return false if error
             while (co_await req.load()) {
 
-                LIBCORO_TRACE_LOG(strMethod[req.get_method()]," ", req.get_path());
+                coro::trace::log(strMethod[req.get_method()]," ", req.get_path());
 
                 //future to await handler
                 HandlerReturn fut;
