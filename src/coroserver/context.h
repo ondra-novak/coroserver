@@ -65,6 +65,21 @@ public:
         return r.await_resume();
     }
 
+    template<coro::awaitable Awt>
+    auto start(Awt &&awt, std::size_t iothreads)  {
+
+        auto stop_coro = [&]()->coro::future<coro::awaitable_result<Awt> > {
+            co_return co_await awt;
+        };
+        coro::future<coro::awaitable_result<Awt> > r = stop_coro();
+
+        _tpool.emplace(iothreads);
+        _scheduler.run(r,[&](auto &&cb){
+            _tpool->enqueue(std::move(cb));
+        });
+        return r.await_resume();
+
+    }
 
     ///stop context
     /**
