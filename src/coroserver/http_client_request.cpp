@@ -161,7 +161,7 @@ ClientRequest &&ClientRequest::expect100continue() {
 coro::future<bool> ClientRequest::send_headers() {
     _req_headers << strtable::hdr_host << ": " << _host << "\r\n";
     if (!_auth.empty()) {
-        _req_headers << strtable::hdr_authorization << ": " << _host << "\r\n";
+        _req_headers << strtable::hdr_authorization << ": " << _auth << "\r\n";
     }
     if (!_user_agent.empty()) {
         _req_headers << strtable::hdr_user_agent<< ": " << _user_agent<< "\r\n";
@@ -195,7 +195,7 @@ coro::deferred_future<Stream> ClientRequest::begin_body() {
             _command = Command::beginBody;
             _stream_promise = std::move(promise);
             _write_fut << [&]{return send_headers();} >> [this] {after_send_headers();};
-     
+
         };
         return {};
     };

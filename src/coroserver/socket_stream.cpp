@@ -152,7 +152,10 @@ void SocketStream::write_begin() {
                 std::size_t sz = static_cast<std::size_t>(r);
                 _write_buffer = _write_buffer.substr(sz);
                 _cntr.write+=sz;
-                if (_write_buffer.empty()) _write_promise(true);
+                if (_write_buffer.empty()) {
+                    _write_promise(true);
+                    return ;
+                }
                 this->write_begin();
             } else {
                 _write_promise(false);
