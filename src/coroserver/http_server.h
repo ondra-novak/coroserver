@@ -466,12 +466,12 @@ protected:
                         //exit now - connection will be closed
                         co_return;
                     }
+                    //clear any headers
+                    req.clear_headers();
                     //exception was thrown during processing the request
                     //before response has been sent
                     //so set status to 500
                     req.set_status(500);
-                    //clear any headers
-                    req.clear_headers();
                 }
                 //we are here, when request is processed, but response was not sent
                 //so explore status and generate error page

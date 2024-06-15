@@ -355,6 +355,7 @@ std::string ServerRequest::url_decode(const std::string_view &str) {
 
 void ServerRequest::clear_headers() {
     _output_headers.clear();
+    _output_headers.resize(status_response_max_len);
     _status_code = 0;
     _status_message = {};
 }
