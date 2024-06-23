@@ -238,6 +238,9 @@ public:
      */
     coro::future<bool> send_file(const std::string &path, bool use_chunked = false);
 
+    coro::future<bool> send_stream(Stream input);
+
+
     template<typename _IOStream, std::size_t buffer = 16384>
     coro::future<bool> send_stream(_IOStream stream)  {
         Stream s = co_await send();
@@ -369,10 +372,8 @@ protected:
     kmp_search<char>_search_hdr_state;
     std::string_view _send_body_data;
 
-
     coro::future<bool> _write_fut;
     coro::future<std::string_view> _read_fut;
-    coro::future<Stream> _send_fut;
     coro::function<void(bool)> _discard_body_cb;
 
     void load_request(coro::promise<bool> promise);
@@ -386,6 +387,7 @@ protected:
     void send_discard_body(ReadFuture *f);
     void send_continue();
     void send_body_continue();
+
 
 
 

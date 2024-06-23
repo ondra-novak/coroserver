@@ -564,6 +564,19 @@ coro::deferred_future<Stream> ServerRequest::get_body() {
 
 }
 
+coro::future<bool> ServerRequest::send_stream(Stream input) {
+    Stream output = co_await send();
+    auto buff = co_await input.read();
+    while (!buff.empty()) {
+        bool r = co_await output.write(buff);
+        if (r == false) co_return false;
+        buff = co_await input.read();
+    }
+    if (!co_await output.write_eof()) co_return false;
+    co_return input.is_read_timeout();
+}
+
+
 coro::future<bool> ServerRequest::send_file(const std::string &path, bool use_chunked) {
     std::ifstream f(path);
     if (!f) return false;

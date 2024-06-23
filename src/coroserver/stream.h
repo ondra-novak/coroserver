@@ -332,19 +332,16 @@ public:
     }
 
 
-    class BlockRead {
+    class BlockReadAwaitable: public coro::future<std::string_view> {
     public:
 
-        BlockRead( std::shared_ptr<IStream> &s, std::size_t limit, BinBuffer &buffer)
-            :_stream(s),_limit(limit),_buffer(buffer) {}
+        BlockReadAwaitable( std::shared_ptr<IStream> &s, std::size_t limit, BinBuffer &buffer)
+            :_stream(s),_limit(limit),_buffer(buffer) {
 
-        coro::future<std::string_view> initiate() {
-            return [&](auto promise) {
-                _buffer.clear();
-                _prom = std::move(promise);
-                _rdr << [this]{return _stream->read();};
-                _rdr >> [this]{process();};
-            };
+            _buffer.clear();
+            _prom = this->get_promise();
+            _rdr << [this]{return _stream->read();};
+            _rdr >> [this]{process();};
         }
 
     protected:
@@ -378,7 +375,7 @@ public:
         }
     };
 
-    awaitable<std::string_view, BlockRead> block_read(BinBuffer &buffer, std::size_t limit) {
+    BlockReadAwaitable block_read(BinBuffer &buffer, std::size_t limit) {
         return {_stream, limit, buffer};
     }
 
