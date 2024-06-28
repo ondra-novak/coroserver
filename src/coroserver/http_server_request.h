@@ -78,10 +78,12 @@ public:
 
     ///add header
     void add_header(const std::string_view &key, const std::string_view &value);
-    ///add header
     void add_header(const std::string_view &key, const std::size_t &value);
-    ///add header
+    void add_header(const std::string_view &key, const HeaderValue &val) {add_header(key, std::string_view(val));}
+    void add_header(const std::string_view &key, const std::string &val) {add_header(key, std::string_view(val));}
+    void add_header(const std::string_view &key, const char *val) {add_header(key, std::string_view(val));}
     void add_header(const std::string_view &key, const std::chrono::system_clock::time_point &value);
+
     ///set content type
     ServerRequest &content_type(ContentType ct);
     ///disable response buffering
