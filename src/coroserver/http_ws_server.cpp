@@ -47,7 +47,7 @@ void Server::init(http::ServerRequest &req, TimeoutSettings tm, bool need_fragme
         try {
             _Stream s = _fut;
             s.set_timeouts(_tms);
-            this->_result(s,Stream::Cfg{false, _need_fragmented});
+            this->_result(Stream::create(std::move(s),Stream::Cfg{false, _need_fragmented}));
         } catch (...) {
             this->_result.reject();
         }

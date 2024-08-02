@@ -5,160 +5,139 @@ namespace coroserver {
 
 namespace ws{
 
-class Stream::InternalState {
-public:
-    InternalState(_Stream &s, Cfg &cfg)
-    :_s(s)
-    ,_reader(cfg.need_fragmented)
-    ,_writer(s)
-    ,_builder(cfg.client) {
-        //_target.init_as<coro::future<std::string_view>::target_type>([&](auto fut){on_read(fut);});
-    }
-    ~InternalState() {}
+StreamImpl::StreamImpl(_Stream s, const Cfg &cfg)
+    :_s(s),_parser(cfg.need_fragmented),_builder(cfg.client) {}
 
-    coro::deferred_future<bool> write(const Message &msg) {
-        return _writer.write([&](auto iter){
-            _builder(msg, [&](char c){
-                *iter = c;
-                ++iter;
-            });
-        });
-    }
+StreamImpl::~StreamImpl() {
+    shutdown();
+}
 
-    coro::future<Message> read() {
-        if (_closed) return Message{{},Type::connClose, Base::closeNoStatus};
-        return [&](auto p) {
-            if (_reader.is_complete()) {
-                _reader.reset();
+void StreamImpl::shutdown() {
+    _s.shutdown();
+}
+
+
+coro::future<Message> StreamImpl::receive() {
+    return [&](auto p){
+        if (_parser.is_complete()) {
+            _parser.reset();
+        }
+        _rdfut << [this]{return _s.read();};
+        _rdfut >> [this,p = std::move(p)]() mutable {parse_msg(std::move(p));};
+    };
+}
+
+void StreamImpl::parse_msg(coro::promise<Message> rdprom) {
+    try {
+        std::string_view str = _rdfut;
+        if (str.empty()) {
+            if (_s.is_read_timeout() && !_pingsent) {
+                send({"",Type::ping});
+                _pingsent = true;
+                _parser.reset();
+            } else {
+                {
+                    std::lock_guard _(_mx);
+                    _closed = true;
+                }
+                rdprom(Message{"",Type::connClose, Base::closeAbnormal});
+                return;
             }
-            _read_promise = std::move(p);
-            _fut << [&]{return _s.read();} >> [&]{on_read();};
-        };
-    }
-
-    std::size_t get_buffered_size() const {
-        return _writer.get_buffered_size();
-    }
-
-    State get_state() const {
-        bool wr_open = _writer;
-        bool rd_open = !_closed;
-        if (wr_open && rd_open) return State::open;
-        if (!wr_open && !rd_open) return State::closed;
-        return State::closing;
-    }
-
-    coro::deferred_future<bool> close(std::uint16_t code) {
-        if (get_state() == State::open) {
-            write({{}, Type::connClose, code});
-            return _writer.write_eof();
-        } else if (_writer) {
-            return _writer.write_eof();
         } else {
+            _pingsent = false;
+            if (_parser.push_data(str)) {
+                _s.put_back(_parser.get_unused_data());
+                Message msg = _parser.get_message();
+                if (msg.type == Type::ping) {
+                    send({msg.payload, Type::pong});
+                } else if (msg.type == Type::connClose) {
+                    send({"",Type::connClose, Base::closeNormal});
+                    _closed = true;
+                }
+                rdprom(_parser.get_message());
+                return;
+            }
+        }
+        _rdfut << [this]{return _s.read();};
+        _rdfut >> [this, rdprom = std::move(rdprom)]() mutable {
+            parse_msg(std::move(rdprom));
+        };
+    } catch (const coro::await_canceled_exception &) {
+        _closed = true;
+        rdprom(Message{"",Type::connClose,Base::closeGoingAway});
+    } catch (...) {
+        rdprom.reject();
+    }
+}
+
+bool StreamImpl::send(const Message &msg, coro::promise<bool> completion) {
+    {
+        std::lock_guard _(_mx);
+        if (_closed) {
+            completion(false);
             return false;
         }
+        if (msg.type == Type::connClose) _closed = true;
+        _builder(msg, [&](char c){_wrbuff.push_back(c);});
+        if (completion) _wrcompl.push_back(std::move(completion));
+        if (_pending) return true;
+        _pending = true;
+        std::swap(_wrbuff, _sendbuff);
+        std::swap(_wrcompl, _sendcompl);
     }
+    _wrfut << [this]{return _s.write(std::string_view(_sendbuff.data(),_sendbuff.size()));};
+    _wrfut >> [this]{complete_write();};
+    return true;
+}  
 
-protected:
-
-    void on_read() noexcept { // @suppress("No return")
-        try {
-            std::string_view data = coro::get<coro::future<std::string_view> >(_fut).get();
-            if (data.empty()) {
-
-                if (_ping_sent) {
-                    Message m{"Ping timeout", Type::connClose, Base::closeAbnormal};
-                    write(m);
-                    _read_promise(m);
-                    return;
-                } else {
-                    _ping_sent = true;
-                    write({{}, Type::ping});
-                }
-            } else {
-                _ping_sent = false;
-                while (_reader.push_data(data)) {
-                    _s.put_back(_reader.get_unused_data());
-                    Message m = _reader.get_message();
-                    switch (m.type) {
-                        case Type::pong: break;
-                        case Type::connClose:
-                            _closed = true;
-                            write({{}, Type::connClose, Base::closeNormal});
-                            _read_promise(m);
-                            return;
-                        case Type::ping:
-                            write({m.payload, Type::pong});
-                            break;
-                        default:
-                            _read_promise(m);
-                            return;
-                    }
-                    _reader.reset();
-                    data = _s.read_nb();
-                }
+void StreamImpl::complete_write() {
+    try {
+        _sendbuff.clear();
+        bool r = _wrfut;
+        for (auto &x: _sendcompl) x(true); 
+        _sendcompl.clear();
+        
+        if (r) {
+            bool p;
+            {
+                std::lock_guard _(_mx);
+                std::swap(_wrbuff, _sendbuff);
+                std::swap(_wrcompl, _sendcompl);
+                _pending = !_sendbuff.empty();
+                p = _pending;
             }
-            _fut << [&]{return _s.read();} >> [&]{on_read();};
-        } catch (...) {
-            _read_promise.reject();
+            if (p) { 
+                _wrfut << [this]{return _s.write(std::string_view(_sendbuff.data(),_sendbuff.size()));};
+                _wrfut >> [this]{complete_write();};
+            } 
+        }        
+        else {
+            {
+                std::lock_guard _(_mx);
+                _closed = true;
+                _pending = false;
+            }
+            for (auto &x: _wrcompl) x(false);
         }
+    } catch (...) {
+        auto e = std::current_exception();
+        {
+            std::lock_guard _(_mx);
+            _closed = true;
+            _pending = false;
+        }
+        for (auto &x: _wrcompl) x.reject(e);
     }
+}
 
-    _Stream _s;
-    Parser _reader;
-    MTStreamWriter _writer;
-    Builder _builder;
-    coro::promise<Message> _read_promise;
-    coro::future_variant<std::string_view, void> _fut;
-    bool _ping_sent = false;
-    bool _closed = false;
-
-    void destroy();
-    friend Stream::Deleter;
-};
-
-struct Stream::Deleter {
-    void operator()(InternalState *st) const {
-        st->destroy();
+coro::future<bool> StreamImpl::send_close(unsigned int code) {
+    return [&](auto prom) {
+        send(Message{"",Type::connClose, static_cast<unsigned short>(code)}, std::move(prom));
     };
-};
-
-
-coro::deferred_future<bool> Stream::send(const Message &msg) {
-    return _ptr->write(msg);
 }
 
-
-coro::future<Message> Stream::receive() {
-    return _ptr->read();
-}
-
-Stream::State Stream::get_state() const {
-    return _ptr->get_state();
-}
-
-
-std::size_t Stream::get_buffered_size() const {
-    return _ptr->get_buffered_size();
-}
-
-
-
-Stream::Stream(_Stream s, Cfg cfg):_ptr(create(s, cfg)) {}
-
-
-std::shared_ptr<Stream::InternalState> Stream::create(_Stream &s, Cfg &cfg) {
-    return std::shared_ptr<InternalState>(new InternalState(s, cfg), Deleter());
-}
-
-coro::deferred_future<bool> Stream::close(std::uint16_t code) {
-    return _ptr->close(code);
-}
-
-void Stream::InternalState::destroy() {
-    _fut << [&]{return close(Base::closeNormal);} >> [&]{
-        delete this;
-    };
+Stream Stream::create(_Stream s,const Cfg &cfg) {
+    return Stream(std::make_shared<StreamImpl>(std::move(s), cfg));
 }
 
 }

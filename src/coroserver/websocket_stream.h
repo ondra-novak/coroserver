@@ -13,120 +13,118 @@ namespace ws {
 
 using _Stream = Stream;
 
-
-///A websocket stream
-/**
- * Websocket stream can be created from connected stream. Initial handshake is not
- * handled by this object.
- *
- * Websocket stream is object, which can be read for messages, or messages can be written.
- *
- * Reading is not MT Safe, there could be just one reader, which receives messages.
- *
- * Writing is MT safe, it is possible to write messages without waiting on completion.
- * The stream contains a buffer, which is filled with messages ready to send while
- * network transfer is slow. As the buffer is unable to discard any mesage, you
- * need to take care of speed of filling the buffer. To slow down the write
- * speed and synchronize with the network, you can tie a promise with each message,
- * which is resolved once the message is written to the network.
- *
- * The object is shared by copying. Stream can be implicitly closed, when
- * by releasing all references (in this case, close message is automatically
- * send as the last message in the stream)
- */
-class Stream {
+class StreamImpl {
 public:
+
     struct Cfg {
         bool client = false;
         bool need_fragmented = false;
     };
 
 
-
-    Stream(_Stream s, Cfg cfg);
-
-    Stream() = default;
-
-
-    ///Send a message to websocket
-    /**
-     * @param msg message to send. Content is copied to internal buffer.
-     * @return optional (discardable) future. If the future is awaited, it resolves
-     * once the message is passed to the kernel for the delivery. The value contains
-     * status of the operation. The future can be
-     * discarded, in this case,no such awaiting is done. In all cases, this
-     * function is MT safe, multiple threads can write to the websocket connection.
-     *
-     * @retval true successfully sent
-     * @retval false failed to send, the stream is closed
-     */
-    coro::deferred_future<bool> send(const Message &msg);
-
-    ///Read from websocket
-    /**
-     * @return message received from the stream. The returned value is reference to
-     * message, which is allocated inside of the object state. You need to process
-     * the message before you can repeat the reading. Function is not MT Safe.
-     *
-     * @note The message Type::connClose is in most of cases the last message received
-     * from the stream
-     *
-     * @note if the peer closes connection, or in case of timeout, the Type::connClose
-     * is returned.
-     *
-     * @note Stream internally handles all required responses. It automatically responds
-     * to Type::ping messages, and Type::connClose messages. In case of timeout, it
-     * sends Type::ping and processes Type::pong. (it is required to set read timeout
-     * to a reasonable value, for example 60 seconds)
-     *
-     * @note Function IS NOT MT SAFE.
+    StreamImpl(_Stream s, const Cfg &cfg);
+   
+    ///read message
+    /** 
+     * @param received message
+     * @note not MT Safe, not concurrent safe,only one pending reading at time
      */
     coro::future<Message> receive();
 
-    std::size_t get_buffered_size() const;
+    bool send(const Message &msg, coro::promise<bool> completion = {});
 
-    enum State {
-        ///Stream is opened
-        open,
-        ///Stream is closing,
-        closing,
-        ///Stream is closed
-        closed
-    };
+    ///shutdown reading, read immediately returns connClose
+    void shutdown();
 
-    State get_state() const;
+    coro::future<bool> send_close(unsigned int code = Base::closeNormal);
 
-    ///close the stream explicitly
-    /**
-     * @return see send()
-     */
-    coro::deferred_future<bool> close() {
-        return close(ws::Base::closeNormal);
-    }
-
-    ///close the stream explicitly
-    /**
-     * @param code error code
-     * @return see send()
-     */
-    coro::deferred_future<bool> close(std::uint16_t code);
+    bool is_closed() const;
 
 
+    ~StreamImpl();
 protected:
+    _Stream _s;
+    Cfg _cfg;
+    Parser _parser;
+    Builder _builder;
 
-    class InternalState;
-    struct Deleter;
+    coro::future<std::string_view> _rdfut;
+    coro::future<bool> _wrfut;
+    std::mutex _mx;
+    std::vector<char> _wrbuff;
+    std::vector<char> _sendbuff;
+    std::vector<coro::promise<bool> > _wrcompl;
+    std::vector<coro::promise<bool> > _sendcompl;
+    bool _pending = false;
+    bool _closed = false;
+    bool _pingsent = false;
 
-    std::shared_ptr<InternalState> _ptr;
-
-
-    std::shared_ptr<Stream::InternalState> create(_Stream &s, Cfg &cfg);
-
-
+    void parse_msg(coro::promise<Message> rdprom);
+    void complete_write();
 };
 
+class Stream {
+public:
+    using Cfg = StreamImpl::Cfg;
+
+    Stream() = default;
+
+    Stream(std::shared_ptr<StreamImpl> ptr):_ptr(ptr) {}
+    ///Receive message
+    /** @return received message (co_await)
+     *  - returns any received message including ping and pong messages
+     *  - in case of stream timeout, sends ping and expects pong (ping interval = read timeout)
+     *  - no ping in interval closes the stream
+     *  - any close of the stream is reported as Type::connClose
+     *  @note only one pending read is allowed at the time
+     */
+    coro::future<Message> receive() {return _ptr->receive();}
+    
+    ///Send message
+    /** 
+     * @param msg message to send
+     * @param completion optional place promise her if you need to receive notify, that message has
+     * been sent (flushed from buffer). If not filled, no notify is delivered
+     * @retval true successfully enqueued
+     * @retval false stream is closed, message discarded
+     * @note if completion is set, it is always resolved with status
+     * @note once the stream is closed, no more messages can be send
+     * @note this function is MT Safe, multiple threads can post messages
+     */ 
+    bool send(const Message &msg, coro::promise<bool> completion = {}) {return _ptr->send(msg, std::move(completion));}
+    
+    ///Shutdown stream, unblock any awaiting future
+    /**
+     * Forces to close stream (no message is sent), reader is resolved with connClose, writing
+     * is resolved with false. This function is synchronous (can be called from destructor). Once
+     * stream is in shutdown state, no more message can be received or send
+     */
+    void shutdown() {return _ptr->shutdown();}
+    ///Sends close message
+    /** 
+     * @param code close code
+     * @return awaitable result which is resolved, once close is successfully posted from the buffer
+     * @retval true sent
+     * @retval false the stream was already closed
+     */
+    coro::future<bool> send_close(unsigned int code = Base::closeNormal) {return _ptr->send_close(code);}
+    
+    ///Determines whether stream is closed
+    bool is_closed() const {return _ptr->is_closed();}
+
+    ///create stream
+    /** 
+     * @param s TCP stream
+     * @param cfg config
+     */
+    static Stream create(_Stream s,const Cfg &cfg);
+
+protected:
+    std::shared_ptr<StreamImpl> _ptr;
+};
 
 }
+
 }
 
 

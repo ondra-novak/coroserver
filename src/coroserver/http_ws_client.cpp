@@ -58,7 +58,7 @@ Client::Client(http::ClientRequest &req, TimeoutSettings tm,bool need_fragmented
             _Stream s(std::move(_fut.get()));
             if (req.get_status() == 101 && req["Sec-WebSocket-Accept"] == std::string_view(_digest)) {
                 s.set_timeouts(_tm);
-                return _result(std::move(s),Stream::Cfg{true, _need_fragmented});
+                return _result(Stream::create(std::move(s),Stream::Cfg{true, _need_fragmented}));
             } else {
                 return _result.cancel();
             }

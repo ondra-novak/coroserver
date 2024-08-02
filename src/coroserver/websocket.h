@@ -25,6 +25,8 @@ enum class Type: std::uint8_t {
     ping,
     ///pong frame
     pong,
+    ///timeout - only appears while reading, can't be sent
+    timeout
 };
 
 struct Message {
@@ -212,7 +214,7 @@ public:
      * @param client set true if the builder generates client frames. Otherwise
      * set false (for server)
      */
-    Builder(bool client)
+    Builder(bool client = true)
         :_client(client) {
         if (_client) {
             std::random_device dev;

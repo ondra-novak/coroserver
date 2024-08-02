@@ -132,7 +132,9 @@ coro::async<void> writer(ws::Stream s, MyPublisher &publisher) {
         cont = co_await !!msg;
         if (cont) {
             std::string str = msg;
-            bool st = co_await s.send(ws::Message{str, ws::Type::text});
+            coro::future<bool> fut;
+            s.send(ws::Message{str, ws::Type::text},fut.get_promise());
+            bool st = co_await fut;
             if (!st) {
                 cont = false;
             }
