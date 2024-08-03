@@ -119,6 +119,10 @@ public:
      */
     static Stream create(_Stream s,const Cfg &cfg);
 
+    explicit operator bool() const {
+        return _ptr != nullptr;
+    }
+
 protected:
     std::shared_ptr<StreamImpl> _ptr;
 };

@@ -248,6 +248,8 @@ public:
         return TCPServer<Fn>(*this, std::forward<Fn>(fn), lsn_peers, tms, stp);
     }
 
+    auto &get_scheduler() {return _scheduler;}
+
 };
 
 
