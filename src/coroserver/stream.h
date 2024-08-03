@@ -229,6 +229,11 @@ public:
     static Stream null_stream();
 
 
+    explicit operator bool () const {
+        return _stream != nullptr;
+    }
+
+
     template<typename KMP>
     class ReadUntil {
     public:
