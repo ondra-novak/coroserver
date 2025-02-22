@@ -1,11 +1,27 @@
 #include "coroutines.h"
 #include "string_search.h"
+#include "timeout.h"
 
 namespace coroserver{
 
+/// Represents the possible states of a stream (e.g., network connection, file stream, etc.).
+enum class StreamState {
+    /// The stream is in the process of being opened but is not yet fully available.
+    opening,
+    /// The stream is open and ready for reading and/or writing operations.
+    active,
+    /// The stream is in the process of closing; data may still be available for reading.
+    closing,
+    /// The stream is fully closed; no further input or output operations are possible.
+    closed
+};
 class IStream {
 public:
+
     virtual ~IStream() = default;
+
+    virtual StreamState get_state() const  = 0;
+
     ///receive data asynchronously
     /**
      * @return string_view contains received data. It is always returned at least
@@ -24,12 +40,6 @@ public:
      * one view, previous put view is replaced
      */
     virtual void put_back(std::string_view s) = 0;
-    ///returns true, if eof has been reached by last read
-    /**
-     * @retval true last read failed because eof
-     * @retval false last read didn't failed or failed because timeout
-     */
-    virtual bool is_eof() const = 0;
     /// send buffer
     /**
      * @param data to send
@@ -44,8 +54,34 @@ public:
 
     virtual awaitable<bool> send(std::string_view data) = 0;
 
-    /// Sends eof and closes outgoing connection
-    virtual void send_eof() = 0;
+    /// close the stream at output side
+    /** Even if the stream is closed, there still can be unprocessed data.
+     *  This function should change StreamState to closing
+     */
+    virtual void close() = 0;
+
+    virtual std::size_t get_buffered_count() const = 0;
+
+    struct Counters {
+        ///total received bytes
+        std::size_t received;
+        ///total sent bytes
+        std::size_t sent;
+    };
+
+    ///Retrieve statistics counters
+    virtual Counters get_counters() const  = 0;
+
+    ///Retrieve current timeouts
+    virtual IOTimeout get_timeouts() const = 0;
+
+    ///Set new timeouts
+    /**
+     * Changed timeouts are applied immediately, but it also resets starting
+     * point. If you need to cancel blocking operation, set timeout to zero
+     * @param tm timeout structure
+     */
+    virtual void set_timeouts(IOTimeout tm) = 0;
 
 
 };
@@ -233,21 +269,124 @@ public:
 
     Stream() = default;
     Stream(std::shared_ptr<IStream> ptr):_ptr(std::move(ptr)) {}
+
+    ///Retrieve stream state
+    /**
+     * @return StreamState
+     */
+    StreamState get_state() const {
+        return _ptr->get_state();
+    }
+
+    /// Receive data from the stream.
+    /**
+     * This function asynchronously reads at least one byte from the stream.
+     * If no data is available, the function blocks (or suspends a coroutine)
+     * until data arrives or a timeout occurs.
+     *
+     * @return An awaitable string view containing the received data.
+     * If the function returns an empty string, you should check the stream's
+     * state using `get_state()`.
+     *
+     * Possible stream states:
+     * - `StreamState::closed`: The stream was closed by the other side (EOF reached).
+     * - Other states: The read operation was interrupted, likely due to a timeout.
+     *
+     * Example usage:
+     * @code
+     * std::string_view data = co_await stream.receive();
+     * if (data.empty() && stream.get_state() == StreamState::closed) {
+     *     std::cout << "Stream closed.\n";
+     * }
+     * @endcode
+     */
     awaitable<std::string_view> receive() {
         return _ptr->receive();
     }
+    /// Push data back into the stream for re-reading.
+    /**
+     * This function allows returning part of a previously received buffer
+     * back into the stream so that it will be read again on the next read operation.
+     *
+     * @param s A string view that should ideally be a direct sub-view of the
+     *          previously returned buffer.
+     *
+     * The function can be used to reprocess already read data. Although it is
+     * possible to return an entirely different string, the caller must ensure that
+     * the underlying buffer remains valid until the next read operation.
+     *
+     * Important notes:
+     * - This function can only be called once before the next read operation.
+     * - Calling it multiple times will overwrite the previously stored view.
+     *
+     * Example usage:
+     * @code
+     * std::string_view data = co_await stream.receive();
+     * if (data.size() > 5) {
+     *     process_data(data.substr(0, 5));  // Process only the first 5 bytes
+     *     stream.put_back(data.substr(5));  // Return the remaining part
+     * }
+     * @endcode
+     */
     void put_back(std::string_view s){
         _ptr->put_back(s);
     }
-    bool is_eof() const{
-        return _ptr->is_eof();
-    }
+    /// Send data to the stream asynchronously.
+    /**
+     * This function attempts to send data into the stream. The return value can be
+     * ignored (discarded), but if the caller performs `co_await` on it, the coroutine
+     * will be suspended until the data is successfully sent from the internal buffer.
+     * This is particularly useful when dealing with large amounts of data that
+     * require buffering.
+     *
+     * @param data The data to be sent.
+     * @return An awaitable boolean:
+     *         - `true`: Data was successfully sent (e.g., handed off to the OS network stack).
+     *         - `false`: The stream was closed or interrupted by the other side (e.g., broken pipe).
+     *
+     * If the caller ignores the return value, it will not be informed of any failures.
+     *
+     * Example usage:
+     * @code
+     * co_await stream.send("Hello, world!"); // Ensures the data is actually sent
+     *
+     * // Sending without waiting (fire-and-forget)
+     * stream.send("Logging event"); // No guarantee of successful delivery
+     * @endcode
+     *
+     * @note you can send empty string. This doesn't send anything, but can
+     * be used to wait for completion on a send operation (aka flush)
+     */
     awaitable<bool> send(std::string_view data) {
         return _ptr->send(data);
     }
-    void send_eof() {
-        _ptr->send_eof();
+    ///Mark stream closed
+    /**
+     * This function marks stream closed. Note that stream is closed
+     * once all data are sent. Before the stream is fully closed, all
+     * incoming data must be also processed.
+     *
+     * This function sends close to other side, the other side receives EOF.
+     * The other side must close its side to full close the stream.
+     *
+     * You can also destroy the stream, which can cause that data will not
+     * be delivered. Always perform cooperative close with the other side
+     * to prevent data lost.
+     */
+    void close() {
+        _ptr->close();
     }
+
+    ///Retrieve current output buffer size
+    /** Because there is no limit on the output buffer, it can be
+     * useful to monitor this value especially when a lot of data
+     * are written to fast, which can fill the memory for buffering.
+     * @return total buffered size
+     */
+    std::size_t get_buffered_count() const {
+        return _ptr->get_buffered_count();
+    }
+
     ///tests, whether stream is initialized
     explicit operator bool() const {return static_cast<bool>(_ptr);}
 
@@ -316,6 +455,12 @@ public:
         }
         return ReceiveBlockState<Cont>(buffer, size, _ptr);
     }
+
+    using Counters = IStream::Counters;
+
+    Counters get_counters() const  {return _ptr->get_counters();}
+    IOTimeout get_timeouts() const  {return _ptr->get_timeouts();}
+    void set_timeouts(IOTimeout tm)   {return _ptr->set_timeouts(tm);}
 
 
 protected:

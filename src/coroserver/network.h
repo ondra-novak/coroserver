@@ -40,27 +40,59 @@ struct PipePair {
     ConnHandle write;
 };
 
-class SimpleAction { // @suppress("Miss copy constructor or assignment operator")
+class SimpleAction {
 public:
+
+    struct Interface {
+        void (*_run_fn)(void *);
+        void (*_move_fn)(void *, void *);
+        void (*_destroy_fn)(void *);
+    };
+
+    template<typename Fn>
+    static constexpr Interface interface = {
+            [](void *p) {
+                Fn *fn = reinterpret_cast<Fn *>(p);
+                (*fn)();
+            },
+            [](void *p, void *t) {
+                Fn *fn = reinterpret_cast<Fn *>(p);
+                new(t) Fn(std::move(*fn));
+            },
+            [](void *p) {
+                Fn *fn = reinterpret_cast<Fn *>(p);
+                std::destroy_at(fn);
+            }
+    };
+
     static constexpr std::size_t _max_lambda_size = sizeof(void *) * 7;
     template<std::invocable<> Fn>
-    SimpleAction(Fn &&fn) {
+    SimpleAction(Fn &&fn):_vtable(&interface<Fn>) {
         using TFn = std::decay_t<Fn>;
-        static_assert(sizeof(TFn) <= _max_lambda_size && std::is_trivially_copy_constructible_v<TFn>);
+        static_assert(sizeof(TFn) <= _max_lambda_size);
         TFn *tfn = reinterpret_cast<TFn *>(_space);
         std::construct_at(tfn, std::forward<Fn>(fn));
-        _run_fn = [](SimpleAction *me) {
-            TFn *tfn = reinterpret_cast<TFn *>(me->_space);
-            (*tfn)();
-        };
     }
 
+    SimpleAction(SimpleAction &&other):_vtable(other._vtable) {
+        _vtable->_move_fn(other._space, _space);
+    }
+    SimpleAction &operator=(SimpleAction &&other) {
+        if (this != &other) {
+            _vtable->_destroy_fn(_space);
+            _vtable->_move_fn(other._space, _space);
+        }
+        return *this;
+    }
+    ~SimpleAction() {
+        _vtable->_destroy_fn(_space);
+    }
     void operator()() {
-        _run_fn(this);
+        _vtable->_run_fn(_space);
     }
 
 protected:
-    void (* _run_fn)(SimpleAction *) = {};
+    const Interface *_vtable;
     char _space[_max_lambda_size] = {};
 
 };
