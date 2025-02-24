@@ -163,7 +163,7 @@ awaitable<bool> SocketStream::send(std::string_view data) {
             //so now the coroutine wants to wait until counter reaches the requested value
             std::lock_guard _(_mx);
             //if already reached the counter, return true
-            if (_count_output_bytes >= pos) return r(true);
+            if (_clear_to_send && _count_output_bytes >= pos) return r(true);
             //if output has been closed, return false
             if (_output_closed) return r(false);
             //otherwise register to awaiter list
@@ -180,6 +180,8 @@ void SocketStream::clear_to_send() noexcept {
     std::lock_guard _(_mx);
     //if output is already closed, do nothing
     if (_output_closed) return;
+    //report that sent ok
+    notify_awaiters_ok();
     //if buffer is not empty
     if (!_output_buffer.empty()) {
         //retrieve data
@@ -192,8 +194,6 @@ void SocketStream::clear_to_send() noexcept {
         _output_buffer.pop(sz);
         //any size sent
         if (sz) {
-            //report that sent ok
-            notify_awaiters_ok();
             //manifest ready to send
             ready_to_send();
         } else { //nothing sent, connection reset

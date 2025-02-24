@@ -47,7 +47,7 @@ public:
      */
     constexpr void push(std::basic_string_view<T> data) {
         while (!data.empty()) {
-            reserve(size()+data.size());
+            reserve(size()+data.size()*2-1);
             auto remain = _buffer.size() - _write_pos;
             auto b1 = data.substr(0, remain);
             std::copy(b1.begin(), b1.end(),_buffer.begin()+_write_pos);
@@ -102,6 +102,6 @@ public:
 
 protected:
     std::vector<T> _buffer;
-    std::size_t _read_pos;
-    std::size_t _write_pos;
+    std::size_t _read_pos = 0;
+    std::size_t _write_pos = 0;
 };
