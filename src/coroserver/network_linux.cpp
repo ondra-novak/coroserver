@@ -566,7 +566,7 @@ void NetContext::apply_flags_lk(SocketInfo *ctx) noexcept {
 }
 
 
-std::shared_ptr<INetContext> make_network_context(int iothreads) {
+std::shared_ptr<INetContext> make_async_context(int iothreads) {
     auto p = std::make_shared<NetThreadedContext>(iothreads);
     p->start();
     return p;

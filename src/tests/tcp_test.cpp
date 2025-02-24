@@ -2,49 +2,59 @@
 
 #include <coroserver/network.h>
 #include <coroserver/stream.h>
-#include <coroserver/character_io.h>
+#include <coroserver/socket_stream.h>
+#include <format>
+
+using namespace coroserver;
 
 
-coro::async<void> write_task(coroserver::Context &ctx, std::string port) {
-    coroserver::Stream stream = co_await ctx.connect(PeerName::lookup("localhost", port));
-    coroserver::CharacterWriter<coroserver::Stream> wr(stream);
-    for (int i = 0; i < 655360; i++) {
-        co_await wr(static_cast<char>(i & 0xFF));
+awaitable<void> write_task(AsyncContext ctx, std::string addr) {
+    Stream stream = SocketStream::connect(ctx,addr);
+
+    for (int i = 0; i < 65536; i++) {
+        co_await stream.send(std::format("{}\n", i));
     }
-    co_await wr.flush();
+    co_await stream.close();
+    CHECK(stream.get_state() == StreamState::closing);
+    auto r = co_await stream.receive();
+    CHECK_EQUAL(r.size(),0);
+    CHECK(stream.get_state() == StreamState::closed);
+    co_return;
+
 }
 
-coro::async<void> read_task(coroserver::Stream s) {
-    int x = 0;
-    int cnt = 0;
-    coroserver::CharacterReader<coroserver::Stream> rd(s);
-    int c = co_await rd;
-    while (c != -1) {
-        CHECK_EQUAL((x & 0xFF) , c);
-        c = co_await rd;
-        ++x;
-        ++cnt;
+awaitable<void> read_task(TCPServer &server) {
+    Stream stream = co_await server.accept();
+    std::string line;
+    for (int i = 0; i < 65536; ++i) {
+        bool r = co_await stream.receive_until(line, "\n", 1000);
+        CHECK(r);
+        int n = strtol(line.c_str(),nullptr,10);
+        CHECK_EQUAL(n,i);
     }
-    CHECK_EQUAL(cnt, 655360);
+    auto rest = co_await stream.receive();
+    CHECK_EQUAL(rest.size(),0);
+    CHECK(stream.get_state() == StreamState::closed);
+    co_return;
 }
 
-coro::async<void> server_task(coro::deferred_future<coroserver::Stream> &&f) {
 
-    coroserver::Stream s = co_await f;
-    co_await read_task(s);
 
-}
 
 int main() {
 
-    coroserver::Context ctx;
+    std::string addr = "localhost:12112";
+    AsyncContext ctx = make_async_context();
+    TCPServer server(ctx, addr);
+    allof_set wait_all;
+    auto rdtask = read_task(server);
+    auto wrtask = write_task(ctx, addr);
+    wait_all.add(rdtask);
+    wait_all.add(wrtask);
+    wait_all.wait();
 
-    auto addr = PeerName::lookup("127.0.0.1","*");
-    auto listener = ctx.accept(addr);
 
-    write_task(ctx, addr[0].get_port()).detach();
 
-    ctx.start(server_task(listener()));
 
 
 }

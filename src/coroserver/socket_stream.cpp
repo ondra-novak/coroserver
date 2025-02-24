@@ -90,14 +90,23 @@ void SocketStream::put_back(std::string_view s) {
 }
 
 
-void SocketStream::close() {
+awaitable<bool> SocketStream::close() {
     std::lock_guard _(_mx);
+    if (_output_closed) return false;
     //if clear to send - set eof immediately
     if (_clear_to_send) {
         _ctx->send(_h,{});//SEND EOF
         _output_closed = true;
+        return true;
     } else {
         _send_eof = true;   //send asynchronous
+        return [this](awaitable<bool>::result r) {
+            if (_output_closed || _clear_to_send) {
+                r = true;
+            } else {
+                _awaiting_results.push({_count_output_bytes+_output_buffer.size()+1, std::move(r)});
+            }
+        };
     }
 
 }
@@ -177,6 +186,8 @@ void SocketStream::clear_to_send() noexcept {
         auto data = _output_buffer.front();
         //send data
         auto sz = _ctx->send(_h, data);
+        //count output
+        _count_output_bytes += sz;
         //commit sent data
         _output_buffer.pop(sz);
         //any size sent
@@ -196,6 +207,8 @@ void SocketStream::clear_to_send() noexcept {
         //if send_eof is active ...
         if (_send_eof) {
             _ctx->send(_h,{}); //send_eof;
+            _count_output_bytes++;
+            notify_awaiters_ok();
             _output_closed = true;//output closed
         } else {
             //otherwise remember that we are clear to send
@@ -311,7 +324,7 @@ Stream SocketStream::connect(std::shared_ptr<INetContext> ctx, SpecialConnection
     return create(std::move(ctx), h);
 }
 
-TCPServer::AWT TCPServer::accept() {
+TCPServer::AWT TCPServer::accept_handle() {
     return [this](PROM r) -> prepared_coro{
         AWT *need = nullptr;
         AWT *prom = r.release();
@@ -354,6 +367,43 @@ prepared_coro TCPServer::cancel() {
     auto r = _r.exchange(&filler);
     PROM res(r);
     return res.drop();
+}
+
+awaitable<Stream> TCPServer::accept(std::string &addr_port) {
+    auto awt = accept_handle();
+    if (awt.await_ready()) {
+        auto [h, peer] = awt.await_resume();
+        addr_port = std::move(peer);
+        return SocketStream::create(_ctx, h);
+    } else {
+        awt.cancel();
+        return [this,&addr_port](awaitable<Stream>::result r) mutable {
+            _accept_cb.await(accept_handle(), this, std::move(r), &addr_port);
+        };
+    }
+}
+
+void TCPServer::do_accept_raw(awaitable<AcceptInfo> &ainfo, awaitable<Stream>::result &r, std::string *& peer) {
+    try {
+        auto [h, p] = ainfo.await_resume();
+        if (peer) *peer = std::move(p);
+        r = SocketStream::create(_ctx, h);
+    } catch (...) {
+        r.set_exception(std::current_exception());
+    }
+}
+
+awaitable<Stream> TCPServer::accept() {
+    auto awt = accept_handle();
+    if (awt.await_ready()) {
+        auto [h, peer] = awt.await_resume();
+        return SocketStream::create(_ctx, h);
+    } else {
+        awt.cancel();
+        return [this](awaitable<Stream>::result r) mutable {
+            _accept_cb.await(accept_handle(), this, std::move(r), nullptr);
+        };
+    }
 }
 
 }

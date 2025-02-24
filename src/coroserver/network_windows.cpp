@@ -96,11 +96,11 @@ static void default_log_function(std::string_view action, std::source_location l
 
 
 
-std::shared_ptr<INetContext> make_network_context(int iothreads) {
-    return make_network_context(default_log_function, iothreads);
+std::shared_ptr<INetContext> make_async_context(int iothreads) {
+    return make_async_context(default_log_function, iothreads);
 }
 
-std::shared_ptr<INetContext> make_network_context(ErrorCallback ecb, int iothreads) {
+std::shared_ptr<INetContext> make_async_context(ErrorCallback ecb, int iothreads) {
     auto p = std::make_shared<NetThreadedContext>(std::move(ecb), iothreads);
     p->start();
     return p;

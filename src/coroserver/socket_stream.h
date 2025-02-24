@@ -18,7 +18,7 @@ public:
     virtual awaitable<bool> send(std::string_view data) override;
     StreamState get_state() const override;
     virtual std::size_t get_buffered_count() const override;
-    virtual void close() override;
+    virtual awaitable<bool> close() override;
     virtual IOTimeout get_timeouts() const override;
     virtual IStream::Counters get_counters() const override;
     virtual void set_timeouts(coroserver::IOTimeout tm)  override;
@@ -140,7 +140,21 @@ public:
     TCPServer &operator=(const TCPServer &) = delete;
 
     ///awaitable accept
-    awaitable<AcceptInfo> accept();
+    awaitable<AcceptInfo> accept_handle();
+
+    ///awaitable accept
+    /**
+     * @param addr_port fill variable with address and port of returned stream
+     * @return
+     */
+    awaitable<Stream> accept(std::string &addr_port);
+
+
+    ///awaitable accept
+    /**
+     * @return stream
+     */
+    awaitable<Stream> accept();
 
     ///cancel accept operation
     /**
@@ -156,6 +170,10 @@ protected:
     std::shared_ptr<INetContext> _ctx;
     ConnHandle _h;
     std::atomic<AWT *> _r = {};
+
+    void do_accept_raw(awaitable<AcceptInfo> &ainfo, awaitable<Stream>::result &, std::string *&);
+    await_member_callback<AcceptInfo, TCPServer *,
+            &TCPServer::do_accept_raw, awaitable<Stream>::result, std::string *> _accept_cb;
     virtual void on_accept(ConnHandle connection, std::string peer_addr) noexcept override;
     virtual void on_timeout() noexcept override {}
 };
@@ -172,7 +190,7 @@ inline async_generator<Stream> coroserver::SocketStream::create_tcp_server(
         server.cancel();
     });
     while (!stp.stop_requested()) {
-        auto awt = server.accept();
+        auto awt = server.accept_handle();
         if (co_await awt.has_value()) {
             auto [handle, addr] = awt.await_resume();
             if (flt(std::move(addr))) {

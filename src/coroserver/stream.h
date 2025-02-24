@@ -1,3 +1,4 @@
+#pragma once
 #include "coroutines.h"
 #include "string_search.h"
 #include "timeout.h"
@@ -58,7 +59,7 @@ public:
     /** Even if the stream is closed, there still can be unprocessed data.
      *  This function should change StreamState to closing
      */
-    virtual void close() = 0;
+    virtual awaitable<bool> close() = 0;
 
     virtual std::size_t get_buffered_count() const = 0;
 
@@ -104,8 +105,7 @@ public:
         ,_stream(std::move(stream)) {}
 
     void operator()(awaitable_result<ReceiveUntilStatus<Cont,n> > promise) {
-        _promise = std::move(promise);
-        _stream->receive().set_callback(CB{this}, _callback_buffer);
+        _callback.await(_stream->receive(), this, std::move(promise));
     }
 
     void operator()(awaitable_result<int>); //just make compiler happy
@@ -115,23 +115,13 @@ protected:
     pattern_search<char,n> _patt;
     typename pattern_search<char,n>::state _stat;
     std::size_t _maxbuff;
-    awaitable_result<ReceiveUntilStatus<Cont, n> > _promise;
     std::shared_ptr<IStream> _stream;
 
-    struct CB {
-        ReceiveUntilState *owner;
-        void operator()(awaitable<std::string_view> &awt) {
-            owner->process_data(awt);
-        }
-    };
-
-    char _callback_buffer[sizeof(awaiting_callback<std::string_view, CB>)];
-
-    prepared_coro process_data(awaitable<std::string_view> &awt) {
+    prepared_coro process_data(awaitable<std::string_view> &awt, awaitable_result<ReceiveUntilStatus<Cont, n> > &promise) {
         try {
             std::string_view data = awt.await_resume();
             if (data.empty()) {
-                return _promise(false);
+                return promise(false);
             }
             for (std::size_t i = 0; i < data.size(); ++i) {
                 if (_patt.test(data[i],_stat)) {
@@ -148,19 +138,22 @@ protected:
                     }
                     auto remain = data.substr(i);
                     _stream->put_back(remain);
-                    return _promise(true);
+                    return promise(true);
                 }
             }
             std::copy(data.begin(), data.end(), std::back_inserter(_buff));
             if (_buff.size() > _maxbuff) {
-                return _promise(false);
+                return promise(false);
             }
-            _stream->receive().set_callback(CB{this}, _callback_buffer);
+            _callback.await_cont(_stream->receive());
             return {};
         } catch (...) {
-            return _promise.set_exception(std::current_exception());
+            return promise.set_exception(std::current_exception());
         }
     }
+
+    await_member_callback<std::string_view, ReceiveUntilState *,
+        &ReceiveUntilState::process_data, awaitable_result<ReceiveUntilStatus<Cont, n> >> _callback;
 };
 
 ///Holds status of receive_until operation of Stream
@@ -198,8 +191,7 @@ public:
         ,_stream(std::move(stream)) {}
 
     void operator()(awaitable_result<ReceiveBlockStatus<Cont> > promise) {
-        _promise = std::move(promise);
-        _stream->receive().set_callback(CB{this}, _callback_buffer);
+        _callback.await(_stream->receive(), this, std::move(promise));
     }
 
     void operator()(awaitable_result<int>); //just make compiler happy
@@ -207,23 +199,14 @@ public:
 protected:
     Cont &_buff;
     std::size_t _maxbuff;
-    awaitable_result<ReceiveBlockStatus<Cont> > _promise;
     std::shared_ptr<IStream> _stream;
 
-    struct CB {
-        ReceiveBlockState *owner;
-        void operator()(awaitable<std::string_view> &awt) {
-            owner->process_data(awt);
-        }
-    };
-
-    char _callback_buffer[sizeof(awaiting_callback<std::string_view, CB>)];
-
-    prepared_coro process_data(awaitable<std::string_view> &awt) {
+    prepared_coro process_data(awaitable<std::string_view> &awt,
+            awaitable_result<ReceiveBlockStatus<Cont> > &promise) {
         try {
             std::string_view data = awt.await_resume();
             if (data.empty()) {
-                return _promise(false);
+                return promise(false);
             }
             std::size_t remain = _maxbuff - _buff.size();
             if (remain <= data.size()) {
@@ -231,15 +214,19 @@ protected:
                 auto b = data.substr(remain);
                 std::copy(a.begin(),a.end(), std::back_inserter(_buff));
                 _stream->put_back(b);
-                return _promise(true);
+                return promise(true);
             }
             std::copy(data.begin(), data.end(), std::back_inserter(_buff));
-            _stream->receive().set_callback(CB{this}, _callback_buffer);
+            _callback.await_cont(_stream->receive());
             return {};
         } catch (...) {
-            return _promise.set_exception(std::current_exception());
+            return promise.set_exception(std::current_exception());
         }
     }
+
+    await_member_callback<std::string_view, ReceiveBlockState *,
+        &ReceiveBlockState::process_data, awaitable_result<ReceiveBlockStatus<Cont> > >
+            _callback;
 };
 
 ///Holds status of receive_block operation of Stream
@@ -373,8 +360,8 @@ public:
      * be delivered. Always perform cooperative close with the other side
      * to prevent data lost.
      */
-    void close() {
-        _ptr->close();
+    awaitable<bool> close() {
+        return _ptr->close();
     }
 
     ///Retrieve current output buffer size
@@ -420,6 +407,7 @@ public:
             }
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
         }
+        awt.cancel();
         return ReceiveUntilState<Cont, n>(buffer, patt, state, limit, _ptr);
 
     }
@@ -453,6 +441,7 @@ public:
             }
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
         }
+        awt.cancel();
         return ReceiveBlockState<Cont>(buffer, size, _ptr);
     }
 
@@ -461,7 +450,6 @@ public:
     Counters get_counters() const  {return _ptr->get_counters();}
     IOTimeout get_timeouts() const  {return _ptr->get_timeouts();}
     void set_timeouts(IOTimeout tm)   {return _ptr->set_timeouts(tm);}
-
 
 protected:
     std::shared_ptr<IStream> _ptr;

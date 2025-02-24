@@ -317,9 +317,12 @@ public:
  */
 using ErrorCallback = std::function<void(std::string_view, std::source_location)>;
 
+using AsyncContext = std::shared_ptr<INetContext>;
 
-std::shared_ptr<INetContext> make_network_context(int iothreads = 1);
-std::shared_ptr<INetContext> make_network_context(ErrorCallback errcb, int iothreads = 1);
+
+AsyncContext make_async_context(int iothreads = 1);
+AsyncContext make_async_context(ErrorCallback errcb, int iothreads = 1);
+
 
 
 ///creates server which calls a user callback with data required to create a new peer
