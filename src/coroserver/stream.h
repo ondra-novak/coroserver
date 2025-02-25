@@ -5,6 +5,8 @@
 
 namespace coroserver{
 
+class INetContext;
+
 /// Represents the possible states of a stream (e.g., network connection, file stream, etc.).
 enum class StreamState {
     /// The stream is in the process of being opened but is not yet fully available.
@@ -59,8 +61,10 @@ public:
     /// close the stream at output side
     /** Even if the stream is closed, there still can be unprocessed data.
      *  This function should change StreamState to closing
+     *  @retval true stream has been closed by this function
+     *  @retval false stream is in error state or already closed
      */
-    [[nodiscard]] virtual awaitable<void> close() = 0;
+    [[nodiscard]] virtual awaitable<bool> close() = 0;
 
 
     struct Counters {
@@ -83,6 +87,13 @@ public:
      * @param tm timeout structure
      */
     virtual void set_timeouts(IOTimeout tm) = 0;
+
+    ///Retrieve asynchronous context associated with this object (if exists)
+    /**
+     * @return pointer to context. Note that this function can return nullptr
+     * if no async context is associated
+     */
+    virtual std::shared_ptr<INetContext> get_async_context() const = 0;
 
 
 };
@@ -335,7 +346,7 @@ public:
      * be delivered. Always perform cooperative close with the other side
      * to prevent data lost.
      */
-    [[nodiscard]] awaitable<void> close() {
+    [[nodiscard]] awaitable<bool> close() {
         return _ptr->close();
     }
 
@@ -417,8 +428,30 @@ public:
     IOTimeout get_timeouts() const  {return _ptr->get_timeouts();}
     void set_timeouts(IOTimeout tm)   {return _ptr->set_timeouts(tm);}
 
+    std::shared_ptr<INetContext> get_async_context() const {return _ptr->get_async_context();}
 protected:
     std::shared_ptr<IStream> _ptr;
+};
+
+
+class StreamProxy: public IStream {
+public:
+
+    StreamProxy(Stream s):_s(std::move(s)) {}
+
+    virtual StreamState get_state() const override {return _s.get_state();}
+    virtual awaitable<std::string_view> receive() override {return _s.receive();}
+    virtual void put_back(std::string_view s) override {return _s.put_back(s);}
+    virtual awaitable<bool> send(std::string_view data) override {return _s.send(data);}
+    virtual awaitable<bool> close() override {return _s.close();}
+    virtual Counters get_counters() const override {return _s.get_counters();}
+    virtual IOTimeout get_timeouts() const override {return _s.get_timeouts();}
+    virtual void set_timeouts(IOTimeout tm) override {_s.set_timeouts(tm);}
+    virtual std::shared_ptr<INetContext> get_async_context() const override {return _s.get_async_context();}
+protected:
+    Stream _s;
+
+
 };
 
 }

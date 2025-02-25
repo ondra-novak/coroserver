@@ -1,6 +1,9 @@
 #include "socket_stream.h"
+#include "buffered_stream.h"
 
 namespace coroserver {
+
+template class BufferedStreamT<StreamProxy>;
 
 SocketStream::SocketStream(std::shared_ptr<INetContext> ctx, ConnHandle h)
 :_ctx(std::move(ctx))
@@ -111,12 +114,13 @@ void SocketStream::put_back(std::string_view s) {
 
 }
 */
-awaitable<void> SocketStream::close() {
+awaitable<bool> SocketStream::close() {
     if (!_output_closed) {
         _ctx->send(_h,{});//SEND EOF;
         _output_closed = true;
+        return true;
     }
-    return {};
+    return false;
 }
 
 
@@ -350,6 +354,10 @@ awaitable<Stream> TCPServer::accept() {
             _accept_cb.await(accept_handle(), this, std::move(r), nullptr);
         };
     }
+}
+
+std::shared_ptr<INetContext> SocketStream::get_async_context() const {
+    return _ctx;
 }
 
 }

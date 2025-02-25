@@ -1,10 +1,8 @@
 #pragma once
-#include <queue>
 #include <mutex>
 #include "coroutines.h"
 #include "stream.h"
 #include "network.h"
-#include "ring_buffer.h"
 
 namespace coroserver {
 
@@ -17,10 +15,11 @@ public:
     virtual void put_back(std::string_view s) override;
     virtual awaitable<bool> send(std::string_view data) override;
     StreamState get_state() const override;
-    virtual awaitable<void> close() override;
+    virtual awaitable<bool> close() override;
     virtual IOTimeout get_timeouts() const override;
     virtual IStream::Counters get_counters() const override;
     virtual void set_timeouts(coroserver::IOTimeout tm)  override;
+
 
     ///create socket stream
     /**
@@ -67,6 +66,8 @@ public:
     SocketStream(const  SocketStream &) = delete;
     SocketStream &operator=(const  SocketStream &) = delete;
 
+    virtual std::shared_ptr<INetContext> get_async_context() const override;
+
 protected:
     SocketStream(std::shared_ptr<INetContext> ctx, ConnHandle h);
 
@@ -92,8 +93,6 @@ protected:
     std::size_t _count_output_bytes = 0;
     ///If true, we can immediately send data, if false, pending send
     bool _clear_to_send = false;
-    ///if true, send eof once you finish all buffers, if false nothing
-    bool _send_eof = false;
     ///if true, output has been closed, nothing can be sent
     bool _output_closed = false;
     ///if true, stream is in opening state
