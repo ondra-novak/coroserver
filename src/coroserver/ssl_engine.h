@@ -1,95 +1,91 @@
 #pragma once
 
+#include <coroserver/stream_state.h>
 #include <openssl/ssl.h>
 #include <openssl/bio.h>
 #include <stdexcept>
+#include <vector>
 
-/*
- * SSLEngine is a synchronous engine that wraps an SSL/TLS session.
- * It uses memory BIOs so that you can feed it encrypted data (e.g., from a socket,
- * pipe, or any IPC mechanism) and have it produce decrypted plaintext, and vice‐versa.
- */
+using coroserver::StreamState;
+
+
 class SSLEngine {
 public:
-    // The engine’s state reflects whether it is waiting for more data
-    // or is ready to process application data.
-    enum EngineState {
-        NEED_ENCRYPTED_DATA,   // Need encrypted data to proceed (e.g. handshake or decryption)
-        NEED_PLAIN_DATA,       // There is plaintext waiting to be encrypted (encrypted data pending)
-        HANDSHAKE_IN_PROGRESS, // The SSL handshake is not yet complete
-        READY,                 // Fully handshaked and ready for application data
-        ERROR_STATE            // An error has occurred
-    };
+    enum TypeClient {client};
+    enum TypeServer {server};
 
-    /**
-     * Constructor.
-     *
-     * @param ctx       A valid SSL_CTX pointer.
-     * @param isServer  If true, the engine acts as a server (using SSL_accept);
-     *                  otherwise, it acts as a client (using SSL_connect).
-     * @throws std::runtime_error if the SSL object or the BIOs cannot be created.
-     */
-    SSLEngine(SSL_CTX *ctx, bool isServer);
+
+
+    SSLEngine(TypeClient, SSL_CTX *ctx, std::string host_name = {});
+
+    SSLEngine(TypeServer, SSL_CTX *ctx);
 
     ~SSLEngine();
 
+    ///current TLS state
     /**
-     * Feed encrypted data received from the remote peer into the engine.
-     *
-     * @param data   Pointer to the encrypted data.
-     * @param length Length in bytes.
-     * @return       The number of bytes written into the internal buffer, or a negative value on error.
+     * @retval opening handshake is in progress. Call data_exchange() repeatedly
+     * until other state is returned
+     * @retval active session is full active
+     * @retval closing session has been closed by close()
+     * @retval closed session is fully closed
      */
-    int submitEncrypted(const void *data, size_t length);
+    StreamState get_state();
 
-    /**
-     * Attempt to read decrypted (plaintext) data.
-     *
-     * @param buf     Buffer to store the decrypted data.
-     * @param bufLen  Size of the buffer.
-     * @return        The number of bytes read, zero if no data is available,
-     *                or a negative value on error.
-     */
-    int readDecrypted(void *buf, size_t bufLen);
 
-    /**
-     * Feed plaintext (decrypted) data to be encrypted.
+    ///Request close SSL session
+    /** Generates close sequence to terminate SSL session
      *
-     * @param data   Pointer to the plaintext data.
-     * @param length Length in bytes.
-     * @return       The number of bytes accepted, or a negative value on error.
-     */
-    int submitPlain(const void *data, size_t length);
+     * @note you need to call data_exchange to pass data to the network
+     **/
+    void close();
 
-    /**
-     * Read encrypted data produced by the engine.
-     *
-     * @param buf     Buffer to store the encrypted output.
-     * @param bufLen  Size of the buffer.
-     * @return        The number of bytes read, zero if no data is available,
-     *                or a negative value on error.
-     */
-    int readEncrypted(void *buf, size_t bufLen);
 
-    /**
-     * Query the current engine state.
-     *
-     * @return The current EngineState.
+    ///Perform data exchange
+    /** Call this function when data arrived from network.
+     * @param data data arrived from network. For client, this is initially
+     * empty. Function changes variable to view containing data to be send
+     * @return get_state()
      */
-    EngineState getState() const;
+    StreamState data_exchange(std::string_view &data);
+
+    ///encrypt data
+    /**
+     * @param data data to encrypt
+     * @note you need to call data_exchange after encrypt to receive
+     * encrypted view.
+     */
+    StreamState encrypt(std::string_view data);
+
+
+    ///decrypt data pushed by data_exchange.
+    /**
+     * @param data variable is set to contain view on decrypted data
+     * @return stream state. If the view is set to empty, check the state.
+     * If contains active state, probably more incoming data are required.
+     * Request data from source and call data_exchange() when arrived
+     */
+    StreamState decrypt(std::string_view &data);
+
+
 
 private:
-    SSL *ssl_;   // The SSL object
-    BIO *rbio_;  // Memory BIO for incoming encrypted data
-    BIO *wbio_;  // Memory BIO for outgoing encrypted data
-    bool isServer_;
-    EngineState state_;
+    SSL *_ssl = nullptr;   // The SSL object
+    BIO *_rbio = nullptr;  // Memory BIO for incoming encrypted data
+    BIO *_wbio = nullptr;  // Memory BIO for outgoing encrypted data
+    StreamState _state = {};
+    bool _clear_output = false;
+    std::vector<char> _decrypt_buffer;
 
     // Helper: update the state of the engine based on current conditions.
     void updateState();
 
     // Helper: perform (or continue) the handshake if needed.
     int doHandshake();
+
+    void common_init(SSL_CTX *ctx);
+    bool handle_error(int err);
+    void clear_output();
 };
 
 
