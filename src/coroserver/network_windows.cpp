@@ -478,6 +478,7 @@ void NetContextWin::process_event_lk(std::unique_lock<std::mutex> &lk, ConnHandl
         }
         if (ctx->_connecting)  {  //CONNECT      
             ctx->_connecting = false;
+            setsockopt(ctx->_socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
             if (error) report_error(Win32Error(error), "connect");
             ctx->_error = error != 0;
             ctx->_clear_to_send = true;
@@ -531,11 +532,12 @@ void NetContextWin::process_event_lk(std::unique_lock<std::mutex> &lk, ConnHandl
         if (ctx->_accept_socket != INVALID_SOCKET) {
             auto srv = std::exchange(ctx->_accept_cb, nullptr);
             if (error == 0) {
+                setsockopt(ctx->_accept_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, reinterpret_cast<char *>(&ctx->_socket), sizeof(SOCKET));
                 sockaddr_storage *local, *remote;
                 int local_sz = sizeof(local_sz), remote_sz = sizeof(remote_sz);
                 mswsock.GetAcceptExSockaddrs(ctx->_aux_buffer,0,sizeof(*local)+16,sizeof(*remote)+16,
                     reinterpret_cast<sockaddr **>(&local), &local_sz, reinterpret_cast<sockaddr **>(&remote), &remote_sz);
-                
+
                 auto adrname = sockaddr_to_string(reinterpret_cast<sockaddr *>(remote));
                 SocketInfo *nfo = alloc_socket_lk();
                 nfo->_socket = ctx->_accept_socket;
@@ -627,7 +629,11 @@ std::size_t NetContextWin::send(ConnHandle ident, std::string_view data) {
     }
 
     if (data.empty()) {
-        shutdown(ctx->_socket, SD_SEND);
+        int r = shutdown(ctx->_socket, SD_SEND);
+        if (r) {
+            auto err = WSAGetLastError();
+            report_error(std::system_error(static_cast<int>(err), Win32ErrorCategory()), "shutdown");
+        }
         return 0;
     }
     WSABUF buf = {static_cast<ULONG>(data.size()), const_cast<char *>(data.data())};

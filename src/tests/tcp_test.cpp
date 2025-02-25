@@ -48,7 +48,8 @@ awaitable<void> read_task(TCPServer &server) {
         int n = strtol(line.c_str(),nullptr,10);
         CHECK_EQUAL(n,i);
     }
-    auto rest = co_await stream.receive();
+    std::string_view rest;
+    rest = co_await stream.receive();
     CHECK_EQUAL(rest.size(),0);
     CHECK(stream.get_state() == StreamState::closed);
     co_return;

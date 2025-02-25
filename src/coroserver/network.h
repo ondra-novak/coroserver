@@ -44,9 +44,9 @@ class SimpleAction {
 public:
 
     struct Interface {
-        void (*_run_fn)(void *);
-        void (*_move_fn)(void *, void *);
-        void (*_destroy_fn)(void *);
+        void (*_run_fn)(void *) = nullptr;
+        void (*_move_fn)(void *, void *) = nullptr;
+        void (*_destroy_fn)(void *) = nullptr;
     };
 
     template<typename Fn>

@@ -65,8 +65,8 @@ protected:
     }
 
     constexpr void build_lps(unsigned int size) {
-        unsigned char i = 1;
-        unsigned char len = 0;
+        unsigned int i = 1;
+        unsigned int len = 0;
         _lps[0]=0;
         while (i < size) {
             if (_pattern[i] == _pattern[len]) {
