@@ -32,7 +32,7 @@ public:
      * @note the function is not concurrency safe. Only one coroutine can await on this method.
      * It is still posible to write during awaiting
      */
-    virtual awaitable<std::string_view> receive() = 0;
+    [[nodiscard]] virtual awaitable<std::string_view> receive() = 0;
     ///put back some data to be received later
     /**
      * @param s a view contains data to put back. This should be part of data returned by
@@ -43,25 +43,25 @@ public:
     virtual void put_back(std::string_view s) = 0;
     /// send buffer
     /**
-     * @param data to send
-     * @retval true data successfuly left output buffer to networ
-     * @retval false data has been discarded, because network error (this also closes the connection)
-     * @note you can discard awaitable object. The function should always send the buffer, but by
-     * discarding awaitable also discard status of the connection.
-     * @note the function can immediately return false if connection is already closed
+     * @param data to send. Note the underlying buffer must remain valid
+     * until the operation is complete. This must be handled well especially
+     * when operation is performed asynchronously
      *
-     * @note the function is concurrency safe. Multiple coroutines can await
+     * @retval true data successfully passed to the network stack for the delivery
+     * @retval false stream has been closed
+     *
+     * @note the function is not concurrency safe. Only one coroutine can await on this method.
+     * It is still possible to read during awaiting
      */
 
-    virtual awaitable<bool> send(std::string_view data) = 0;
+    [[nodiscard]] virtual awaitable<bool> send(std::string_view data) = 0;
 
     /// close the stream at output side
     /** Even if the stream is closed, there still can be unprocessed data.
      *  This function should change StreamState to closing
      */
-    virtual awaitable<bool> close() = 0;
+    [[nodiscard]] virtual awaitable<void> close() = 0;
 
-    virtual std::size_t get_buffered_count() const = 0;
 
     struct Counters {
         ///total received bytes
@@ -287,7 +287,7 @@ public:
      * }
      * @endcode
      */
-    awaitable<std::string_view> receive() {
+    [[nodiscard]] awaitable<std::string_view> receive() {
         return _ptr->receive();
     }
     /// Push data back into the stream for re-reading.
@@ -319,32 +319,7 @@ public:
         _ptr->put_back(s);
     }
     /// Send data to the stream asynchronously.
-    /**
-     * This function attempts to send data into the stream. The return value can be
-     * ignored (discarded), but if the caller performs `co_await` on it, the coroutine
-     * will be suspended until the data is successfully sent from the internal buffer.
-     * This is particularly useful when dealing with large amounts of data that
-     * require buffering.
-     *
-     * @param data The data to be sent.
-     * @return An awaitable boolean:
-     *         - `true`: Data was successfully sent (e.g., handed off to the OS network stack).
-     *         - `false`: The stream was closed or interrupted by the other side (e.g., broken pipe).
-     *
-     * If the caller ignores the return value, it will not be informed of any failures.
-     *
-     * Example usage:
-     * @code
-     * co_await stream.send("Hello, world!"); // Ensures the data is actually sent
-     *
-     * // Sending without waiting (fire-and-forget)
-     * stream.send("Logging event"); // No guarantee of successful delivery
-     * @endcode
-     *
-     * @note you can send empty string. This doesn't send anything, but can
-     * be used to wait for completion on a send operation (aka flush)
-     */
-    awaitable<bool> send(std::string_view data) {
+    [[nodiscard]] awaitable<bool> send(std::string_view data) {
         return _ptr->send(data);
     }
     ///Mark stream closed
@@ -360,19 +335,10 @@ public:
      * be delivered. Always perform cooperative close with the other side
      * to prevent data lost.
      */
-    awaitable<bool> close() {
+    [[nodiscard]] awaitable<void> close() {
         return _ptr->close();
     }
 
-    ///Retrieve current output buffer size
-    /** Because there is no limit on the output buffer, it can be
-     * useful to monitor this value especially when a lot of data
-     * are written to fast, which can fill the memory for buffering.
-     * @return total buffered size
-     */
-    std::size_t get_buffered_count() const {
-        return _ptr->get_buffered_count();
-    }
 
     ///tests, whether stream is initialized
     explicit operator bool() const {return static_cast<bool>(_ptr);}
@@ -389,7 +355,7 @@ public:
      * data are still stored in the buffer.
      */
     template<typename Cont, unsigned int n>
-    awaitable<ReceiveUntilStatus<Cont, n> > receive_until(Cont &buffer, pattern_search<char, n> patt, size_t limit = ~static_cast<std::size_t>(0)) {
+    [[nodiscard]] awaitable<ReceiveUntilStatus<Cont, n> > receive_until(Cont &buffer, pattern_search<char, n> patt, size_t limit = ~static_cast<std::size_t>(0)) {
         buffer.clear();
         auto awt = _ptr->receive();
         auto state = patt.begin_search();
@@ -413,7 +379,7 @@ public:
     }
 
     template<typename Cont, unsigned int n>
-    awaitable<ReceiveUntilStatus<Cont, n> > receive_until(Cont &buffer, const char (&sep)[n], size_t limit = ~static_cast<std::size_t>(0)) {        ;
+    [[nodiscard]] awaitable<ReceiveUntilStatus<Cont, n> > receive_until(Cont &buffer, const char (&sep)[n], size_t limit = ~static_cast<std::size_t>(0)) {        ;
         return receive_until(buffer, pattern_search<char, n>(sep), limit);
 
     }

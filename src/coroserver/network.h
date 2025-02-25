@@ -40,10 +40,16 @@ struct PipePair {
     ConnHandle write;
 };
 
-class SimpleAction {
+///Holds simple callable (with no arguments) supporting closure up to 7*sizeof(void *)
+/**
+ * This class is used along with INetContext::enqueue allowing to enqueue any
+ * action running outside of a regular callback, but inside of dispatcher's
+ * thread
+ */
+class SimpleAction { // @suppress("Miss copy constructor or assignment operator")
 public:
 
-    struct Interface {
+    struct Interface { // @suppress("Miss copy constructor or assignment operator")
         void (*_run_fn)(void *) = nullptr;
         void (*_move_fn)(void *, void *) = nullptr;
         void (*_destroy_fn)(void *) = nullptr;
@@ -84,6 +90,9 @@ public:
         }
         return *this;
     }
+    SimpleAction(const SimpleAction &other) = delete;
+    SimpleAction &operator=(const SimpleAction &&other) =delete;
+
     ~SimpleAction() {
         _vtable->_destroy_fn(_space);
     }
@@ -95,6 +104,23 @@ protected:
     const Interface *_vtable;
     char _space[_max_lambda_size] = {};
 
+};
+
+enum class SendStatus {
+    ///Data has been sent synchronously, and state clear_to_send remains
+    /** You don't need to request ready_to_send, you can continue in sending.
+     * It is save to destroy any underlying buffer
+     */
+    sync,
+    ///Data has been sent asynchronously, and clear_to_send is no longer valid
+    /**
+     * You need to request ready_to_send and keep underlying buffer valid
+     * until clear_to_send is reported
+     *
+     */
+    async,
+    ///Data was not sent, connection is reset
+    broken,
 };
 
 class INetContext {
@@ -182,13 +208,14 @@ public:
      * @param connection connection handle
      * @param data data to send. Sending empty string causes sending EOF, which
      * closes connection.
-     * @return count of bytes written. The function can return 0, which can mean
-     * that connection has been reset or output buffer is full. To detect connection
-     * reset, if zero is returned after clear_to_send(), it does mean, that
-     * connection has been reset. Otherwise, output buffer is probably full and you
-     * need to requst callback_on_send_available
+     * @retval SendStatus::sync data has been sent synchronously (whole)
+     * @retval SendStatus::async data has been sent asynchronously and you
+     * need to request for clear_to_send. Until next clear_to_send, the
+     * underlying buffer must not be destroyed
+     * @retval SendStatus::broken data has not been sent, connection is
+     * broken
      */
-    virtual std::size_t send(ConnHandle connection, std::string_view data) = 0;
+    virtual SendStatus send(ConnHandle connection, std::string_view data) = 0;
     ///notifies context that peer is ready to send data
     /**
      * Result of this call is calling function clear_to_send(), when send is possible.
@@ -231,8 +258,7 @@ public:
      *
      * @param fn function to enqueue.
      *
-     * @note the function must contain minimal closure which also needs to
-     * be trivially copy constructible.
+     * @note the function must contain minimal closure
      *
      * On other hand, if called from a handler, it guarantee that callback function
      * will be called, so you  don't need any "guards"
@@ -258,6 +284,11 @@ public:
      * @retval false we are outside of a callback
      */
     virtual bool in_calback() const = 0;
+
+    ///used for testing, specifies maximum size of the buffer can be send synchronously
+    /** default value is "unlimited" */
+    static std::size_t test_max_send;
+
 };
 
 class IPeerServerCommon {

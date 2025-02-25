@@ -17,8 +17,7 @@ public:
     virtual void put_back(std::string_view s) override;
     virtual awaitable<bool> send(std::string_view data) override;
     StreamState get_state() const override;
-    virtual std::size_t get_buffered_count() const override;
-    virtual awaitable<bool> close() override;
+    virtual awaitable<void> close() override;
     virtual IOTimeout get_timeouts() const override;
     virtual IStream::Counters get_counters() const override;
     virtual void set_timeouts(coroserver::IOTimeout tm)  override;
@@ -87,11 +86,8 @@ protected:
     bool _receiving = false;
     bool _is_eof = false;
 
-
-    ///an output buffer held data to be written at background
-    StringRingBuffer<char> _output_buffer;
-    ///list of awaiting coroutines to retrieve status of send
-    std::queue<std::pair<std::size_t, awaitable<bool>::result> > _awaiting_results;
+    awaitable<bool>::result _awaiting_write = {};
+    std::string_view _output_view = {};
     ///count of sent bytes (total)
     std::size_t _count_output_bytes = 0;
     ///If true, we can immediately send data, if false, pending send
@@ -111,8 +107,6 @@ protected:
     void destroy_me();
 
     void begin_receive();
-    void notify_awaiters_ok();
-    void notify_awaiters_error();
 
     void update_timer();
 };

@@ -28,7 +28,7 @@ public:
     ///start receiving data
     virtual void receive(ConnHandle ident, std::span<char> buffer, IPeer *peer) override;
     ///send data
-    virtual std::size_t send(ConnHandle ident, std::string_view data) override;
+    virtual SendStatus send(ConnHandle ident, std::string_view data) override;
 
     virtual void ready_to_send(ConnHandle ident, IPeer *peer) override;
 
@@ -66,6 +66,7 @@ protected:
         ConnHandle _ident = static_cast<ConnHandle>(-1);
         int _socket = -1;
         std::span<char> _recv_buffer;
+        std::string_view _send_buffer;
         int _flags = 0;
         int _cur_flags = 0;
         std::chrono::system_clock::time_point _tmtp = {};
@@ -112,6 +113,7 @@ protected:
     std::chrono::system_clock::time_point get_epoll_timeout_lk();
 
     void apply_flags_lk(SocketInfo *sock) noexcept;
+    SendStatus send_lk(SocketInfo *ctx, std::string_view data);
 };
 
 

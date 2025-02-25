@@ -90,7 +90,7 @@ void SocketStream::put_back(std::string_view s) {
 }
 
 
-awaitable<bool> SocketStream::close() {
+/*awaitable<bool> SocketStream::close() {
     std::lock_guard _(_mx);
     if (_output_closed) return false;
     //if clear to send - set eof immediately
@@ -110,120 +110,70 @@ awaitable<bool> SocketStream::close() {
     }
 
 }
-
-void  SocketStream::notify_awaiters_ok() {
-    //process all awaiters until counter is reached
-    while (!_awaiting_results.empty() && _awaiting_results.front().first <= _count_output_bytes) {
-        //enqueue true resolution
-        _ctx->enqueue(_awaiting_results.front().second(true));
-        //pop it
-        _awaiting_results.pop();
+*/
+awaitable<void> SocketStream::close() {
+    if (!_output_closed) {
+        _ctx->send(_h,{});//SEND EOF;
+        _output_closed = true;
     }
+    return {};
 }
-void  SocketStream::notify_awaiters_error() {
-    //process all awaiters
-    while (!_awaiting_results.empty()) {
-        //enqueeu fasle resolution
-        _ctx->enqueue(_awaiting_results.front().second(false));
-        //pop it
-        _awaiting_results.pop();
-    }
 
-}
 
 
 awaitable<bool> SocketStream::send(std::string_view data) {
-    //lock now
     std::lock_guard _(_mx);
-    //if ouput is closed, nothing can be sent
-    if (_send_eof || _output_closed) return false;
-    //if clear to send - we can send now
-    if (_clear_to_send) {
-        //just sync - it is already synced
-        if (data.empty()) return true;
-        //send all data directly
-        auto sz = _ctx->send(_h, data);
-        //count sent data
-        _count_output_bytes+=sz;
-        //if sent everything, return success
-        if (sz == data.size()) return true;
-        //request for send
-        ready_to_send();
-        //retrieve remaining data
-        data = data.substr(sz);
+    if (_output_closed) {
+        return false;
     }
-    //push data to buffer
-    _output_buffer.push(data);
-    //calculate position of data on global counter
-    auto pos = _count_output_bytes + _output_buffer.size();
-    //return lambda to asynchronous processing
-    return [this,pos](awaitable<bool>::result r) -> prepared_coro{
-        //check if detached
-        if (r) {
-            //so now the coroutine wants to wait until counter reaches the requested value
-            std::lock_guard _(_mx);
-            //if already reached the counter, return true
-            if (_clear_to_send && _count_output_bytes >= pos) return r(true);
-            //if output has been closed, return false
-            if (_output_closed) return r(false);
-            //otherwise register to awaiter list
-            _awaiting_results.push({pos,std::move(r)});
+    if (data.empty()) {
+        if (_clear_to_send) {
+            return true;
         }
-        //in all cases return no coroutine to resume
+    } else if (_clear_to_send) {
+        auto st = _ctx->send(_h, data);
+        if (st == SendStatus::broken) {
+            _output_closed = true;
+            return false;
+        }
+        _count_output_bytes+=data.size();
+        if (st == SendStatus::sync) return true;
+        ready_to_send();
+    } else {
+        _output_view = data;
+    }
+    _clear_to_send = false;
+    return [this,data](awaitable<bool>::result r) ->prepared_coro {
+        std::lock_guard _(_mx);
+        if (_output_closed) return r(false);
+        if (_clear_to_send) return r(true);
+        _awaiting_write = std::move(r);
         return {};
     };
-
 }
 
 void SocketStream::clear_to_send() noexcept {
+    prepared_coro out;
     //called when we are clear to send
     std::lock_guard _(_mx);
-    //if output is already closed, do nothing
-    if (_output_closed) return;
-    //report that sent ok
-    notify_awaiters_ok();
-    //if buffer is not empty
-    if (!_output_buffer.empty()) {
-        //retrieve data
-        auto data = _output_buffer.front();
-        //send data
-        auto sz = _ctx->send(_h, data);
-        //count output
-        _count_output_bytes += sz;
-        //commit sent data
-        _output_buffer.pop(sz);
-        //any size sent
-        if (sz) {
-            //manifest ready to send
+
+    if (!_output_view.empty()) {
+        _count_output_bytes+=_output_view.size();
+        auto st = _ctx->send(_h,std::exchange(_output_view, {}));
+        if (st == SendStatus::async) {
             ready_to_send();
-        } else { //nothing sent, connection reset
-            //report that sent failed
-            notify_awaiters_error();
-            //output is closed
-            _output_closed = true;
-            //we don't manifest ready to send
+            return;
         }
-    } else {//buffer is empty
-        //if send_eof is active ...
-        if (_send_eof) {
-            _ctx->send(_h,{}); //send_eof;
-            _count_output_bytes++;
-            notify_awaiters_ok();
-            _output_closed = true;//output closed
-        } else {
-            //otherwise remember that we are clear to send
-            _clear_to_send = true;
-            //reset current send timeout
-            current_send_tm = current_send_tm.max();
-            //update timer
-            update_timer();
-            //no longer in openning state
-            _opening_state = false;
-            //sync
-            notify_awaiters_ok();
+        if (st == SendStatus::broken) {
+            _output_closed = true;
         }
     }
 
+    if (!_output_closed) {
+        _clear_to_send = true;
+    }
+
+    out = _awaiting_write(!_output_closed);
 }
 
 IOTimeout SocketStream::get_timeouts() const {
@@ -274,7 +224,7 @@ void SocketStream::on_timeout() noexcept {
             //close output
             _output_closed = true;
             //notify error
-            notify_awaiters_error();
+            _awaiting_write(false);
             //reset timeout
             current_send_tm = current_send_tm.max();
         }
@@ -309,10 +259,6 @@ StreamState SocketStream::get_state() const {
     return StreamState::active;
 }
 
-std::size_t SocketStream::get_buffered_count() const {
-    std::lock_guard _(_mx);
-    return _output_buffer.size();
-}
 
 Stream SocketStream::connect(std::shared_ptr<INetContext> ctx, std::string address_port) {
     auto h = ctx->connect(std::move(address_port));

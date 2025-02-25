@@ -26,10 +26,12 @@ awaitable<void> write_task(AsyncContext ctx, std::string addr) {
 awaitable<void> write_task2(AsyncContext ctx, std::string addr) {
     Stream stream = SocketStream::connect(ctx,addr);
 
-    co_await stream.send("");
+    std::ostringstream b;
     for (int i = 0; i < 65536; i++) {
-        stream.send(std::format("{}\n", i));
+        b << i << "\n";
     }
+
+    co_await stream.send(b.view());
     co_await stream.close();
     CHECK(stream.get_state() == StreamState::closing);
     auto r = co_await stream.receive();
@@ -88,6 +90,7 @@ int test2() {
 
 
 int main() {
+    INetContext::test_max_send = 100;
     test1();
     test2();
 }

@@ -172,10 +172,10 @@ void NetContext::receive(ConnHandle ident, std::span<char> buffer, IPeer *peer) 
     apply_flags_lk(ctx);
 }
 
-std::size_t NetContext::send(ConnHandle ident, std::string_view data) {
+SendStatus NetContext::send(ConnHandle ident, std::string_view data) {
     std::lock_guard _(_mx);
     auto ctx = socket_by_ident(ident);
-    if (!ctx) return 0;
+    if (!ctx) return SendStatus::broken;
     if (data.empty()) {
         if (ctx->_socket_is_pipe) {
             if (ctx->_socket >= 0) {
@@ -186,23 +186,36 @@ std::size_t NetContext::send(ConnHandle ident, std::string_view data) {
         } else {
             ::shutdown(ctx->_socket, SHUT_WR);
         }
-        return 0;
+        return SendStatus::sync;
     } else {
-        int s;
-        if (ctx->_socket_is_pipe) {
-            s = ::write(ctx->_socket, data.data(), data.size());
-        } else {
-            s = ::send(ctx->_socket, data.data(), data.size(), MSG_DONTWAIT);
-        }
-        if (s < 0) {
-            int e = errno;
-            s = 0;
-            if (e != EWOULDBLOCK && e != EPIPE && e != ECONNRESET) {
-                report_error(std::system_error(e, std::system_category()), "send");
-            }
-        }
-        return s;
+        return send_lk(ctx, data);
     }
+
+}
+SendStatus NetContext::send_lk(SocketInfo *ctx, std::string_view data) {
+    int s;
+    auto d = data.substr(0, test_max_send);
+    if (ctx->_socket_is_pipe) {
+        s = ::write(ctx->_socket, d.data(), d.size());
+    } else {
+        s = ::send(ctx->_socket, d.data(), d.size(), MSG_DONTWAIT);
+    }
+    if (s < 0) {
+        int e = errno;
+        if (e == EWOULDBLOCK) {
+            s = 0;
+        } else if (e == EPIPE || e == ECONNRESET) {
+            return SendStatus::broken;
+        } else {
+            report_error(std::system_error(e, std::system_category()), "send");
+            return SendStatus::broken;
+        }
+    }
+    if (static_cast<std::size_t>(s) == data.size()) return SendStatus::sync;
+    ctx->_send_buffer = data.substr(s);
+    ctx->_flags |= EPOLLOUT;
+    apply_flags_lk(ctx);
+    return SendStatus::async;
 }
 
 void NetContext::ready_to_send(ConnHandle ident, IPeer *peer) {
@@ -490,8 +503,15 @@ void NetContext::process_event_lk(std::unique_lock<std::mutex> &lk, const WaitRe
     }
     if (e.events & EPOLLOUT) {
         ctx->_flags &= ~EPOLLOUT;
-        auto peer = std::exchange(ctx->_send_cb, nullptr);
-        if (peer) ctx->invoke_cb(lk, _cond, [&]{peer->clear_to_send();});
+        if (!ctx->_send_buffer.empty()) {
+            if (send_lk(ctx, ctx->_send_buffer) != SendStatus::async) {
+                ctx->_send_buffer = {};
+            }
+        }
+        if (ctx->_send_buffer.empty()) {
+            auto peer = std::exchange(ctx->_send_cb, nullptr);
+            if (peer) ctx->invoke_cb(lk, _cond, [&]{peer->clear_to_send();});
+        }
     }
     apply_flags_lk(ctx);
 
