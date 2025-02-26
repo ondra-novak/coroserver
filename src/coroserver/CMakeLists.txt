@@ -5,6 +5,7 @@ set(COMMON_FILES
     network.cpp
     socket_stream.cpp
     ssl_engine.cpp
+    ssl_stream.cpp
 )
 
 if(MSVC)
@@ -14,6 +15,6 @@ else()
 endif()
 
 add_library(coroserver ${COMMON_FILES} ${PLATFORM_SPECIFIC_FILES})
-    
+
 
 
