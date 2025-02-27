@@ -26,9 +26,7 @@ SSLStream::SSLStream(TypeServer, Stream s,
         }
     }, this);
     SSL_accept(_ssl);
-    _state = StreamState::opening;
-    handle_error(SSL_do_handshake(_ssl));
-
+    run_handshake();
 }
 
 SSLStream::SSLStream(TypeClient, Stream s,
@@ -43,8 +41,7 @@ SSLStream::SSLStream(TypeClient, Stream s,
           }
     }
     SSL_connect(_ssl);
-    _state = StreamState::opening;
-    handle_error(SSL_do_handshake(_ssl));
+    run_handshake();
 
 }
 
@@ -52,7 +49,188 @@ SSLStream::~SSLStream() {
     SSL_free(_ssl); // This will free the associated BIOs as well.
 }
 
-void SSLStream::common_init(SSL_CTX *ctx) {
+std::pair<prepared_coro, prepared_coro> SSLStream::fail_handshake(std::exception_ptr e) {
+    _state = StreamState::closed;
+    return {
+        _send_awaiting.set_exception(e),
+        _recv_awaiting.set_exception(e)
+    };
+}
+
+prepared_coro SSLStream::async_process_receive(awaitable<std::string_view> &awt)
+{
+    prepared_coro second_coro;
+    std::lock_guard _(_mx);
+    try {
+        std::string_view s = awt.await_resume();
+        if (s.empty()) {
+            //if caller awaiting, forward timeout/eof to called
+            if (_recv_awaiting) return _recv_awaiting(s);
+            //we probably in handshake
+            //so timeout during handshake while writing is failure
+            //close stream
+            _state = StreamState::closed;
+            //fail the write
+            return _send_awaiting(false);
+        } else {
+            //feed bio with data
+            BIO_write(_rbio, s.data(), s.size());
+            //for handshake phase
+            if (_state == StreamState::opening) {
+                //do handshake
+                bool b = handle_error(SSL_do_handshake(_ssl));
+                //handshake success?
+                if (b) {
+                    //so we are in active state
+                    _state = StreamState::active;
+                    //read any possible data after handshake
+                    s = read_ssl_nb();
+                    //this can be empty, but if there is awaiting caller
+                    if (s.empty() && _recv_awaiting) {
+                        //continue in async reading
+                        second_coro =  _async_receive_cb.await(_s.receive(),this);
+                    } else {
+                        //otherwise send result to caller (if none, this command does nothing)
+                        second_coro = _recv_awaiting(s);
+                    }
+                    //any data to send after handshake?
+                    if (!_send_awaiting_data.empty()) {
+                        //write them now
+                        handle_error(SSL_write(_ssl, _send_awaiting_data.data(), _send_awaiting_data.size()));
+                        //and they are written
+                        _send_awaiting_data = {};
+                    }
+                    //any output data in buffer
+                    s = get_output_data();
+                    if (!s.empty()) {
+                        //send them to the stream
+                        return _async_send_cb.await(_s.send(s),this);
+                    }
+                    //this is success for send
+                    return _send_awaiting(true);
+                } else if (_state == StreamState::opening) {
+                    //handshake is not comple yet
+                    //if there are output data
+                    s = get_output_data();
+                    if (!s.empty()) {
+                        //send them async
+                        return _async_send_cb.await(_s.send(s), this);
+                    } else {
+                        //otherwise wait for more incoming data
+                        return _async_receive_cb.await(_s.receive(),this);
+                    }
+                } else {
+                    //any error or close
+                    //fail write
+                    second_coro = _send_awaiting(false);
+                    //return eof
+                    return _recv_awaiting();
+                }
+            } else {
+                //normal operation
+                //read data nb
+                s = read_ssl_nb();
+                //empty data and still normal operation?
+                if (s.empty() && _state == StreamState::active) {
+                    //receive more data 
+                    second_coro = _async_receive_cb.await(_s.receive(), this);
+                    //if there is no send awaiting 
+                    if (!_send_awaiting) {
+                        //try to pick output data
+                        s = get_output_data();
+                        //and if there are some, this can be renegotiation
+                        if (!s.empty()) {
+                            //change state
+                            _state = StreamState::opening;
+                            //send data
+                            return _async_send_cb.await(_s.send(s), this);
+                        }
+                    }  
+                    //if _send_awaiting is active, this issue will be solved on send side
+                    return second_coro;
+                }
+                //non-empty buffer is returned to caller
+                return _recv_awaiting(s);
+            }
+        }        
+    } catch (...) {
+        auto e = std::current_exception();
+        _state = StreamState::closed;
+        //fail write
+        second_coro = _send_awaiting.set_exception(e);
+        //return eof
+        return _recv_awaiting.set_exception(e);
+    }
+}
+
+prepared_coro SSLStream::async_process_send(awaitable<bool> &awt)
+{
+    prepared_coro second_coro;
+    std::lock_guard _(_mx);
+    try {
+        //read send result
+        bool r = awt.await_resume();
+        //send succesful
+        if (r) {
+            //for handshake phase
+            if (_state == StreamState::opening) {
+                //do handshake
+                bool b = handle_error(SSL_do_handshake(_ssl));
+                //if handshake finished
+                if (b) {
+                    //any awaiting data for send - send them now
+                    if (!_send_awaiting_data.empty()) {
+                        handle_error(SSL_write(_ssl, _send_awaiting_data.data(), _send_awaiting_data.size()));
+                    }
+                    //retrieve encrypted data for output
+                    auto s = get_output_data();
+                    //if not empty
+                    if (!s.empty()) {
+                        //start async write now
+                        second_coro = _async_send_cb.await(_s.send(s),this);
+                    }
+                    //anybody is waiting for read
+                    if (_recv_awaiting) {
+                        //start async read now
+                        return _async_receive_cb.await(_s.receive(),this);
+                    }
+                    //return just write
+                    return second_coro;
+                //handshake is not complete but still in progress
+                } else if (_state == StreamState::opening) {
+                    //continue by reading
+                    return _async_receive_cb.await(_s.receive(), this);
+                } else {
+                    //any error or close
+                    //fail write
+                    second_coro = _send_awaiting(false);
+                    //return eof
+                    return _recv_awaiting();
+                }
+            } else {
+                //normal operation finish send with success
+                return _send_awaiting(true);
+            }
+        } else {
+            _state = StreamState::closed;
+            //any error or close
+            //fail write
+            second_coro = _send_awaiting(false);
+            //return eof
+            return _recv_awaiting();
+        }
+    } catch (...) {
+        auto e = std::current_exception();
+        _state = StreamState::closed;
+        //fail write
+        second_coro = _send_awaiting.set_exception(e);
+        //return eof
+        return _recv_awaiting.set_exception(e);
+    }
+}
+
+void SSLStream::common_init(SSL_CTX *ctx)
+{
 
     _ssl = SSL_new(ctx);
     if (!_ssl) {
@@ -91,10 +269,12 @@ awaitable<std::string_view> SSLStream::receive() {
         if (_state == StreamState::closed) return std::string_view();
         if (_state == StreamState::opening) {
             return [this, lk = std::move(lk)](RecvResult res) {
-                this->_recv_awaiting = std::move(res);
+                prepared_coro c;
                 if (!_handshake_running) {
-                    run_handshake();
+                    c = run_handshake_except(res);
                 }
+                this->_recv_awaiting = std::move(res);
+                return c;
             };
         }
         auto r = read_ssl_nb();
@@ -118,10 +298,11 @@ awaitable<bool> SSLStream::send(std::string_view data) {
         if (_state == StreamState::opening) {
             this->_send_awaiting_data = data;
             return [this, lk = std::move(lk)](SendResult res) {
-                this->_send_awaiting = std::move(res);
+                prepared_coro c;
                 if (!_handshake_running) {
-                    run_handshake();
+                    c = run_handshake_except(res);
                 }
+                this->_send_awaiting = std::move(res);
             };
         }
         if (data.empty()) return _s.send(data); //just sync
@@ -181,6 +362,37 @@ std::string_view SSLStream::read_ssl_nb() {
         return {};
     }
 }
+
+prepared_coro SSLStream::run_handshake()
+{
+    //forced handshake - set apropriate state
+    _state = StreamState::opening;
+    //control handshake and process errors
+    bool b = handle_error(SSL_do_handshake(_ssl));
+
+    if (!_send_awaiting) {
+        auto s = get_output_data();
+        if (!s.empty()) {
+            return _async_send_cb.await(_s.send(s),this);
+        }
+    }
+    if (!_recv_awaiting) {
+        if (!b) {
+            return _async_receive_cb.await(_s.receive(),this);
+        }
+    }
+    return {}; 
+}
+
+template<typename Res>
+prepared_coro SSLStream::run_handshake_except(Res &res) {
+    try {
+        return run_handshake();
+    } catch (...) {
+        return res.set_exception(std::current_exception());
+    }
+}
+
 
 std::string_view SSLStream::get_output_data() {
     BUF_MEM *buf1;

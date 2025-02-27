@@ -80,9 +80,14 @@ protected:
     bool handle_error(int retval);
 
     std::string_view read_ssl_nb();
-    void run_handshake();
+    prepared_coro run_handshake();
+
+    template<typename Res>
+    prepared_coro run_handshake_except(Res &res);
+
     std::string_view get_output_data();
 
+    std::pair<prepared_coro, prepared_coro> fail_handshake(std::exception_ptr e);
 
 };
 

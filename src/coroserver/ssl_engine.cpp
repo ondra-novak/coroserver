@@ -39,7 +39,13 @@ bool SSLEngine::handle_error(int ret) {
     return true;
 }
 
-void SSLEngine::common_init(SSL_CTX *ctx) {
+int SSLEngine::doHandshake()
+{
+    
+}
+
+void SSLEngine::common_init(SSL_CTX *ctx)
+{
 
     _ssl = SSL_new(ctx);
     if (!_ssl) {
@@ -105,7 +111,7 @@ StreamState SSLEngine::encrypt(std::string_view data) {
     if (_state == StreamState::active) {
         if (!handle_error(SSL_write(_ssl, data.data(), data.size()))) {
             if (_state == StreamState::active) {
-                _state == StreamState::opening;
+                _state = StreamState::opening;
             }
         }
     }

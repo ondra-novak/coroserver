@@ -147,7 +147,7 @@ awaitable<bool> SocketStream::send(std::string_view data) {
         _output_view = data;
     }
     _clear_to_send = false;
-    return [this,data](awaitable<bool>::result r) ->prepared_coro {
+    return [this](awaitable<bool>::result r) ->prepared_coro {
         std::lock_guard _(_mx);
         if (_output_closed) return r(false);
         if (_clear_to_send) return r(true);
