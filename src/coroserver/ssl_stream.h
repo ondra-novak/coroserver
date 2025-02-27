@@ -31,7 +31,6 @@ public:
 
     SSLStream(TypeServer, Stream s, SSL_CTX *ctx, SetCertificateCallback cert_cb = {});
     SSLStream(TypeClient, Stream s, SSL_CTX *ctx, std::string sni_host);
-    ~SSLStream();
 
     SSLStream(const SSLStream &) = delete;
     SSLStream &operator=(const SSLStream &) = delete;
@@ -42,16 +41,24 @@ public:
     virtual awaitable<bool> send(std::string_view data) override;
     virtual awaitable<bool> close() override;
 
+
 protected:
+    struct TwoCoros {
+        prepared_coro first = {};
+        prepared_coro second = {};
+    };
 
     using RecvResult = awaitable<std::string_view>::result;
     using SendResult = awaitable<bool>::result;
 
+    struct SSLDeleter{void operator()(SSL *ssl) const;};
+    struct BIODeleter{void operator()(BIO *bio) const;};
+
     std::mutex _mx;
-    SSL *_ssl = nullptr;
+    std::unique_ptr<SSL, SSLDeleter>_ssl = nullptr;
     BIO *_rbio = nullptr;
     BIO *_wbio = nullptr;
-    BIO *_wbio2 = nullptr;
+    std::unique_ptr<BIO, BIODeleter>_wbio2 = nullptr;
     StreamState _state = {};
     SetCertificateCallback _cert_cb;
     std::vector<char> _decrypt_buffer;
@@ -64,10 +71,16 @@ protected:
     //send side
     SendResult _send_awaiting;
     std::string_view _send_awaiting_data;
+    bool _req_close = false;
 
 
-    prepared_coro async_process_receive(awaitable<std::string_view> &awt);
-    prepared_coro async_process_send(awaitable<bool> &awt);
+    TwoCoros fail_io(std::exception_ptr e);
+    TwoCoros fail_io();
+    TwoCoros finish_handshake();
+
+
+    TwoCoros async_process_receive(awaitable<std::string_view> &awt);
+    TwoCoros async_process_send(awaitable<bool> &awt);
 
     await_member_callback<std::string_view, SSLStream *,
                 &SSLStream::async_process_receive> _async_receive_cb;
@@ -87,7 +100,6 @@ protected:
 
     std::string_view get_output_data();
 
-    std::pair<prepared_coro, prepared_coro> fail_handshake(std::exception_ptr e);
 
 };
 
