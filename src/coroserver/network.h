@@ -17,7 +17,8 @@ class IPeer;
 class IServer;
 
 ///Identification of connection (server socket)
-using ConnHandle = unsigned int;
+using ConnHandle = std::size_t;
+constexpr ConnHandle invalid_connect_handle = static_cast<ConnHandle>(-1);
 
 enum class SpecialConnection {
     /** not actual connection - you can use for on_timer feature */

@@ -8,17 +8,25 @@ else()
 	add_compile_options(-Wall -Wextra -Wpedantic -Wno-noexcept-type)
 	set(STANDARD_LIBRARIES ssl crypto pthread)
 endif()
+
+
 find_package(Git)
 if(GIT_EXECUTABLE)
 	execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
+find_package(OpenSSL REQUIRED)
+
+
+set(COMMON_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
+
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/)
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 	set(CMAKE_INSTALL_PREFIX "/usr/local" CACHE PATH "Default path to install" FORCE)
 endif()
-include_directories(BEFORE ${CMAKE_CURRENT_LIST_DIR}/src)
+include_directories(BEFORE ${OPENSSL_INCLUDE_DIR} ${CMAKE_CURRENT_LIST_DIR}/src)
 enable_testing()
 include(library.cmake)
 add_subdirectory("src/tests")
