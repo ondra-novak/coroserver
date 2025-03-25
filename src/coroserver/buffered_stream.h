@@ -7,19 +7,19 @@ namespace coroserver {
 template<typename T>
 class BufferedStreamT: public T {
 public:
-    using ABool = awaitable<bool>::result;
+    using ABool = coro::awaitable<bool>::result;
 
 
     using T::T;
-    virtual awaitable<bool> send(std::string_view data) {
-        prepared_coro p; //allows to execute callback outside of lock
+    virtual coro::awaitable<bool> send(std::string_view data) {
+        coro::prepared_coro p; //allows to execute callback outside of lock
         std::lock_guard _(_mx);     //lock
         if (_close_req || _closed) return false;     //if closed - return false
         if (!_buffer_flushing.empty()) { //if flushing buffer is not empty
             //insert data to pending buffer
             _buffer_pending.insert(_buffer_pending.end(), data.begin(), data.end());
             //return lambda that allows to set awaiter on completion
-            return [this](ABool prom) -> prepared_coro {
+            return [this](ABool prom) -> coro::prepared_coro {
                 if (prom) {
                     std::lock_guard _(_mx);
                     //if all buffers are empty,
@@ -39,9 +39,9 @@ public:
             //flush - but not yet - keep prepared_coro
             p = _callback.await(T::send(
                     std::string_view(_buffer_flushing.data(), _buffer_flushing.size())),
-                    this);
+                    [this](auto &awt){return send_complete(awt);});
         }
-        return [this, p = std::move(p)](ABool r) mutable ->prepared_coro {
+        return [this, p = std::move(p)](ABool r) mutable ->coro::prepared_coro {
             if (r) {
                 std::lock_guard _(_mx);
                 //store promise
@@ -55,7 +55,7 @@ public:
             return std::move(p);
         };
     }
-    virtual awaitable<bool> close() {
+    virtual coro::awaitable<bool> close() {
         std::lock_guard _(_mx);
         //if buffers are empty, we can close now
         if (_buffer_flushing.empty() && _buffer_pending.empty()) {
@@ -67,7 +67,7 @@ public:
             //mark that we want to send eof
             _close_req = true;
             //this must be done asynchronously
-            return [this](ABool prom) ->prepared_coro{
+            return [this](ABool prom) ->coro::prepared_coro{
                 std::lock_guard _(_mx);
                 if (_closed) {
                     return prom(true);
@@ -101,7 +101,7 @@ protected:
     ///stream closed
     bool _closed = false;
 
-    prepared_coro send_complete(awaitable<bool> &awt) {
+    coro::prepared_coro send_complete(coro::awaitable<bool> &awt) {
         while (true) {
             //in all cases, clear flushing buffer
             _buffer_flushing.clear();
@@ -184,11 +184,7 @@ protected:
     }
 
 
-
-
-    await_member_callback<bool,BufferedStreamT *,
-        &BufferedStreamT::send_complete> _callback;
-
+    coro::awaiting_callback<coro::awaitable<bool>, BufferedStreamT *> _callback;
 
 };
 

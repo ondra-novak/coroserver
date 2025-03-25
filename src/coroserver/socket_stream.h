@@ -11,11 +11,11 @@ class SocketStream : public IStream, public IPeer {
 public:
 
     virtual ~SocketStream();
-    virtual awaitable<std::string_view> receive()override;
+    virtual coro::awaitable<std::string_view> receive()override;
     virtual void put_back(std::string_view s) override;
-    virtual awaitable<bool> send(std::string_view data) override;
+    virtual coro::awaitable<bool> send(std::string_view data) override;
     StreamState get_state() const override;
-    virtual awaitable<bool> close() override;
+    virtual coro::awaitable<bool> close() override;
     virtual IOTimeout get_timeouts() const override;
     virtual IStream::Counters get_counters() const override;
     virtual void set_timeouts(coroserver::IOTimeout tm)  override;
@@ -53,7 +53,7 @@ public:
      * @return generator
      */
     template<std::invocable<std::string> _Filter>
-    static async_generator<Stream> create_tcp_server(std::shared_ptr<INetContext> ctx, std::string address_port, std::stop_token stp, _Filter flt);
+    static coro::async_generator<Stream> create_tcp_server(std::shared_ptr<INetContext> ctx, std::string address_port, std::stop_token stp, _Filter flt);
     ///create socket server
     /**
      * @param ctx network context
@@ -61,7 +61,7 @@ public:
      * @param stp stop token, it is used to stop the server
      * @return generator
      */
-    static async_generator<Stream> create_tcp_server(std::shared_ptr<INetContext> ctx, std::string address_port, std::stop_token stp);
+    static coro::async_generator<Stream> create_tcp_server(std::shared_ptr<INetContext> ctx, std::string address_port, std::stop_token stp);
 
     SocketStream(const  SocketStream &) = delete;
     SocketStream &operator=(const  SocketStream &) = delete;
@@ -81,13 +81,13 @@ protected:
 
     std::vector<char> _input_buffer;
     std::string_view _input_buffer_ready;
-    awaitable<std::string_view>::result _receive_promise;
+    coro::awaitable<std::string_view>::result _receive_promise;
     std::size_t _input_buffer_size = 1500;
     std::size_t _count_input_bytes = 0;
     bool _receiving = false;
     bool _is_eof = false;
 
-    awaitable<bool>::result _awaiting_write = {};
+    coro::awaitable<bool>::result _awaiting_write = {};
     std::string_view _output_view = {};
     ///count of sent bytes (total)
     std::size_t _count_output_bytes = 0;
@@ -118,7 +118,7 @@ public:
         ConnHandle handle;
         std::string peer_addr;
     };
-    using AWT = awaitable<AcceptInfo>;
+    using AWT = coro::awaitable<AcceptInfo>;
     using PROM = AWT::result;
 
     ///Construct server object
@@ -133,21 +133,21 @@ public:
     TCPServer &operator=(const TCPServer &) = delete;
 
     ///awaitable accept
-    awaitable<AcceptInfo> accept_handle();
+    coro::awaitable<AcceptInfo> accept_handle();
 
     ///awaitable accept
     /**
      * @param addr_port fill variable with address and port of returned stream
      * @return
      */
-    awaitable<Stream> accept(std::string &addr_port);
+    coro::awaitable<Stream> accept(std::string &addr_port);
 
 
     ///awaitable accept
     /**
      * @return stream
      */
-    awaitable<Stream> accept();
+    coro::awaitable<Stream> accept();
 
     ///cancel accept operation
     /**
@@ -157,16 +157,15 @@ public:
      * connections, so it should be destroyed
      *
      */
-    prepared_coro cancel();
+    coro::prepared_coro cancel();
 
 protected:
     std::shared_ptr<INetContext> _ctx;
     ConnHandle _h;
     std::atomic<AWT *> _r = {};
 
-    void do_accept_raw(awaitable<AcceptInfo> &ainfo, awaitable<Stream>::result &, std::string *&);
-    await_member_callback<AcceptInfo, TCPServer *,
-            &TCPServer::do_accept_raw, awaitable<Stream>::result, std::string *> _accept_cb;
+    void do_accept_raw(coro::awaitable<AcceptInfo> &ainfo, coro::awaitable<Stream>::result &, std::string *);
+    coro::awaiting_callback<coro::awaitable<AcceptInfo>, TCPServer *, coro::awaitable<Stream>::result, std::string *> _accept_cb;
     virtual void on_accept(ConnHandle connection, std::string peer_addr) noexcept override;
     virtual void on_timeout() noexcept override {}
 };
@@ -174,7 +173,7 @@ protected:
 
 
 template<std::invocable<std::string> _Filter>
-inline async_generator<Stream> coroserver::SocketStream::create_tcp_server(
+inline coro::async_generator<Stream> coroserver::SocketStream::create_tcp_server(
         std::shared_ptr<INetContext> ctx, std::string address_port,
         std::stop_token stp, _Filter flt) {
     static_assert(std::is_invocable_r_v<bool, _Filter, std::string>);

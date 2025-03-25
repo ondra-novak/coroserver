@@ -8,7 +8,7 @@
 using namespace coroserver;
 
 
-awaitable<void> write_task(AsyncContext ctx, std::string addr) {
+coro::awaitable<void> write_task(AsyncContext ctx, std::string addr) {
     Stream stream = SocketStream::connect(ctx,addr);
 
     for (int i = 0; i < 65536; i++) {
@@ -23,7 +23,7 @@ awaitable<void> write_task(AsyncContext ctx, std::string addr) {
 
 }
 
-awaitable<void> write_task2(AsyncContext ctx, std::string addr) {
+coro::awaitable<void> write_task2(AsyncContext ctx, std::string addr) {
     Stream stream = SocketStream::connect(ctx,addr);
 
     std::ostringstream b;
@@ -41,7 +41,7 @@ awaitable<void> write_task2(AsyncContext ctx, std::string addr) {
 
 }
 
-awaitable<void> read_task(TCPServer &server) {
+coro::awaitable<void> read_task(TCPServer &server) {
     Stream stream = co_await server.accept();
     std::string line;
     for (int i = 0; i < 65536; ++i) {
@@ -65,12 +65,9 @@ int test1() {
     std::string addr = "localhost:12112";
     AsyncContext ctx = make_async_context();
     TCPServer server(ctx, addr);
-    allof_set wait_all;
     auto rdtask = read_task(server);
     auto wrtask = write_task(ctx, addr);
-    wait_all.add(rdtask);
-    wait_all.add(wrtask);
-    wait_all.wait();
+    coro::when_all(rdtask, wrtask);
     return 0;
 }
 
@@ -79,12 +76,9 @@ int test2() {
     std::string addr = "localhost:12112";
     AsyncContext ctx = make_async_context();
     TCPServer server(ctx, addr);
-    allof_set wait_all;
     auto rdtask = read_task(server);
     auto wrtask = write_task2(ctx, addr);
-    wait_all.add(rdtask);
-    wait_all.add(wrtask);
-    wait_all.wait();
+    coro::when_all(rdtask, wrtask);
     return 0;
 }
 

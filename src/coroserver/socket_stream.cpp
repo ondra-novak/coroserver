@@ -42,7 +42,7 @@ void SocketStream::begin_receive() {
 }
 
 void SocketStream::receive_complete(std::string_view data) noexcept {
-    prepared_coro p;
+    coro::prepared_coro p;
     //hold lock when receive complete
     std::lock_guard _(_mx);
     _count_input_bytes += data.size();
@@ -68,7 +68,7 @@ void SocketStream::receive_complete(std::string_view data) noexcept {
     _receiving = false;
 }
 
-awaitable<std::string_view> SocketStream::receive() {
+coro::awaitable<std::string_view> SocketStream::receive() {
     //there is no lock as the receive is not marked MT safe
     //if putback buffer or is eof, return buffer
     if (!_input_buffer_ready.empty() || _is_eof) return std::exchange(_input_buffer_ready, {});
@@ -76,7 +76,7 @@ awaitable<std::string_view> SocketStream::receive() {
     current_recv_tm = _tms._receive;
     update_timer();
     //otherwise it could be resolved asynchronously
-    return [this](awaitable<std::string_view>::result r) {
+    return [this](coro::awaitable<std::string_view>::result r) {
         std::lock_guard _(_mx);
         //remember promise
         _receive_promise = std::move(r);
@@ -93,7 +93,7 @@ void SocketStream::put_back(std::string_view s) {
 }
 
 
-/*awaitable<bool> SocketStream::close() {
+/*coro::awaitable<bool> SocketStream::close() {
     std::lock_guard _(_mx);
     if (_output_closed) return false;
     //if clear to send - set eof immediately
@@ -103,7 +103,7 @@ void SocketStream::put_back(std::string_view s) {
         return true;
     } else {
         _send_eof = true;   //send asynchronous
-        return [this](awaitable<bool>::result r) {
+        return [this](coro::awaitable<bool>::result r) {
             if (_output_closed || _clear_to_send) {
                 r = true;
             } else {
@@ -114,7 +114,7 @@ void SocketStream::put_back(std::string_view s) {
 
 }
 */
-awaitable<bool> SocketStream::close() {
+coro::awaitable<bool> SocketStream::close() {
     if (!_output_closed) {
         _ctx->send(_h,{});//SEND EOF;
         _output_closed = true;
@@ -125,7 +125,7 @@ awaitable<bool> SocketStream::close() {
 
 
 
-awaitable<bool> SocketStream::send(std::string_view data) {
+coro::awaitable<bool> SocketStream::send(std::string_view data) {
     std::lock_guard _(_mx);
     if (_output_closed) {
         return false;
@@ -147,7 +147,7 @@ awaitable<bool> SocketStream::send(std::string_view data) {
         _output_view = data;
     }
     _clear_to_send = false;
-    return [this](awaitable<bool>::result r) ->prepared_coro {
+    return [this](coro::awaitable<bool>::result r) ->coro::prepared_coro {
         std::lock_guard _(_mx);
         if (_output_closed) return r(false);
         if (_clear_to_send) return r(true);
@@ -157,7 +157,7 @@ awaitable<bool> SocketStream::send(std::string_view data) {
 }
 
 void SocketStream::clear_to_send() noexcept {
-    prepared_coro out;
+    coro::prepared_coro out;
     //called when we are clear to send
     std::lock_guard _(_mx);
 
@@ -275,7 +275,7 @@ Stream SocketStream::connect(std::shared_ptr<INetContext> ctx, SpecialConnection
 }
 
 TCPServer::AWT TCPServer::accept_handle() {
-    return [this](PROM r) -> prepared_coro{
+    return [this](PROM r) -> coro::prepared_coro{
         AWT *need = nullptr;
         AWT *prom = r.release();
         if (_r.compare_exchange_strong(need, prom)) {
@@ -283,7 +283,7 @@ TCPServer::AWT TCPServer::accept_handle() {
             return {};
         }
         PROM res(prom);
-        return res.drop();
+        return res.set_empty();
     };
 }
 
@@ -304,7 +304,7 @@ void TCPServer::on_accept(ConnHandle connection, std::string peer_addr) noexcept
 
 
 
-async_generator<Stream> SocketStream::create_tcp_server(std::shared_ptr<INetContext> ctx, std::string address_port, std::stop_token stp) {
+coro::async_generator<Stream> SocketStream::create_tcp_server(std::shared_ptr<INetContext> ctx, std::string address_port, std::stop_token stp) {
     return create_tcp_server(std::move(ctx), std::move(address_port), std::move(stp),[](auto &&){return true;});
 }
 
@@ -312,14 +312,14 @@ TCPServer::~TCPServer() {
     _ctx->destroy(_h);
 }
 
-prepared_coro TCPServer::cancel() {
+coro::prepared_coro TCPServer::cancel() {
     static AWT filler;
     auto r = _r.exchange(&filler);
     PROM res(r);
-    return res.drop();
+    return res.set_empty();
 }
 
-awaitable<Stream> TCPServer::accept(std::string &addr_port) {
+coro::awaitable<Stream> TCPServer::accept(std::string &addr_port) {
     auto awt = accept_handle();
     if (awt.await_ready()) {
         auto [h, peer] = awt.await_resume();
@@ -327,13 +327,16 @@ awaitable<Stream> TCPServer::accept(std::string &addr_port) {
         return SocketStream::create(_ctx, h);
     } else {
         awt.cancel();
-        return [this,&addr_port](awaitable<Stream>::result r) mutable {
-            _accept_cb.await(accept_handle(), this, std::move(r), &addr_port);
+        return [this,&addr_port](coro::awaitable<Stream>::result r) mutable {
+            auto awt = accept_handle();
+            _accept_cb.await(awt, [this, r = std::move(r), &addr_port](auto &x) mutable{
+                do_accept_raw(x, r, &addr_port);
+            });
         };
     }
 }
 
-void TCPServer::do_accept_raw(awaitable<AcceptInfo> &ainfo, awaitable<Stream>::result &r, std::string *& peer) {
+void TCPServer::do_accept_raw(coro::awaitable<AcceptInfo> &ainfo, coro::awaitable<Stream>::result &r, std::string * peer) {
     try {
         auto [h, p] = ainfo.await_resume();
         if (peer) *peer = std::move(p);
@@ -343,15 +346,17 @@ void TCPServer::do_accept_raw(awaitable<AcceptInfo> &ainfo, awaitable<Stream>::r
     }
 }
 
-awaitable<Stream> TCPServer::accept() {
+coro::awaitable<Stream> TCPServer::accept() {
     auto awt = accept_handle();
     if (awt.await_ready()) {
         auto [h, peer] = awt.await_resume();
         return SocketStream::create(_ctx, h);
     } else {
         awt.cancel();
-        return [this](awaitable<Stream>::result r) mutable {
-            _accept_cb.await(accept_handle(), this, std::move(r), nullptr);
+        return [this](coro::awaitable<Stream>::result r) mutable {
+            _accept_cb.await(accept_handle(), [this, r = std::move(r)](auto &x) mutable {
+                do_accept_raw(x, r, nullptr);
+            });
         };
     }
 }

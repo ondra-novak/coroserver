@@ -24,7 +24,7 @@ public:
      * @note the function is not concurrency safe. Only one coroutine can await on this method.
      * It is still posible to write during awaiting
      */
-    [[nodiscard]] virtual awaitable<std::string_view> receive() = 0;
+    [[nodiscard]] virtual coro::awaitable<std::string_view> receive() = 0;
     ///put back some data to be received later
     /**
      * @param s a view contains data to put back. This should be part of data returned by
@@ -46,7 +46,7 @@ public:
      * It is still possible to read during awaiting
      */
 
-    [[nodiscard]] virtual awaitable<bool> send(std::string_view data) = 0;
+    [[nodiscard]] virtual coro::awaitable<bool> send(std::string_view data) = 0;
 
     /// close the stream at output side
     /** Even if the stream is closed, there still can be unprocessed data.
@@ -54,7 +54,7 @@ public:
      *  @retval true stream has been closed by this function
      *  @retval false stream is in error state or already closed
      */
-    [[nodiscard]] virtual awaitable<bool> close() = 0;
+    [[nodiscard]] virtual coro::awaitable<bool> close() = 0;
 
 
     struct Counters {
@@ -88,14 +88,24 @@ public:
 
 };
 
-template<typename Cont, unsigned int n>
-class ReceiveUntilStatus;
+
+class ReceiveBlockStatus {
+public:
+    ReceiveBlockStatus(bool st):_st(st) {};
+    operator bool() const {return _st;}
+
+protected:
+    bool _st;
+};
+
+
+
 template<typename Cont, unsigned int n>
 class ReceiveUntilState {
 public:
 
     ReceiveUntilState(Cont &buff,
-            pattern_search<char,n> patt,
+            const pattern_search<char,n> &patt,
             typename pattern_search<char,n>::state stat,
             std::size_t maxbuff,
             std::shared_ptr<IStream> stream)
@@ -105,81 +115,69 @@ public:
         ,_maxbuff(maxbuff)
         ,_stream(std::move(stream)) {}
 
-    void operator()(awaitable_result<ReceiveUntilStatus<Cont,n> > promise) {
-        _callback.await(_stream->receive(), this, std::move(promise));
-    }
 
-    void operator()(awaitable_result<int>); //just make compiler happy
+    void operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
+        _callback.await(_stream->receive(),[this,promise = std::move(promise)](auto &awt) mutable {
+            return process_data(awt, promise);
+        });
+    }
 
 protected:
     Cont &_buff;
-    pattern_search<char,n> _patt;
+    const pattern_search<char,n> &_patt;
     typename pattern_search<char,n>::state _stat;
     std::size_t _maxbuff;
     std::shared_ptr<IStream> _stream;
 
-    prepared_coro process_data(awaitable<std::string_view> &awt, awaitable_result<ReceiveUntilStatus<Cont, n> > &promise) {
-        try {
-            std::string_view data = awt.await_resume();
-            if (data.empty()) {
-                return promise(false);
-            }
-            for (std::size_t i = 0; i < data.size(); ++i) {
-                if (_patt.test(data[i],_stat)) {
-                    ++i;
-                    if (i > _patt.size()) {
-                        auto sub = data.substr(0, i  - _patt.size());
-                        std::copy(sub.begin(), sub.end(), std::back_inserter(_buff));
-                    } else {
-                        auto extra = _patt.size() - i;
-                        while (extra) {
-                            _buff.pop_back();
-                            --extra;
-                        }
-                    }
-                    auto remain = data.substr(i);
-                    _stream->put_back(remain);
-                    return promise(true);
-                }
-            }
-            std::copy(data.begin(), data.end(), std::back_inserter(_buff));
-            if (_buff.size() > _maxbuff) {
-                return promise(false);
-            }
-            _callback.await_cont(_stream->receive());
-            return {};
-        } catch (...) {
-            return promise.set_exception(std::current_exception());
-        }
+    coro::prepared_coro process_data(coro::awaitable<std::string_view> &awt, coro::awaitable_result<ReceiveBlockStatus> &promise) {
+        {
+           try {
+               std::string_view data = awt.await_resume();
+               if (data.empty()) {
+                   return promise(false);
+               }
+               for (std::size_t i = 0; i < data.size(); ++i) {
+                   if (_patt.test(data[i],_stat)) {
+                       ++i;
+                       if (i > _patt.size()) {
+                           auto sub = data.substr(0, i  - _patt.size());
+                           std::copy(sub.begin(), sub.end(), std::back_inserter(_buff));
+                       } else {
+                           auto extra = _patt.size() - i;
+                           while (extra) {
+                               _buff.pop_back();
+                               --extra;
+                           }
+                       }
+                       auto remain = data.substr(i);
+                       _stream->put_back(remain);
+                       return promise(true);
+                   }
+               }
+               std::copy(data.begin(), data.end(), std::back_inserter(_buff));
+               if (_buff.size() > _maxbuff) {
+                   return promise(false);
+               }
+               _callback.await_cont(_stream->receive());
+               return {};
+           } catch (...) {
+               return promise.set_exception(std::current_exception());
+           }
+       }
     }
-
-    await_member_callback<std::string_view, ReceiveUntilState *,
-        &ReceiveUntilState::process_data, awaitable_result<ReceiveUntilStatus<Cont, n> >> _callback;
+    coro::awaiting_callback<coro::awaitable<std::string_view>, ReceiveUntilState *, coro::awaitable_result<ReceiveBlockStatus>> _callback;
 };
 
-///Holds status of receive_until operation of Stream
-/**
- * This object can be converted to bool status. Status true means
- * success, status false means true
- *
- */
-template<typename Cont, unsigned int n>
-class ReceiveUntilStatus {
-public:
-    ReceiveUntilStatus(bool st) {
-        buffer[0] = st?1:0;
-    }
-    operator bool() const {
-        return buffer[0] != 0;
-    }
+}
 
-protected:
-    char buffer[sizeof(awaitable<int>::CallbackImpl<ReceiveUntilState<Cont,n> >)];
+template<>
+struct coro::awaitable_reserved_space<coroserver::ReceiveBlockStatus> {
+    static constexpr std::size_t value = sizeof(coroserver::ReceiveUntilState<std::vector<char>, 1>);
 };
 
+namespace coroserver {
 
-template<typename Cont>
-class ReceiveBlockStatus;
+
 template<typename Cont>
 class ReceiveBlockState {
 public:
@@ -191,19 +189,19 @@ public:
         ,_maxbuff(maxbuff)
         ,_stream(std::move(stream)) {}
 
-    void operator()(awaitable_result<ReceiveBlockStatus<Cont> > promise) {
-        _callback.await(_stream->receive(), this, std::move(promise));
+        void operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
+        _callback.await(_stream->receive(),[this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
+            return process_data(awt, promise);
+        });
     }
-
-    void operator()(awaitable_result<int>); //just make compiler happy
 
 protected:
     Cont &_buff;
     std::size_t _maxbuff;
     std::shared_ptr<IStream> _stream;
 
-    prepared_coro process_data(awaitable<std::string_view> &awt,
-            awaitable_result<ReceiveBlockStatus<Cont> > &promise) {
+    coro::prepared_coro process_data(coro::awaitable<std::string_view> &awt,
+            coro::awaitable_result<ReceiveBlockStatus> &promise) {
         try {
             std::string_view data = awt.await_resume();
             if (data.empty()) {
@@ -225,29 +223,8 @@ protected:
         }
     }
 
-    await_member_callback<std::string_view, ReceiveBlockState *,
-        &ReceiveBlockState::process_data, awaitable_result<ReceiveBlockStatus<Cont> > >
-            _callback;
-};
-
-///Holds status of receive_block operation of Stream
-/**
- * This object can be converted to bool status. Status true means
- * success, status false means true
- *
- */
-template<typename Cont>
-class ReceiveBlockStatus {
-public:
-    ReceiveBlockStatus(bool st) {
-        buffer[0] = st?1:0;
-    }
-    operator bool() const {
-        return buffer[0] != 0;
-    }
-
-protected:
-    char buffer[sizeof(awaitable<int>::CallbackImpl<ReceiveBlockState<Cont> >)];
+    coro::awaiting_callback<coro::awaitable<std::string_view>, ReceiveBlockState *,
+                coro::awaitable_result<ReceiveBlockStatus> > _callback;
 };
 
 
@@ -288,7 +265,7 @@ public:
      * }
      * @endcode
      */
-    [[nodiscard]] awaitable<std::string_view> receive() {
+    [[nodiscard]] coro::awaitable<std::string_view> receive() {
         return _ptr->receive();
     }
     /// Push data back into the stream for re-reading.
@@ -320,7 +297,7 @@ public:
         _ptr->put_back(s);
     }
     /// Send data to the stream asynchronously.
-    [[nodiscard]] awaitable<bool> send(std::string_view data) {
+    [[nodiscard]] coro::awaitable<bool> send(std::string_view data) {
         return _ptr->send(data);
     }
     ///Mark stream closed
@@ -336,13 +313,15 @@ public:
      * be delivered. Always perform cooperative close with the other side
      * to prevent data lost.
      */
-    [[nodiscard]] awaitable<bool> close() {
+    [[nodiscard]] coro::awaitable<bool> close() {
         return _ptr->close();
     }
 
 
     ///tests, whether stream is initialized
     explicit operator bool() const {return static_cast<bool>(_ptr);}
+
+    using Status = ReceiveBlockStatus;
 
     ///reads until separator is reached,
     /**
@@ -356,7 +335,7 @@ public:
      * data are still stored in the buffer.
      */
     template<typename Cont, unsigned int n>
-    [[nodiscard]] awaitable<ReceiveUntilStatus<Cont, n> > receive_until(Cont &buffer, pattern_search<char, n> patt, size_t limit = ~static_cast<std::size_t>(0)) {
+    coro::awaitable<Status> receive_until(Cont &buffer, pattern_search<char, n> patt, size_t limit = ~static_cast<std::size_t>(0)) {
         buffer.clear();
         auto awt = _ptr->receive();
         auto state = patt.begin_search();
@@ -369,18 +348,18 @@ public:
                     std::copy(sub.begin(), sub.end(), std::back_inserter(buffer));
                     z = z.substr(i);
                     _ptr->put_back(z);
-                    return ReceiveUntilStatus<Cont, n>(true);
+                    return true;
                 }
             }
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
         }
-        awt.cancel();
+        awt.cancel(); //cancel
         return ReceiveUntilState<Cont, n>(buffer, patt, state, limit, _ptr);
 
     }
 
     template<typename Cont, unsigned int n>
-    [[nodiscard]] awaitable<ReceiveUntilStatus<Cont, n> > receive_until(Cont &buffer, const char (&sep)[n], size_t limit = ~static_cast<std::size_t>(0)) {        ;
+    [[nodiscard]] coro::awaitable<Status> receive_until(Cont &buffer, const char (&sep)[n], size_t limit = ~static_cast<std::size_t>(0)) {        ;
         return receive_until(buffer, pattern_search<char, n>(sep), limit);
 
     }
@@ -395,7 +374,7 @@ public:
      * are placed to the buffer
      */
     template<typename Cont>
-    awaitable<ReceiveBlockStatus<Cont> > receive_block(Cont &buffer, size_t size) {
+    coro::awaitable<Status> receive_block(Cont &buffer, size_t size) {
         buffer.clear();
         auto awt = _ptr->receive();
         if (awt.is_ready()) {
@@ -404,7 +383,7 @@ public:
                 auto sub = z.substr(0,size);
                 _ptr->put_back(z.substr(size));
                 std::copy(sub.begin(), sub.end(), std::back_inserter(buffer));
-                return ReceiveBlockStatus<Cont>(true);
+                return true;
             }
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
         }
@@ -430,10 +409,10 @@ public:
     StreamProxy(Stream s):_s(std::move(s)) {}
 
     virtual StreamState get_state() const override {return _s.get_state();}
-    virtual awaitable<std::string_view> receive() override {return _s.receive();}
+    virtual coro::awaitable<std::string_view> receive() override {return _s.receive();}
     virtual void put_back(std::string_view s) override {return _s.put_back(s);}
-    virtual awaitable<bool> send(std::string_view data) override {return _s.send(data);}
-    virtual awaitable<bool> close() override {return _s.close();}
+    virtual coro::awaitable<bool> send(std::string_view data) override {return _s.send(data);}
+    virtual coro::awaitable<bool> close() override {return _s.close();}
     virtual Counters get_counters() const override {return _s.get_counters();}
     virtual IOTimeout get_timeouts() const override {return _s.get_timeouts();}
     virtual void set_timeouts(IOTimeout tm) override {_s.set_timeouts(tm);}

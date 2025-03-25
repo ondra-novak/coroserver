@@ -63,7 +63,9 @@ SSLStream::TwoCoros SSLStream::finish_handshake() {
         //this can be empty, but if there is awaiting caller
         if (s.empty() && _recv_awaiting) {
             //continue in async reading
-            out.second =  _async_receive_cb.await(_s.receive(),this);
+            out.second =  _async_receive_cb.await(_s.receive(),[this](auto &awt){
+                return async_process_receive(awt);
+            });
         } else {
             //otherwise send result to caller (if none, this command does nothing)
             out.second = _recv_awaiting(s);
@@ -83,7 +85,9 @@ SSLStream::TwoCoros SSLStream::finish_handshake() {
         s = get_output_data();
         if (!s.empty()) {
             //send them to the stream
-            out.first =  _async_send_cb.await(_s.send(s),this);
+            out.first =  _async_send_cb.await(_s.send(s),[this](auto &awt){
+                return async_process_send(awt);
+            });
         } else {
             //this is success for send
             out.first =  _send_awaiting(true);
@@ -97,7 +101,7 @@ SSLStream::TwoCoros SSLStream::finish_handshake() {
 }
 
 
-SSLStream::TwoCoros SSLStream::async_process_receive(awaitable<std::string_view> &awt)
+SSLStream::TwoCoros SSLStream::async_process_receive(coro::awaitable<std::string_view> &awt)
 {
     std::lock_guard _(_mx);
     try {
@@ -120,10 +124,14 @@ SSLStream::TwoCoros SSLStream::async_process_receive(awaitable<std::string_view>
                     s = get_output_data();
                     if (!s.empty()) {
                         //send them async
-                        return {_async_send_cb.await(_s.send(s), this)};
+                        return {_async_send_cb.await(_s.send(s), [this](auto &awt){
+                            return async_process_send(awt);
+                        })};
                     } else {
                         //otherwise wait for more incoming data
-                        return {_async_receive_cb.await(_s.receive(),this)};
+                        return {_async_receive_cb.await(_s.receive(),[this](auto &awt){
+                            return async_process_receive(awt);
+                        })};
                     }
                 } else {
                     return fail_io();
@@ -135,7 +143,9 @@ SSLStream::TwoCoros SSLStream::async_process_receive(awaitable<std::string_view>
                 //empty data and still normal operation?
                 if (s.empty() && _state == StreamState::active) {
                     //receive more data
-                    auto p = _async_receive_cb.await(_s.receive(), this);
+                    auto p = _async_receive_cb.await(_s.receive(), [this](auto &awt){
+                        return async_process_receive(awt);
+                    });
                     //if there is no send awaiting
                     if (!_send_awaiting) {
                         //try to pick output data
@@ -145,7 +155,9 @@ SSLStream::TwoCoros SSLStream::async_process_receive(awaitable<std::string_view>
                             //change state
                             _state = StreamState::opening;
                             //send data
-                            return {_async_send_cb.await(_s.send(s), this),std::move(p)};
+                            return {_async_send_cb.await(_s.send(s), [this](auto &awt){
+                                return async_process_send(awt);
+                            }),std::move(p)};
                         }
                     }
                     //if _send_awaiting is active, this issue will be solved on send side
@@ -161,7 +173,7 @@ SSLStream::TwoCoros SSLStream::async_process_receive(awaitable<std::string_view>
     }
 }
 
-SSLStream::TwoCoros SSLStream::async_process_send(awaitable<bool> &awt)
+SSLStream::TwoCoros SSLStream::async_process_send(coro::awaitable<bool> &awt)
 {
     std::lock_guard _(_mx);
     try {
@@ -179,7 +191,9 @@ SSLStream::TwoCoros SSLStream::async_process_send(awaitable<bool> &awt)
                 //handshake is not complete but still in progress
                 } else if (_state == StreamState::opening) {
                     //continue by reading
-                    return {_async_receive_cb.await(_s.receive(), this)};
+                    return {_async_receive_cb.await(_s.receive(), [this](auto &awt){
+                        return async_process_receive(awt);
+                    })};
                 } else {
                     return fail_io();
                 }
@@ -190,7 +204,9 @@ SSLStream::TwoCoros SSLStream::async_process_send(awaitable<bool> &awt)
                 //if so...
                 if (!s.empty()) {
                     //continue in sending
-                    return {_async_send_cb.await(_s.send(s), this)};
+                    return {_async_send_cb.await(_s.send(s), [this](auto &awt){
+                        return async_process_send(awt);
+                    })};
                 } else {
                     //no more data, report success
                     return {_send_awaiting(true)};
@@ -240,7 +256,7 @@ coroserver::StreamState SSLStream::get_state() const {
     return state;
 }
 
-awaitable<std::string_view> SSLStream::receive() {
+coro::awaitable<std::string_view> SSLStream::receive() {
     if (!_putback_buffer.empty() || _state == StreamState::closed) {
         return std::exchange(_putback_buffer, {});
     }
@@ -249,7 +265,7 @@ awaitable<std::string_view> SSLStream::receive() {
         if (_state == StreamState::closed) return std::string_view();
         if (_state == StreamState::opening) {
             return [this, lk = std::move(lk)](RecvResult res) {
-                prepared_coro c;
+                coro::prepared_coro c;
                 if (!_handshake_running) {
                     c = run_handshake_except(res);
                 }
@@ -263,13 +279,15 @@ awaitable<std::string_view> SSLStream::receive() {
         if (_state == StreamState::opening) continue;
         return [this, lk = std::move(lk)](RecvResult res) {
             this->_recv_awaiting = std::move(res);
-            _async_receive_cb.await(_s.receive(),this);
+            _async_receive_cb.await(_s.receive(),[this](auto &awt){
+                return async_process_receive(awt);
+            });
         };
     }
 
 }
 
-awaitable<bool> SSLStream::send(std::string_view data) {
+coro::awaitable<bool> SSLStream::send(std::string_view data) {
     while (true) {
         std::unique_lock lk(_mx);
         if (_state == StreamState::closed || _state == StreamState::closing) {
@@ -278,7 +296,7 @@ awaitable<bool> SSLStream::send(std::string_view data) {
         if (_state == StreamState::opening) {
             this->_send_awaiting_data = data;
             return [this, lk = std::move(lk)](SendResult res) {
-                prepared_coro c;
+                coro::prepared_coro c;
                 if (!_handshake_running) {
                     c = run_handshake_except(res);
                 }
@@ -342,7 +360,7 @@ std::string_view SSLStream::read_ssl_nb() {
     }
 }
 
-prepared_coro SSLStream::run_handshake()
+coro::prepared_coro SSLStream::run_handshake()
 {
     //forced handshake - set apropriate state
     _state = StreamState::opening;
@@ -352,19 +370,23 @@ prepared_coro SSLStream::run_handshake()
     if (!_send_awaiting) {
         auto s = get_output_data();
         if (!s.empty()) {
-            return _async_send_cb.await(_s.send(s),this);
+            return _async_send_cb.await(_s.send(s),[this](auto &awt){
+                return async_process_send(awt);
+            });
         }
     }
     if (!_recv_awaiting) {
         if (!b) {
-            return _async_receive_cb.await(_s.receive(),this);
+            return _async_receive_cb.await(_s.receive(),[this](auto &awt){
+                return async_process_receive(awt);
+            });
         }
     }
     return {};
 }
 
 template<typename Res>
-prepared_coro SSLStream::run_handshake_except(Res &res) {
+coro::prepared_coro SSLStream::run_handshake_except(Res &res) {
     try {
         return run_handshake();
     } catch (...) {
@@ -376,7 +398,7 @@ void SSLStream::put_back(std::string_view s) {
     _putback_buffer = s;
 }
 
-awaitable<bool> SSLStream::close() {
+coro::awaitable<bool> SSLStream::close() {
     while (true) {
         std::unique_lock lk(_mx);
         if (_state == StreamState::closed || _state == StreamState::closing) {
@@ -385,7 +407,7 @@ awaitable<bool> SSLStream::close() {
         if (_state == StreamState::opening) {
             this->_req_close = true;
             return [this, lk = std::move(lk)](SendResult res) {
-                prepared_coro c;
+                coro::prepared_coro c;
                 if (!_handshake_running) {
                     c = run_handshake_except(res);
                 }
