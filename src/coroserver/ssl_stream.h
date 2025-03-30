@@ -1,5 +1,5 @@
 #pragma once
-#include "stream.h"
+#include <coroserver/stream.hpp>
 #include <functional>
 
 typedef struct bio_st BIO;
@@ -36,9 +36,9 @@ public:
     SSLStream &operator=(const SSLStream &) = delete;
 
     virtual coroserver::StreamState get_state() const override;
-    virtual coro::awaitable<std::string_view> receive() override;
+    virtual coro::awaitable<std::string_view> read() override;
     virtual void put_back(std::string_view s) override;
-    virtual coro::awaitable<bool> send(std::string_view data) override;
+    virtual coro::awaitable<bool> write(std::string_view data) override;
     virtual coro::awaitable<bool> close() override;
 
 
@@ -68,9 +68,9 @@ protected:
     RecvResult _recv_awaiting;
     std::string_view _putback_buffer;
 
-    //send side
-    SendResult _send_awaiting;
-    std::string_view _send_awaiting_data;
+    //write side
+    SendResult _write_awaiting;
+    std::string_view _write_awaiting_data;
     bool _req_close = false;
 
 
@@ -79,11 +79,11 @@ protected:
     TwoCoros finish_handshake();
 
 
-    TwoCoros async_process_receive(coro::awaitable<std::string_view> &awt);
-    TwoCoros async_process_send(coro::awaitable<bool> &awt);
+    TwoCoros async_process_read(coro::awaitable<std::string_view> &awt);
+    TwoCoros async_process_write(coro::awaitable<bool> &awt);
 
-    coro::awaiting_callback<coro::awaitable<std::string_view>,SSLStream *> _async_receive_cb;
-    coro::awaiting_callback<coro::awaitable<bool>,SSLStream *> _async_send_cb;
+    coro::awaiting_callback<coro::awaitable<std::string_view>,SSLStream *> _async_read_cb;
+    coro::awaiting_callback<coro::awaitable<bool>,SSLStream *> _async_write_cb;
 
     void common_init(SSL_CTX *ctx);
     bool handle_error(int retval);

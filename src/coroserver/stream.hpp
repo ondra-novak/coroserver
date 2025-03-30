@@ -1,93 +1,8 @@
 #pragma once
-#include "stream_state.h"
-#include "coroutines.h"
 #include "string_search.h"
-#include "timeout.h"
+#include "istream.hpp"
 
 namespace coroserver{
-
-class INetContext;
-
-class IStream {
-public:
-
-    virtual ~IStream() = default;
-
-    virtual StreamState get_state() const  = 0;
-
-    ///receive data asynchronously
-    /**
-     * @return string_view contains received data. It is always returned at least
-     * one byte length data. If returned empty buffer, timeout or eof has been reached.
-     * Use is_eof() to determine what happened
-     *
-     * @note the function is not concurrency safe. Only one coroutine can await on this method.
-     * It is still posible to write during awaiting
-     */
-    [[nodiscard]] virtual coro::awaitable<std::string_view> receive() = 0;
-    ///put back some data to be received later
-    /**
-     * @param s a view contains data to put back. This should be part of data returned by
-     * last receive(). You can put back a view to different view, but you must ensure that
-     * underlying buffer remain valid until the data are retrieved. You can put_back only
-     * one view, previous put view is replaced
-     */
-    virtual void put_back(std::string_view s) = 0;
-    /// send buffer
-    /**
-     * @param data to send. Note the underlying buffer must remain valid
-     * until the operation is complete. This must be handled well especially
-     * when operation is performed asynchronously
-     *
-     * @retval true data successfully passed to the network stack for the delivery
-     * @retval false stream has been closed
-     *
-     * @note the function is not concurrency safe. Only one coroutine can await on this method.
-     * It is still possible to read during awaiting
-     */
-
-    [[nodiscard]] virtual coro::awaitable<bool> send(std::string_view data) = 0;
-
-    /// close the stream at output side
-    /** Even if the stream is closed, there still can be unprocessed data.
-     *  This function should change StreamState to closing
-     *  @retval true stream has been closed by this function
-     *  @retval false stream is in error state or already closed
-     */
-    [[nodiscard]] virtual coro::awaitable<bool> close() = 0;
-
-
-    struct Counters {
-        ///total received bytes
-        std::size_t received;
-        ///total sent bytes
-        std::size_t sent;
-    };
-
-    ///Retrieve statistics counters
-    virtual Counters get_counters() const  = 0;
-
-    ///Retrieve current timeouts
-    virtual IOTimeout get_timeouts() const = 0;
-
-    ///Set new timeouts
-    /**
-     * Changed timeouts are applied immediately, but it also resets starting
-     * point. If you need to cancel blocking operation, set timeout to zero
-     * @param tm timeout structure
-     */
-    virtual void set_timeouts(IOTimeout tm) = 0;
-
-    ///Retrieve asynchronous context associated with this object (if exists)
-    /**
-     * @return pointer to context. Note that this function can return nullptr
-     * if no async context is associated
-     */
-    virtual std::shared_ptr<INetContext> get_async_context() const = 0;
-
-
-};
-
 
 class ReceiveBlockStatus {
 public:
@@ -117,7 +32,7 @@ public:
 
 
     void operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-        _callback.await(_stream->receive(),[this,promise = std::move(promise)](auto &awt) mutable {
+        _callback.await(_stream->read(), [this,promise = std::move(promise)](auto &awt) mutable {
             return process_data(awt, promise);
         });
     }
@@ -158,7 +73,7 @@ protected:
                if (_buff.size() > _maxbuff) {
                    return promise(false);
                }
-               _callback.await_cont(_stream->receive());
+               _callback.await_cont(_stream->read());
                return {};
            } catch (...) {
                return promise.set_exception(std::current_exception());
@@ -190,7 +105,7 @@ public:
         ,_stream(std::move(stream)) {}
 
         void operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-        _callback.await(_stream->receive(),[this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
+        _callback.await(_stream->read(),[this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
             return process_data(awt, promise);
         });
     }
@@ -216,7 +131,7 @@ protected:
                 return promise(true);
             }
             std::copy(data.begin(), data.end(), std::back_inserter(_buff));
-            _callback.await_cont(_stream->receive());
+            _callback.await_cont(_stream->read());
             return {};
         } catch (...) {
             return promise.set_exception(std::current_exception());
@@ -249,7 +164,7 @@ public:
      * If no data is available, the function blocks (or suspends a coroutine)
      * until data arrives or a timeout occurs.
      *
-     * @return An awaitable string view containing the received data.
+     * @return An awaitable string view containing the readd data.
      * If the function returns an empty string, you should check the stream's
      * state using `get_state()`.
      *
@@ -259,18 +174,18 @@ public:
      *
      * Example usage:
      * @code
-     * std::string_view data = co_await stream.receive();
+     * std::string_view data = co_await stream.read();
      * if (data.empty() && stream.get_state() == StreamState::closed) {
      *     std::cout << "Stream closed.\n";
      * }
      * @endcode
      */
-    [[nodiscard]] coro::awaitable<std::string_view> receive() {
-        return _ptr->receive();
+    [[nodiscard]] coro::awaitable<std::string_view> read() {
+        return _ptr->read();
     }
     /// Push data back into the stream for re-reading.
     /**
-     * This function allows returning part of a previously received buffer
+     * This function allows returning part of a previously readd buffer
      * back into the stream so that it will be read again on the next read operation.
      *
      * @param s A string view that should ideally be a direct sub-view of the
@@ -286,7 +201,7 @@ public:
      *
      * Example usage:
      * @code
-     * std::string_view data = co_await stream.receive();
+     * std::string_view data = co_await stream.read();
      * if (data.size() > 5) {
      *     process_data(data.substr(0, 5));  // Process only the first 5 bytes
      *     stream.put_back(data.substr(5));  // Return the remaining part
@@ -297,8 +212,8 @@ public:
         _ptr->put_back(s);
     }
     /// Send data to the stream asynchronously.
-    [[nodiscard]] coro::awaitable<bool> send(std::string_view data) {
-        return _ptr->send(data);
+    [[nodiscard]] coro::awaitable<bool> write(std::string_view data) {
+        return _ptr->write(data);
     }
     ///Mark stream closed
     /**
@@ -306,7 +221,7 @@ public:
      * once all data are sent. Before the stream is fully closed, all
      * incoming data must be also processed.
      *
-     * This function sends close to other side, the other side receives EOF.
+     * This function writes close to other side, the other side reads EOF.
      * The other side must close its side to full close the stream.
      *
      * You can also destroy the stream, which can cause that data will not
@@ -325,19 +240,19 @@ public:
 
     ///reads until separator is reached,
     /**
-     * @param buffer a container which receives data.
+     * @param buffer a container which reads data.
      * @param sep separator
      * @param limit maximum size. This value is to reject any stream with
      * unexpectedly longer lines. Reaching this limit is considered as an error. Default
      * value means no limit
-     * @retval true received successfully
+     * @retval true readd successfully
      * @retval false error - limit reached, eof reached, timeout. The already read
      * data are still stored in the buffer.
      */
     template<typename Cont, unsigned int n>
-    coro::awaitable<Status> receive_until(Cont &buffer, pattern_search<char, n> patt, size_t limit = ~static_cast<std::size_t>(0)) {
+    coro::awaitable<Status> read_until(Cont &buffer, pattern_search<char, n> patt, size_t limit = ~static_cast<std::size_t>(0)) {
         buffer.clear();
-        auto awt = _ptr->receive();
+        auto awt = _ptr->read();
         auto state = patt.begin_search();
         if (awt.is_ready()) {
             std::string_view z = awt.await_resume();
@@ -353,30 +268,30 @@ public:
             }
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
         }
-        awt.cancel(); //cancel
+        awt.cancel();
         return ReceiveUntilState<Cont, n>(buffer, patt, state, limit, _ptr);
 
     }
 
     template<typename Cont, unsigned int n>
-    [[nodiscard]] coro::awaitable<Status> receive_until(Cont &buffer, const char (&sep)[n], size_t limit = ~static_cast<std::size_t>(0)) {        ;
-        return receive_until(buffer, pattern_search<char, n>(sep), limit);
+    [[nodiscard]] coro::awaitable<Status> read_until(Cont &buffer, const char (&sep)[n], size_t limit = ~static_cast<std::size_t>(0)) {        ;
+        return read_until(buffer, pattern_search<char, n>(sep), limit);
 
     }
 
 
-    ///receive block
+    ///read block
     /**
      * @param buffer container receiving the data
      * @param size size of block
-     * @retval true received
-     * @retval false reached error or timeout. The already received data
+     * @retval true readd
+     * @retval false reached error or timeout. The already readd data
      * are placed to the buffer
      */
     template<typename Cont>
-    coro::awaitable<Status> receive_block(Cont &buffer, size_t size) {
+    coro::awaitable<Status> read_block(Cont &buffer, size_t size) {
         buffer.clear();
-        auto awt = _ptr->receive();
+        auto awt = _ptr->read();
         if (awt.is_ready()) {
             std::string_view z = awt.await_resume();
             if (z.size() >= size) {
@@ -397,7 +312,7 @@ public:
     IOTimeout get_timeouts() const  {return _ptr->get_timeouts();}
     void set_timeouts(IOTimeout tm)   {return _ptr->set_timeouts(tm);}
 
-    std::shared_ptr<INetContext> get_async_context() const {return _ptr->get_async_context();}
+    Context get_context() const;
 protected:
     std::shared_ptr<IStream> _ptr;
 };
@@ -409,14 +324,14 @@ public:
     StreamProxy(Stream s):_s(std::move(s)) {}
 
     virtual StreamState get_state() const override {return _s.get_state();}
-    virtual coro::awaitable<std::string_view> receive() override {return _s.receive();}
+    virtual coro::awaitable<std::string_view> read() override {return _s.read();}
     virtual void put_back(std::string_view s) override {return _s.put_back(s);}
-    virtual coro::awaitable<bool> send(std::string_view data) override {return _s.send(data);}
+    virtual coro::awaitable<bool> write(std::string_view data) override {return _s.write(data);}
     virtual coro::awaitable<bool> close() override {return _s.close();}
     virtual Counters get_counters() const override {return _s.get_counters();}
     virtual IOTimeout get_timeouts() const override {return _s.get_timeouts();}
     virtual void set_timeouts(IOTimeout tm) override {_s.set_timeouts(tm);}
-    virtual std::shared_ptr<INetContext> get_async_context() const override {return _s.get_async_context();}
+    virtual Context get_context() const override;
 protected:
     Stream _s;
 

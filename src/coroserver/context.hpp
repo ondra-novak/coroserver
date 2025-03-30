@@ -11,6 +11,12 @@ namespace coroserver {
 class ContextImpl;
 
 
+enum class SpecialDevice {
+    standard_input,
+    standard_output,
+    standard_error
+};
+
 class Context {
 public:
 
@@ -37,6 +43,11 @@ public:
      * @return handle to stream (receive, send)
      */
     Handle connect(std::string host, std::string def_port);
+
+
+    ///connect special device
+    Handle connect(SpecialDevice dev);
+
 
     ///creates timer handle, it can be used by function sleep
     Handle create_timer();
@@ -116,7 +127,7 @@ public:
      * @retval closing - connection has been partially closed by send_eof.
      * @retval closed - connection is shutdown or closed, or invalid handle has been specified
      */
-    StreamState get_state(Handle h);
+    StreamState get_state(Handle h) const;
 
 
     ///Shutdown the handle
@@ -133,6 +144,17 @@ public:
      * @note pending coroutines are executed on internal thread asynchronously.
      */
     void shutdown(Handle h);
+
+
+    ///Create IO context
+    /**
+     * @param iothreads count of IO threads
+     * @return context
+     *
+     * @note context is ref-count shared resource. It is destroyed when all
+     * references are released
+     */
+    static Context create(unsigned int iothreads = 1);
 
 
 protected:

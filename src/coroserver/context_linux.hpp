@@ -1,9 +1,9 @@
 #include <algorithm>
 #include <chrono>
-#include "context.h"
-#include "epollpp.h"
+#include "context.hpp"
+#include "epollpp.hpp"
 #include "handle_hash_map.hpp"
-#include "eventfd.h"
+#include "eventfd.hpp"
 
 namespace coroserver {
 
@@ -23,6 +23,9 @@ public:
 
     template<typename Fn>
     auto visit(Fn &&fn);
+
+    template<typename X>
+    bool is_base_of() const;
 
     const std::chrono::system_clock::time_point& get_timeout() const {return _tp;}
     StreamState get_state() const {return _shutted_down?StreamState::closed:StreamState::active;}
@@ -73,10 +76,18 @@ protected:
 };
 
 
-class StreamHandleData: public SocketHandleData {
+enum class StreamType {
+    socket,
+    pipe
+};
+
+class StreamHandleTag {};
+
+template<StreamType type>
+class StreamHandleData: public SocketHandleData, public StreamHandleTag {
 public:
 
-    using SocketHandleData::SocketHandleData;
+    StreamHandleData(int fd);
 
     int recv_sync(char *buffer, std::size_t sz);
     int send_sync(const char *buffer, std::size_t sz);
@@ -91,6 +102,9 @@ public:
     TwoCoros on_timeout(std::chrono::system_clock::time_point tp);
     TwoCoros on_shutdown();
     StreamState get_state() const;
+
+    void send_close();
+
 
 protected:
     std::chrono::system_clock::time_point _recv_timeout = std::chrono::system_clock::time_point::max();
@@ -120,8 +134,10 @@ protected:
 template<typename Fn>
 auto AbstractHandleData::visit(Fn &&fn) {
     const std::type_info &t = typeid(*this);
-    if (t == typeid(StreamHandleData)) {
-        return fn(*static_cast<StreamHandleData *>(this));
+    if (t == typeid(StreamHandleData<StreamType::socket>)) {
+        return fn(*static_cast<StreamHandleData<StreamType::socket> *>(this));
+    } else if (t == typeid(StreamHandleData<StreamType::pipe>)) {
+        return fn(*static_cast<StreamHandleData<StreamType::pipe> *>(this));
     } else if (t == typeid(ServerHandleData)) {
         return fn(*static_cast<ServerHandleData *>(this));
     } else if (t == typeid(TimerHandleData)) {
@@ -129,6 +145,15 @@ auto AbstractHandleData::visit(Fn &&fn) {
     } else {
         throw std::logic_error("unknown handle data");
     }
+}
+
+
+template<typename X>
+bool AbstractHandleData::is_base_of() const {
+    return visit([](const auto &x){
+        using T = std::decay_t<decltype(x)>;
+        return std::is_base_of_v<X, T>;
+    });
 }
 
 
@@ -140,6 +165,7 @@ public:
 
     Handle create_server(std::string host, std::string def_port);
     Handle connect(std::string host, std::string def_port);
+    Handle connect(SpecialDevice dev);
     Handle create_timer();
     void close(Handle h);
     std::string get_host(Handle h) const;
@@ -174,7 +200,7 @@ protected:
     void update_epoll_flags(Handle h, const SocketHandleData &pb);
     void update_timeout(const AbstractHandleData &hd);
     Handle create_stream(int socket);
-
+    Handle connect_fifo(const char *fname, int flags);
 
 
 
@@ -182,3 +208,5 @@ protected:
 
 
 }
+
+

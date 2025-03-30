@@ -1,13 +1,13 @@
 #pragma once
+#include <coroserver/stream.hpp>
 #include <mutex>
 #include "coroutines.h"
-#include "stream.h"
-#include "network.h"
+#include "context.hpp"
 
 namespace coroserver {
 
 
-class SocketStream : public IStream, public IPeer {
+class SocketStream : public IStream {
 public:
 
     virtual ~SocketStream();
@@ -66,7 +66,7 @@ public:
     SocketStream(const  SocketStream &) = delete;
     SocketStream &operator=(const  SocketStream &) = delete;
 
-    virtual std::shared_ptr<INetContext> get_async_context() const override;
+    virtual Context get_context() const override;
 
 protected:
     SocketStream(std::shared_ptr<INetContext> ctx, ConnHandle h);
@@ -98,9 +98,7 @@ protected:
     ///if true, stream is in opening state
     bool _opening_state = true;
 
-    virtual void receive_complete(std::string_view data) noexcept override;
-    virtual void on_timeout() noexcept override;
-    virtual void clear_to_send() noexcept override;
+
     void ready_to_send();
 
     void destroy_me();

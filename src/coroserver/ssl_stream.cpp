@@ -46,11 +46,11 @@ SSLStream::SSLStream(TypeClient, Stream s,
 
 SSLStream::TwoCoros SSLStream::fail_io(std::exception_ptr e) {
     _state = StreamState::closed;
-    return {_recv_awaiting.set_exception(e),_send_awaiting.set_exception(e)};
+    return {_recv_awaiting.set_exception(e),_write_awaiting.set_exception(e)};
 }
 SSLStream::TwoCoros SSLStream::fail_io() {
     _state = StreamState::closed;
-    return {_recv_awaiting(), _send_awaiting(false)};
+    return {_recv_awaiting(), _write_awaiting(false)};
 }
 SSLStream::TwoCoros SSLStream::finish_handshake() {
     _handshake_running = false;
@@ -63,19 +63,19 @@ SSLStream::TwoCoros SSLStream::finish_handshake() {
         //this can be empty, but if there is awaiting caller
         if (s.empty() && _recv_awaiting) {
             //continue in async reading
-            out.second =  _async_receive_cb.await(_s.receive(),[this](auto &awt){
-                return async_process_receive(awt);
+            out.second =  _async_read_cb.await(_s.read(),[this](auto &awt){
+                return async_process_read(awt);
             });
         } else {
-            //otherwise send result to caller (if none, this command does nothing)
+            //otherwise write result to caller (if none, this command does nothing)
             out.second = _recv_awaiting(s);
         }
-        //any data to send after handshake?
-        if (!_send_awaiting_data.empty()) {
+        //any data to write after handshake?
+        if (!_write_awaiting_data.empty()) {
             //write them now
-            handle_error(SSL_write(_ssl.get(), _send_awaiting_data.data(), _send_awaiting_data.size()));
+            handle_error(SSL_write(_ssl.get(), _write_awaiting_data.data(), _write_awaiting_data.size()));
             //and they are written
-            _send_awaiting_data = {};
+            _write_awaiting_data = {};
         }
         if (_req_close) {
             handle_error(SSL_shutdown(_ssl.get()));
@@ -84,13 +84,13 @@ SSLStream::TwoCoros SSLStream::finish_handshake() {
         //any output data in buffer
         s = get_output_data();
         if (!s.empty()) {
-            //send them to the stream
-            out.first =  _async_send_cb.await(_s.send(s),[this](auto &awt){
-                return async_process_send(awt);
+            //write them to the stream
+            out.first =  _async_write_cb.await(_s.write(s),[this](auto &awt){
+                return async_process_write(awt);
             });
         } else {
-            //this is success for send
-            out.first =  _send_awaiting(true);
+            //this is success for write
+            out.first =  _write_awaiting(true);
         }
         return out;
     } else {
@@ -101,7 +101,7 @@ SSLStream::TwoCoros SSLStream::finish_handshake() {
 }
 
 
-SSLStream::TwoCoros SSLStream::async_process_receive(coro::awaitable<std::string_view> &awt)
+SSLStream::TwoCoros SSLStream::async_process_read(coro::awaitable<std::string_view> &awt)
 {
     std::lock_guard _(_mx);
     try {
@@ -123,14 +123,14 @@ SSLStream::TwoCoros SSLStream::async_process_receive(coro::awaitable<std::string
                     //if there are output data
                     s = get_output_data();
                     if (!s.empty()) {
-                        //send them async
-                        return {_async_send_cb.await(_s.send(s), [this](auto &awt){
-                            return async_process_send(awt);
+                        //write them async
+                        return {_async_write_cb.await(_s.write(s), [this](auto &awt){
+                            return async_process_write(awt);
                         })};
                     } else {
                         //otherwise wait for more incoming data
-                        return {_async_receive_cb.await(_s.receive(),[this](auto &awt){
-                            return async_process_receive(awt);
+                        return {_async_read_cb.await(_s.read(),[this](auto &awt){
+                            return async_process_read(awt);
                         })};
                     }
                 } else {
@@ -142,25 +142,25 @@ SSLStream::TwoCoros SSLStream::async_process_receive(coro::awaitable<std::string
                 s = read_ssl_nb();
                 //empty data and still normal operation?
                 if (s.empty() && _state == StreamState::active) {
-                    //receive more data
-                    auto p = _async_receive_cb.await(_s.receive(), [this](auto &awt){
-                        return async_process_receive(awt);
+                    //read more data
+                    auto p = _async_read_cb.await(_s.read(), [this](auto &awt){
+                        return async_process_read(awt);
                     });
-                    //if there is no send awaiting
-                    if (!_send_awaiting) {
+                    //if there is no write awaiting
+                    if (!_write_awaiting) {
                         //try to pick output data
                         s = get_output_data();
                         //and if there are some, this can be reneg.
                         if (!s.empty()) {
                             //change state
                             _state = StreamState::opening;
-                            //send data
-                            return {_async_send_cb.await(_s.send(s), [this](auto &awt){
-                                return async_process_send(awt);
+                            //write data
+                            return {_async_write_cb.await(_s.write(s), [this](auto &awt){
+                                return async_process_write(awt);
                             }),std::move(p)};
                         }
                     }
-                    //if _send_awaiting is active, this issue will be solved on send side
+                    //if _write_awaiting is active, this issue will be solved on write side
                     return {std::move(p)};
                 }
                 //non-empty buffer is returned to caller
@@ -173,13 +173,13 @@ SSLStream::TwoCoros SSLStream::async_process_receive(coro::awaitable<std::string
     }
 }
 
-SSLStream::TwoCoros SSLStream::async_process_send(coro::awaitable<bool> &awt)
+SSLStream::TwoCoros SSLStream::async_process_write(coro::awaitable<bool> &awt)
 {
     std::lock_guard _(_mx);
     try {
-        //read send result
+        //read write result
         bool r = awt.await_resume();
-        //send successful
+        //write successful
         if (r) {
             //for handshake phase
             if (_state == StreamState::opening) {
@@ -191,25 +191,25 @@ SSLStream::TwoCoros SSLStream::async_process_send(coro::awaitable<bool> &awt)
                 //handshake is not complete but still in progress
                 } else if (_state == StreamState::opening) {
                     //continue by reading
-                    return {_async_receive_cb.await(_s.receive(), [this](auto &awt){
-                        return async_process_receive(awt);
+                    return {_async_read_cb.await(_s.read(), [this](auto &awt){
+                        return async_process_read(awt);
                     })};
                 } else {
                     return fail_io();
                 }
             } else {
                 //normal operation
-                //test whether there are still data to send
+                //test whether there are still data to write
                 auto s = get_output_data();
                 //if so...
                 if (!s.empty()) {
-                    //continue in sending
-                    return {_async_send_cb.await(_s.send(s), [this](auto &awt){
-                        return async_process_send(awt);
+                    //continue in writeing
+                    return {_async_write_cb.await(_s.write(s), [this](auto &awt){
+                        return async_process_write(awt);
                     })};
                 } else {
                     //no more data, report success
-                    return {_send_awaiting(true)};
+                    return {_write_awaiting(true)};
                 }
             }
         } else {
@@ -256,7 +256,7 @@ coroserver::StreamState SSLStream::get_state() const {
     return state;
 }
 
-coro::awaitable<std::string_view> SSLStream::receive() {
+coro::awaitable<std::string_view> SSLStream::read() {
     if (!_putback_buffer.empty() || _state == StreamState::closed) {
         return std::exchange(_putback_buffer, {});
     }
@@ -279,36 +279,36 @@ coro::awaitable<std::string_view> SSLStream::receive() {
         if (_state == StreamState::opening) continue;
         return [this, lk = std::move(lk)](RecvResult res) {
             this->_recv_awaiting = std::move(res);
-            _async_receive_cb.await(_s.receive(),[this](auto &awt){
-                return async_process_receive(awt);
+            _async_read_cb.await(_s.read(),[this](auto &awt){
+                return async_process_read(awt);
             });
         };
     }
 
 }
 
-coro::awaitable<bool> SSLStream::send(std::string_view data) {
+coro::awaitable<bool> SSLStream::write(std::string_view data) {
     while (true) {
         std::unique_lock lk(_mx);
         if (_state == StreamState::closed || _state == StreamState::closing) {
             return false;
         }
         if (_state == StreamState::opening) {
-            this->_send_awaiting_data = data;
+            this->_write_awaiting_data = data;
             return [this, lk = std::move(lk)](SendResult res) {
                 coro::prepared_coro c;
                 if (!_handshake_running) {
                     c = run_handshake_except(res);
                 }
-                this->_send_awaiting = std::move(res);
+                this->_write_awaiting = std::move(res);
             };
         }
-        if (data.empty()) return _s.send(data); //just sync
+        if (data.empty()) return _s.write(data); //just sync
 
         bool st = handle_error(SSL_write(_ssl.get(), data.data(), data.size()));
         if (st) {
             std::string_view  out_data = get_output_data();
-            if (!out_data.empty()) return _s.send(out_data);
+            if (!out_data.empty()) return _s.write(out_data);
             return true;
         } else {
             //NOTE: false is returned when write wants to read
@@ -367,18 +367,18 @@ coro::prepared_coro SSLStream::run_handshake()
     //control handshake and process errors
     bool b = handle_error(SSL_do_handshake(_ssl.get()));
 
-    if (!_send_awaiting) {
+    if (!_write_awaiting) {
         auto s = get_output_data();
         if (!s.empty()) {
-            return _async_send_cb.await(_s.send(s),[this](auto &awt){
-                return async_process_send(awt);
+            return _async_write_cb.await(_s.write(s),[this](auto &awt){
+                return async_process_write(awt);
             });
         }
     }
     if (!_recv_awaiting) {
         if (!b) {
-            return _async_receive_cb.await(_s.receive(),[this](auto &awt){
-                return async_process_receive(awt);
+            return _async_read_cb.await(_s.read(),[this](auto &awt){
+                return async_process_read(awt);
             });
         }
     }
@@ -411,13 +411,13 @@ coro::awaitable<bool> SSLStream::close() {
                 if (!_handshake_running) {
                     c = run_handshake_except(res);
                 }
-                this->_send_awaiting = std::move(res);
+                this->_write_awaiting = std::move(res);
             };
         }
         bool st = handle_error(SSL_shutdown(_ssl.get()));
         if (st) {
             std::string_view  out_data = get_output_data();
-            if (!out_data.empty()) return _s.send(out_data);
+            if (!out_data.empty()) return _s.write(out_data);
             _state = StreamState::closing;
             return true;
         } else {

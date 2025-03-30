@@ -1,5 +1,5 @@
-#include "context_linux.h"
-
+#include "context_linux.hpp"
+#include "context_inc.hpp"
 #include <arpa/inet.h>
 #include <stdexcept>
 #include <sys/eventfd.h>
@@ -151,7 +151,7 @@ void ContextImpl::thread_entry_point() {
                             cr.a =  p.on_complete([&](int socket){
                                 return create_stream(socket);
                             });
-                        } else if constexpr(std::is_same_v<T, StreamHandleData>) {
+                        } else if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
                             if (wr->events & EPOLLIN) {
                                 cr.a = p.on_complete_recv();
                             }
@@ -171,6 +171,7 @@ void ContextImpl::thread_entry_point() {
             }
         }
         prepared.clear();   //execute prepared
+        lk.lock();
     }
     _epoll_wk.set();    //wake up other threads
 }
@@ -238,10 +239,10 @@ coro::awaitable<ContextImpl::Handle> ContextImpl::accept(Handle server, std::chr
         return [this, server, timeout](coro::awaitable<Handle>::result p) -> coro::prepared_coro {
             std::lock_guard _(_mx);
             auto iter = _handleMap.find(server);
-            auto *srv = static_cast<ServerHandleData *>(iter->_value.get());
-            auto r =  srv->do_accept_async(timeout, std::move(p));
-            update_epoll_flags(server, *srv);
-            update_timeout( *srv);
+            auto &srv = *static_cast<ServerHandleData *>(iter->_value.get());
+            auto r =  srv.do_accept_async(timeout, std::move(p));
+            update_epoll_flags(server, srv);
+            update_timeout( srv);
             return r;
         };
     }
@@ -252,47 +253,58 @@ coro::awaitable<std::size_t> ContextImpl::receive(Handle stream, char *buffer,
         std::size_t sz, std::chrono::system_clock::time_point timeout) {
     std::lock_guard _(_mx);
     auto iter = _handleMap.find(stream);
-    if (iter == _handleMap.end() || typeid(*iter->_value) != typeid(StreamHandleData)) return 0;
-    auto *strm = static_cast<StreamHandleData *>(iter->_value.get());
-    int r = strm->recv_sync(buffer, sz);
-    if (r >= 0) {
-        return static_cast<std::size_t>(r);
-    } else {
-        return [this, stream, timeout](coro::awaitable<std::size_t>::result p) {
-            std::lock_guard _(_mx);
-            auto iter = _handleMap.find(stream);
-            auto *strm = static_cast<StreamHandleData *>(iter->_value.get());
-            auto r = strm->recv_async(timeout, std::move(p));
-            update_epoll_flags(stream, *strm);
-            update_timeout(*strm);
-            return r;
-        };
-    }
+    if (iter == _handleMap.end()) return 0;
+    return iter->_value->visit([&](auto &strm) -> coro::awaitable<std::size_t> {
+        using T = std::decay_t<decltype(strm)> ;
+        if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
+            int r = strm.recv_sync(buffer, sz);
+            if (r >= 0) {
+                return static_cast<std::size_t>(r);
+            } else {
+                return [this, stream, timeout](coro::awaitable<std::size_t>::result p) {
+                    std::lock_guard _(_mx);
+                    auto iter = _handleMap.find(stream);
+                    auto &strm = *static_cast<T *>(iter->_value.get());
+                    auto r = strm.recv_async(timeout, std::move(p));
+                    update_epoll_flags(stream, strm);
+                    update_timeout(strm);
+                    return r;
+                };
+            }
+        } else {
+            return 0;
+        }
+    });
 }
 
 coro::awaitable<bool> ContextImpl::send(Handle stream, const char *buffer,
         std::size_t sz, std::chrono::system_clock::time_point timeout) {
     std::lock_guard _(_mx);
     auto iter = _handleMap.find(stream);
-    if (iter == _handleMap.end() || typeid(*iter->_value) != typeid(StreamHandleData)) return false;
-    auto *strm = static_cast<StreamHandleData *>(iter->_value.get());
-    int r = strm->send_sync(buffer, sz);
-    if (r > 0) {
-        return true;
-    } else if (r == 0) {
-        return false;
-    } else {
-        return [this, stream, timeout](coro::awaitable<bool>::result p) {
-            std::lock_guard _(_mx);
-            auto iter = _handleMap.find(stream);
-            auto *strm = static_cast<StreamHandleData *>(iter->_value.get());
-            auto r =  strm->send_async(timeout, std::move(p));
-            update_epoll_flags(stream, *strm);
-            update_timeout(*strm);
-            return r;
-
-        };
-    }
+    if (iter == _handleMap.end()) return false;
+    return iter->_value->visit([&](auto &strm)->coro::awaitable<bool> {
+        using T = std::decay_t<decltype(strm)> ;
+        if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
+            int r = strm.send_sync(buffer, sz);
+            if (r > 0) {
+                return true;
+            } else if (r == 0) {
+                return false;
+            } else {
+                return [this, stream, timeout](coro::awaitable<bool>::result p) {
+                    std::lock_guard _(_mx);
+                    auto iter = _handleMap.find(stream);
+                    auto &strm = *static_cast<T *>(iter->_value.get());
+                    auto r =  strm.send_async(timeout, std::move(p));
+                    update_epoll_flags(stream, strm);
+                    update_timeout(strm);
+                    return r;
+                };
+            }
+        } else {
+            return false;
+        }
+    });
 }
 
 void ContextImpl::update_timeout(const AbstractHandleData &hd) {
@@ -306,14 +318,16 @@ void ContextImpl::update_timeout(const AbstractHandleData &hd) {
 coro::awaitable<bool> ContextImpl::send_eof(Handle stream) {
     std::lock_guard _(_mx);
     auto iter = _handleMap.find(stream);
-    if (iter == _handleMap.end() || typeid(*iter->_value) != typeid(StreamHandleData)) return false;
-    auto *strm = static_cast<StreamHandleData *>(iter->_value.get());
-    int socket = strm->get_socket();
-    int r = ::shutdown(socket, SHUT_WR);
-    if (r == -1) {
-        throw std::system_error(errno, std::system_category(), "socket shutdown (send_eof)");
-    }
-    return true;
+    if (iter == _handleMap.end()) return false;
+    return iter->_value->visit([&](auto &strm)->coro::awaitable<bool> {
+        using T = std::decay_t<decltype(strm)> ;
+        if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
+            strm.send_close();
+            return true;
+        } else {
+            return false;
+        }
+    });
 }
 
 void ContextImpl::signal_stop() {
@@ -354,7 +368,7 @@ static std::string sockaddrToString(const sockaddr* addr) {
 
         case AF_UNIX: {
             const sockaddr_un* un = reinterpret_cast<const sockaddr_un*>(addr);
-            return "unix://" + std::string(un->sun_path);
+            return "unix:" + std::string(un->sun_path);
         }
 
         default:
@@ -417,11 +431,11 @@ struct unix_addr_info :  addrinfo {
     sockaddr_un sun;
 };
 
-std::shared_ptr<struct addrinfo> resolve_unix_socket(std::string host, bool passive) {
-    char buff[130] = {};
-    if (host.size() >= sizeof(buff)) throw std::invalid_argument("Socket path is too long");
-    strncpy(buff, host.c_str(), sizeof(buff)-1);
-    char *path = buff+6;
+std::shared_ptr<struct addrinfo> resolve_unix_socket(std::string_view host, bool passive) {
+    std::vector<char> buff;
+    buff.resize(host.size()+1);
+    *std::copy(host.begin(), host.end(), buff.begin()) = '\0';
+    char *path = buff.data();
     char *sep = strrchr(path, ':');
     int rights = 0;
     if (sep != nullptr && passive) {
@@ -431,13 +445,23 @@ std::shared_ptr<struct addrinfo> resolve_unix_socket(std::string host, bool pass
         *sep = 0;
     }
 
-    if (passive && !is_socket_active(path)) {
-        unlink(path);
+    char *abspath = realpath(path, NULL);
+    sockaddr_un sun = {};
+
+    auto len = strlen(abspath);
+    if (len >= sizeof (sun.sun_path)) {
+        free(abspath);
+        throw std::invalid_argument("Socket path is too long");
     }
 
-    sockaddr_un sun = {};
+    if (passive && !is_socket_active(path)) {
+        unlink(abspath);
+    }
+
     sun.sun_family = AF_UNIX;
     strncpy(sun.sun_path, path, sizeof(sun.sun_path)-1);
+    free(abspath);
+
     std::shared_ptr<unix_addr_info> a = std::make_shared<unix_addr_info>();
     a->sun = sun;
     a->ai_addr = reinterpret_cast<sockaddr *>(&a->sun);
@@ -454,8 +478,8 @@ std::shared_ptr<struct addrinfo> resolve_unix_socket(std::string host, bool pass
 std::shared_ptr<struct addrinfo> dns_resolve(std::string host, std::string def_port, bool passive) {
     if (!host.empty()) {
         std::string_view vhost = host;
-        if (vhost.substr(0,7) == "unix://") {
-            return resolve_unix_socket(std::move(host), passive);
+        if (vhost.substr(0,5) == "unix:") {
+            return resolve_unix_socket(std::string_view(host).substr(5), passive);
         }
         if (vhost.front() == '[')   { //ipv6 addr
             auto sep = vhost.find(']');
@@ -510,6 +534,7 @@ ContextImpl::Handle ContextImpl::create_server(std::string host, std::string def
         if (a->ai_family == AF_UNIX) {
             chmod(a->ai_canonname, a->ai_flags);
         }
+        std::lock_guard _(_mx);
         Handle h = _handleMap.insert(std::make_unique<ServerHandleData>(s));
         _epoll.add(s, 0, h);
         return h;
@@ -519,7 +544,50 @@ ContextImpl::Handle ContextImpl::create_server(std::string host, std::string def
     }
 }
 
+ContextImpl::Handle ContextImpl::connect(SpecialDevice dev) {
+    int srcfd;
+    switch (dev) {
+        case SpecialDevice::standard_input: srcfd = 0;break;
+        case SpecialDevice::standard_output: srcfd = 1;break;
+        case SpecialDevice::standard_error: srcfd = 2;break;
+        default: return null_handle;
+    }
+
+    int tfd =  eventfd(0, EFD_CLOEXEC);
+    if (tfd == -1) {
+        throw std::system_error(errno, std::system_category(), "cannot reserve descriptor by creating eventfd");
+    }
+    int r = dup3(srcfd, tfd, O_CLOEXEC);
+    if (r == -1) {
+        int e = errno;
+        ::close(tfd);
+        throw std::system_error(e, std::system_category(), "dup3");
+    }
+    fcntl(tfd, F_SETFL, fcntl(tfd, F_GETFL) | O_NONBLOCK);
+    std::lock_guard _(_mx);
+    Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::pipe> >(tfd));
+    _epoll.add(tfd, 0, h);
+    return h;
+
+}
+
+ContextImpl::Handle ContextImpl::connect_fifo(const char *fname, int flags) {
+    int fd = ::open(fname, flags | O_NONBLOCK| O_CLOEXEC);
+    if (fd == -1) throw std::system_error(errno, std::system_category(), "fifo open");
+    std::lock_guard _(_mx);
+    Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::pipe>>(fd));
+    _epoll.add(fd, 0, h);
+    return h;
+}
+
 ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port) {
+    if (host.compare(0, 7, "fifo-r:") == 0) {
+        return connect_fifo(host.c_str()+7, O_RDONLY);
+    }
+    if (host.compare(0, 7, "fifo-w:") == 0) {
+        return connect_fifo(host.c_str()+7, O_WRONLY);
+    }
+
     auto a = dns_resolve(host, def_port, false);
     if (a == nullptr) throw std::system_error(ENOENT, std::system_category(), "DNS resolv failed");
     int s = socket(a->ai_family,SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, a->ai_protocol);
@@ -528,13 +596,12 @@ ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port)
         int r = ::connect(s, a->ai_addr, a->ai_addrlen);
         if (r < 0) {
             int e = errno;
-            if (e != EWOULDBLOCK) {
+            if (e != EWOULDBLOCK && e != EINPROGRESS) {
                 throw std::system_error(e, std::system_category(), "connect");
             }
         }
-        Handle h = _handleMap.insert(std::make_unique<ServerHandleData>(s));
-        _epoll.add(s, EPOLLOUT|EPOLLONESHOT, h);
-        return h;
+        std::lock_guard _(_mx);
+        return create_stream(s);
     } catch (...) {
         close(s);
         throw;
@@ -542,45 +609,76 @@ ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port)
 }
 
 ContextImpl::Handle ContextImpl::create_stream(int socket) {
-    Handle h = _handleMap.insert(std::make_unique<StreamHandleData>(socket));
+    Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::socket>>(socket));
     _epoll.add(socket, EPOLLOUT|EPOLLONESHOT, h);
     return h;
 }
 
-int StreamHandleData::recv_sync(char *buffer, std::size_t sz) {
+template<StreamType stype>
+StreamHandleData<stype>::StreamHandleData(int fd): SocketHandleData(fd), _opening(stype == StreamType::socket) {
+}
+
+template<StreamType stype>
+int StreamHandleData<stype>::recv_sync(char *buffer, std::size_t sz) {
     this->_recv_buffer = buffer;
     this->_recv_buffer_size = sz;
     return do_recv();
 }
-int StreamHandleData::do_recv() {
+template<StreamType stype>
+int StreamHandleData<stype>::do_recv() {
     if (_state_eof) return 0;
     if (_connect_error) throw std::system_error(_connect_error, std::system_category(), "Connect error");
-    int r = ::recv(_socket, this->_recv_buffer, this->_recv_buffer_size, MSG_DONTWAIT);
-    if (r < 0) {
-        int e = errno;
-        if (e == EWOULDBLOCK) return -1;
-        if (e == EPIPE) return 0;
-        throw std::system_error(e, std::system_category(), "recv");
-    }
-    return r;
-}
-
-int StreamHandleData::send_sync(const char *buffer, std::size_t sz) {
-    this->_send_buffer = buffer;
-    this->_send_buffer_size = sz;
-    return do_send();
-}
-int StreamHandleData::do_send() {
-    if (_send_closed) return 0;
-    if (_opening) return -1;
-    if (_connect_error) throw std::system_error(_connect_error, std::system_category(), "Connect error");
-    while (this->_send_buffer_size) {
-        int r = ::send(_socket, this->_send_buffer, this->_send_buffer_size, MSG_DONTWAIT);
+    if constexpr(stype == StreamType::socket) {
+        int r = ::recv(_socket, this->_recv_buffer, this->_recv_buffer_size, MSG_DONTWAIT);
         if (r < 0) {
             int e = errno;
             if (e == EWOULDBLOCK) return -1;
             if (e == EPIPE) return 0;
-            throw std::system_error(e, std::system_category(), "send");
+            throw std::system_error(e, std::system_category(), "recv");
+        }
+        return r;
+    } else {
+        int r = ::read(_socket, this->_recv_buffer, this->_recv_buffer_size);
+        if (r < 0) {
+            int e = errno;
+            if (e == EWOULDBLOCK) return -1;
+            if (e == EPIPE) return 0;
+            throw std::system_error(e, std::system_category(), "read");
+        }
+        return r;
+    }
+}
+
+template<StreamType stype>
+int StreamHandleData<stype>::send_sync(const char *buffer, std::size_t sz) {
+    this->_send_buffer = buffer;
+    this->_send_buffer_size = sz;
+    return do_send();
+}
+
+template<StreamType stype>
+int StreamHandleData<stype>::do_send() {
+    if (_send_closed) return 0;
+    if (_opening) return -1;
+    if (_connect_error) throw std::system_error(_connect_error, std::system_category(), "Connect error");
+    while (this->_send_buffer_size) {
+        int r;
+        if constexpr(stype == StreamType::socket) {
+            r = ::send(_socket, this->_send_buffer, this->_send_buffer_size, MSG_DONTWAIT);
+            if (r < 0) {
+                int e = errno;
+                if (e == EWOULDBLOCK) return -1;
+                if (e == EPIPE) return 0;
+                throw std::system_error(e, std::system_category(), "send");
+            }
+        } else {
+            r = ::write(_socket, this->_send_buffer, this->_send_buffer_size);
+            if (r < 0) {
+                int e = errno;
+                if (e == EWOULDBLOCK) return -1;
+                if (e == EPIPE) return 0;
+                throw std::system_error(e, std::system_category(), "write");
+            }
         }
         if (r == 0) {
             _state_eof = 0;
@@ -592,7 +690,8 @@ int StreamHandleData::do_send() {
     return 1;
 }
 
-coro::prepared_coro StreamHandleData::recv_async(
+template<StreamType stype>
+coro::prepared_coro StreamHandleData<stype>::recv_async(
                         std::chrono::system_clock::time_point tp,
                         coro::awaitable<std::size_t>::result p) {
     if (_shutted_down) return p(0);
@@ -604,7 +703,8 @@ coro::prepared_coro StreamHandleData::recv_async(
 
 }
 
-coro::prepared_coro StreamHandleData::send_async(
+template<StreamType stype>
+coro::prepared_coro StreamHandleData<stype>::send_async(
                         std::chrono::system_clock::time_point tp,
                         coro::awaitable<bool>::result p) {
 
@@ -617,7 +717,8 @@ coro::prepared_coro StreamHandleData::send_async(
 
 }
 
-coro::prepared_coro StreamHandleData::on_complete_recv() {
+template<StreamType stype>
+coro::prepared_coro StreamHandleData<stype>::on_complete_recv() {
     coro::prepared_coro out;
     try {
 
@@ -637,7 +738,8 @@ coro::prepared_coro StreamHandleData::on_complete_recv() {
     return out;
 }
 
-coro::prepared_coro StreamHandleData::on_complete_send() {
+template<StreamType stype>
+coro::prepared_coro StreamHandleData<stype>::on_complete_send() {
     coro::prepared_coro out;
     try {
 
@@ -666,7 +768,8 @@ coro::prepared_coro StreamHandleData::on_complete_send() {
     return out;
 }
 
-TwoCoros StreamHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
+template<StreamType stype>
+TwoCoros StreamHandleData<stype>::on_timeout(std::chrono::system_clock::time_point tp) {
     TwoCoros out;
     if (tp >= _recv_timeout) {
         out.a = _recv_result.set_empty();
@@ -681,7 +784,8 @@ TwoCoros StreamHandleData::on_timeout(std::chrono::system_clock::time_point tp) 
     return out;
 }
 
-TwoCoros StreamHandleData::on_shutdown() {
+template<StreamType stype>
+TwoCoros StreamHandleData<stype>::on_shutdown() {
     TwoCoros out;
     _shutted_down = true;
     out.a = _recv_result.set_value(0);
@@ -693,22 +797,37 @@ TwoCoros StreamHandleData::on_shutdown() {
     return out;
 }
 
-StreamState StreamHandleData::get_state() const {
+template<StreamType stype>
+StreamState StreamHandleData<stype>::get_state() const {
     if (_connect_error || _state_eof) return StreamState::closed;
     if (_send_closed) return StreamState::closing;
     if (_opening) return StreamState::opening;
     return StreamState::active;
 }
 
-void StreamHandleData::update_timeout() {
+template<StreamType stype>
+void StreamHandleData<stype>::update_timeout() {
     _tp = std::min(_send_timeout, _recv_timeout);
 }
 
-void StreamHandleData::update_flags() {
+template<StreamType stype>
+void StreamHandleData<stype>::update_flags() {
     _flags = 0;
     if (_send_result) _flags |= EPOLLOUT|EPOLLONESHOT;
     if (_recv_result) _flags |= EPOLLIN|EPOLLONESHOT;
 }
+
+template<StreamType stype>
+void StreamHandleData<stype>::send_close() {
+    if (!_send_closed) {
+        _send_closed = true;
+        int r = ::shutdown(_socket, SHUT_WR);
+        if (r == -1) {
+            throw std::system_error(errno, std::system_category(), "socket shutdown (send_eof)");
+        }
+    }
+}
+
 
 }
 
