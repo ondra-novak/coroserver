@@ -73,7 +73,7 @@ SSLStream::TwoCoros SSLStream::finish_handshake() {
         //any data to write after handshake?
         if (!_write_awaiting_data.empty()) {
             //write them now
-            handle_error(SSL_write(_ssl.get(), _write_awaiting_data.data(), _write_awaiting_data.size()));
+            handle_error(SSL_write(_ssl.get(), _write_awaiting_data.data(),static_cast<int>( _write_awaiting_data.size())));
             //and they are written
             _write_awaiting_data = {};
         }
@@ -110,7 +110,7 @@ SSLStream::TwoCoros SSLStream::async_process_read(coro::awaitable<std::string_vi
             return fail_io();
         } else {
             //feed bio with data
-            BIO_write(_rbio, s.data(), s.size());
+            BIO_write(_rbio, s.data(), static_cast<int>(s.size()));
             //for handshake phase
             if (_state == StreamState::opening) {
                 //do handshake
@@ -305,7 +305,7 @@ coro::awaitable<bool> SSLStream::write(std::string_view data) {
         }
         if (data.empty()) return _s.write(data); //just sync
 
-        bool st = handle_error(SSL_write(_ssl.get(), data.data(), data.size()));
+        bool st = handle_error(SSL_write(_ssl.get(), data.data(), static_cast<int>(data.size())));
         if (st) {
             std::string_view  out_data = get_output_data();
             if (!out_data.empty()) return _s.write(out_data);
@@ -352,7 +352,7 @@ std::string_view SSLStream::read_ssl_nb() {
         _decrypt_buffer.clear();
         _decrypt_buffer.resize(sz);
     }
-    int l = SSL_read(_ssl.get(), _decrypt_buffer.data(), _decrypt_buffer.size());
+    int l = SSL_read(_ssl.get(), _decrypt_buffer.data(), static_cast<int>(_decrypt_buffer.size()));
     if (handle_error(l)) {
         return {_decrypt_buffer.data(),static_cast<std::size_t>(l)};
     } else {

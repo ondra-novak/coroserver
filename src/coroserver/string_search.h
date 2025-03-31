@@ -1,7 +1,7 @@
 #pragma once
-#include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <memory>
 
 namespace coroserver {
 
@@ -76,7 +76,7 @@ protected:
     };
     struct DynamicLPS {
         bool dyn_flag;
-        int *lps;
+        unsigned int *lps;
     };
 
     std::basic_string_view<T> _pattern;
@@ -88,14 +88,14 @@ protected:
 
     template<typename X>
     void build_lps(X *lps) {
-        unsigned int size = _pattern.size();
+        unsigned int size = static_cast<unsigned int>(_pattern.size());
         unsigned int i = 1;
         unsigned int len = 0;
         lps[0] = 0;
         while (i < size) {
             if (_pattern[i] == _pattern[len]) {
                 len++;
-                lps[i] = len;
+                lps[i] = static_cast<X>(len);
                 i++;
             } else if (len != 0) {
                 len = lps[len - 1];
