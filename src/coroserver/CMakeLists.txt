@@ -3,8 +3,11 @@ cmake_minimum_required(VERSION 3.5)
 
 set(COMMON_FILES
     network.cpp
-    socket_stream.cpp
-    ssl_stream.cpp
+    ssl_stream.cpp    
+    context_linux.cpp
+    basic_stream.cpp
+    server.cpp
+    client.cpp
 )
 
 if(MSVC)

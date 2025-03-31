@@ -1,9 +1,2 @@
-#include <minicoro/coroutine.h>
-#include <minicoro/coroutine_mt.h>
-#include <minicoro/coro_mutex.h>
-#include <minicoro/coro_queue.h>
-#include <minicoro/async_generator.h>
+#include <basic_coro/basic_coro.hpp>
 
-namespace coroserver {
-    using namespace minicoro;
-}
