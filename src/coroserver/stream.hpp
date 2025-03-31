@@ -15,32 +15,29 @@ protected:
 
 
 
-template<typename Cont, unsigned int n>
+template<typename Cont>
 class ReceiveUntilState {
 public:
 
     ReceiveUntilState(Cont &buff,
-            const pattern_search<char,n> &patt,
-            typename pattern_search<char,n>::state stat,
+            pattern_search<char> &&patt,
             std::size_t maxbuff,
             std::shared_ptr<IStream> stream)
         :_buff(buff)
-        ,_patt(patt)
-        ,_stat(stat)
+        ,_patt(std::move(patt))
         ,_maxbuff(maxbuff)
         ,_stream(std::move(stream)) {}
 
 
-    void operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-        _callback.await(_stream->read(), [this,promise = std::move(promise)](auto &awt) mutable {
+    coro::prepared_coro operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
+        return _callback.await(_stream->read(), [this,promise = std::move(promise)](auto &awt) mutable {
             return process_data(awt, promise);
         });
     }
 
 protected:
     Cont &_buff;
-    const pattern_search<char,n> &_patt;
-    typename pattern_search<char,n>::state _stat;
+    pattern_search<char> _patt;
     std::size_t _maxbuff;
     std::shared_ptr<IStream> _stream;
 
@@ -52,7 +49,7 @@ protected:
                    return promise(false);
                }
                for (std::size_t i = 0; i < data.size(); ++i) {
-                   if (_patt.test(data[i],_stat)) {
+                   if (_patt(data[i])) {
                        ++i;
                        if (i > _patt.size()) {
                            auto sub = data.substr(0, i  - _patt.size());
@@ -87,7 +84,7 @@ protected:
 
 template<>
 struct coro::awaitable_reserved_space<coroserver::ReceiveBlockStatus> {
-    static constexpr std::size_t value = sizeof(coroserver::ReceiveUntilState<std::vector<char>, 1>);
+    static constexpr std::size_t value = sizeof(coroserver::ReceiveUntilState<std::vector<char> >);
 };
 
 namespace coroserver {
@@ -249,15 +246,15 @@ public:
      * @retval false error - limit reached, eof reached, timeout. The already read
      * data are still stored in the buffer.
      */
-    template<typename Cont, unsigned int n>
-    coro::awaitable<Status> read_until(Cont &buffer, pattern_search<char, n> patt, size_t limit = ~static_cast<std::size_t>(0)) {
+    template<typename Cont>
+    coro::awaitable<Status> read_until(Cont &buffer, std::string_view pattern, size_t limit = ~static_cast<std::size_t>(0)) {
+        pattern_search<char> patt(pattern);
         buffer.clear();
         auto awt = _ptr->read();
-        auto state = patt.begin_search();
         if (awt.is_ready()) {
             std::string_view z = awt.await_resume();
             for (std::size_t i = 0; i < z.size(); ++i) {
-                if (patt.test(z[i],state)) {
+                if (patt(z[i])) {
                     ++i;
                     auto sub = z.substr(0,i-patt.size());
                     std::copy(sub.begin(), sub.end(), std::back_inserter(buffer));
@@ -269,13 +266,7 @@ public:
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
         }
         awt.cancel();
-        return ReceiveUntilState<Cont, n>(buffer, patt, state, limit, _ptr);
-
-    }
-
-    template<typename Cont, unsigned int n>
-    [[nodiscard]] coro::awaitable<Status> read_until(Cont &buffer, const char (&sep)[n], size_t limit = ~static_cast<std::size_t>(0)) {        ;
-        return read_until(buffer, pattern_search<char, n>(sep), limit);
+        return ReceiveUntilState<Cont>(buffer, std::move(patt), limit, _ptr);
 
     }
 

@@ -97,6 +97,10 @@ coro::prepared_coro ServerHandleData::on_shutdown() {
    return _p(false);
 }
 
+ContextImpl::ContextImpl() {
+    _epoll.add(_epoll_wk.get_fd(),EPOLLIN|EPOLLONESHOT,null_handle);
+}
+
 void ContextImpl::update_epoll_flags(Handle h, const SocketHandleData &pb) {
     int socket = pb.get_socket();
     int flags = pb.get_flags();
@@ -142,30 +146,35 @@ void ContextImpl::thread_entry_point() {
             if (wr) {
                 lk.lock();
                 Handle h = wr->ident;
-                auto iter = _handleMap.find(h);
-                if (iter != _handleMap.end()) {
-                    TwoCoros r = iter->_value->visit([&](auto &p) -> TwoCoros {
-                        using T = std::decay_t<decltype(p)>;
-                        TwoCoros cr;
-                        if constexpr(std::is_same_v<T, ServerHandleData>) {
-                            cr.a =  p.on_complete([&](int socket){
-                                return create_stream(socket);
-                            });
-                        } else if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
-                            if (wr->events & EPOLLIN) {
-                                cr.a = p.on_complete_recv();
+                if (h == null_handle) {
+                    _epoll_wk.read_and_clear();
+                    _epoll.mod(_epoll_wk.get_fd(),EPOLLIN|EPOLLONESHOT,null_handle);
+                } else {
+                    auto iter = _handleMap.find(h);
+                    if (iter != _handleMap.end()) {
+                        TwoCoros r = iter->_value->visit([&](auto &p) -> TwoCoros {
+                            using T = std::decay_t<decltype(p)>;
+                            TwoCoros cr;
+                            if constexpr(std::is_same_v<T, ServerHandleData>) {
+                                cr.a =  p.on_complete([&](int socket){
+                                    return create_stream(socket);
+                                });
+                            } else if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
+                                if (wr->events & EPOLLIN) {
+                                    cr.a = p.on_complete_recv();
+                                }
+                                if (wr->events & EPOLLOUT) {
+                                    cr.b = p.on_complete_send();
+                                }
                             }
-                            if (wr->events & EPOLLOUT) {
-                                cr.b = p.on_complete_send();
+                            if constexpr(std::is_base_of_v<SocketHandleData, T>) {
+                                update_epoll_flags(h, p);
                             }
-                        }
-                        if constexpr(std::is_base_of_v<SocketHandleData, T>) {
-                            update_epoll_flags(h, p);
-                        }
-                        return cr;
-                    });
-                    if (r.a) prepared.push_back(std::move(r.a));
-                    if (r.b) prepared.push_back(std::move(r.b));
+                            return cr;
+                        });
+                        if (r.a) prepared.push_back(std::move(r.a));
+                        if (r.b) prepared.push_back(std::move(r.b));
+                    }
                 }
                 lk.unlock();
             }
@@ -219,7 +228,8 @@ coro::awaitable<bool> ContextImpl::sleep(Handle timer,
     return [this, timer, tp](coro::awaitable<bool>::result p) -> coro::prepared_coro{
         std::lock_guard _(_mx);
         auto iter = _handleMap.find(timer);
-        if (iter == _handleMap.end() || typeid(*iter->_value) != typeid(TimerHandleData)) return p(false);
+        auto vptr = iter->_value.get();
+        if (iter == _handleMap.end() || typeid(*vptr) != typeid(TimerHandleData)) return p(false);
         auto tm = static_cast<TimerHandleData *>(iter->_value.get());
         auto r =  tm->sleep_until(tp, std::move(p));
         update_timeout(*tm);
@@ -230,7 +240,8 @@ coro::awaitable<bool> ContextImpl::sleep(Handle timer,
 coro::awaitable<ContextImpl::Handle> ContextImpl::accept(Handle server, std::chrono::system_clock::time_point timeout) {
     std::lock_guard _(_mx);
     auto iter = _handleMap.find(server);
-    if (iter == _handleMap.end() || typeid(*iter->_value) != typeid(ServerHandleData)) return null_handle;
+    auto vptr = iter->_value.get();
+    if (iter == _handleMap.end() || typeid(*vptr) != typeid(ServerHandleData)) return null_handle;
     auto *srv = static_cast<ServerHandleData *>(iter->_value.get());
     int socket = srv->do_accept_sync();
     if (socket>=0) {
@@ -636,6 +647,7 @@ int StreamHandleData<stype>::do_recv() {
             if (e == EPIPE) return 0;
             throw std::system_error(e, std::system_category(), "recv");
         }
+        if (r == 0) _state_eof = true;
         return r;
     } else {
         int r = ::read(_socket, this->_recv_buffer, this->_recv_buffer_size);
@@ -645,6 +657,7 @@ int StreamHandleData<stype>::do_recv() {
             if (e == EPIPE) return 0;
             throw std::system_error(e, std::system_category(), "read");
         }
+        if (r == 0) _state_eof = true;
         return r;
     }
 }
@@ -828,6 +841,8 @@ void StreamHandleData<stype>::send_close() {
     }
 }
 
+template class StreamHandleData<StreamType::pipe>;
+template class StreamHandleData<StreamType::socket>;
 
 }
 

@@ -160,6 +160,7 @@ bool AbstractHandleData::is_base_of() const {
 class ContextImpl {
 public:
 
+    ContextImpl();
     using Handle = Context::Handle;
     static constexpr auto null_handle = Context::null_handle;
 
