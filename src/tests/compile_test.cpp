@@ -1,5 +1,7 @@
 #include "../coroserver/stream.hpp"
+#include "../coroserver/buffered_stream.hpp"
 #include "../coroserver/handle_hash_map.hpp"
+#include "../coroserver/limited_stream.hpp"
 
 using namespace coroserver;
 

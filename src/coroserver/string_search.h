@@ -16,7 +16,7 @@ public:
             build_lps(_static_lps.lps);
         } else {
             _dynamic_lps.dyn_flag = true;
-            _dynamic_lps.lps = new int[_pattern.size()];
+            _dynamic_lps.lps = new unsigned int[_pattern.size()];
             build_lps(_dynamic_lps.lps);
         }
     }

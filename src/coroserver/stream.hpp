@@ -229,6 +229,9 @@ public:
         return _ptr->close();
     }
 
+    void shutdown() {
+        return _ptr->shutdown();
+    }
 
     ///tests, whether stream is initialized
     explicit operator bool() const {return static_cast<bool>(_ptr);}
@@ -303,6 +306,8 @@ public:
     IOTimeout get_timeouts() const  {return _ptr->get_timeouts();}
     void set_timeouts(IOTimeout tm)   {return _ptr->set_timeouts(tm);}
 
+    auto get_handle() const {return _ptr;}
+
     Context get_context() const;
 protected:
     std::shared_ptr<IStream> _ptr;
@@ -323,6 +328,7 @@ public:
     virtual IOTimeout get_timeouts() const override {return _s.get_timeouts();}
     virtual void set_timeouts(IOTimeout tm) override {_s.set_timeouts(tm);}
     virtual Context get_context() const override;
+    virtual void shutdown() override {_s.shutdown();}
 protected:
     Stream _s;
 
