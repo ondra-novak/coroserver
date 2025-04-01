@@ -36,8 +36,8 @@ public:
         DWORD error;
     };
 
-    std::optional<Event> wait(std::chrono::system_clock::time_point timeout) {
-        std::optional<Event> out;
+    Event wait(std::chrono::system_clock::time_point timeout) {
+        Event out = {};
         DWORD tm = INFINITE;
         if (timeout < timeout.max())  {
             auto df = std::chrono::duration_cast<std::chrono::milliseconds>(timeout - std::chrono::system_clock::now()).count();
@@ -52,15 +52,17 @@ public:
         if (!GetQueuedCompletionStatus(_h, &bytes, &key, &overlapped, tm)) {
             error = GetLastError();
             if (overlapped == NULL) {
-                if (error == ERROR_TIMEOUT) return out;
+                if (error == ERROR_TIMEOUT) {
+                    out.error = error;
+                    return out;
+                }
                 else throw Win32Error(error, "GetQueuedCompletionStatus");
             } 
         }
-        out.emplace();
-        out->bytes = bytes;
-        out->error = error;
-        out->key = key;
-        out->overlapped = overlapped;
+        out.bytes = bytes;
+        out.error = error;
+        out.key = key;
+        out.overlapped = overlapped;
         return out;
     }
 

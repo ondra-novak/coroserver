@@ -8,14 +8,6 @@ namespace coroserver {
 
     class ContextImpl;
 
-    struct TwoCoros {
-        coro::prepared_coro a = {};
-        coro::prepared_coro b = {};
-        TwoCoros() = default;
-        TwoCoros(coro::prepared_coro a):a(std::move(a)) {}
-        TwoCoros(coro::prepared_coro a, coro::prepared_coro b)
-            :a(std::move(a)), b(std::move(b)) {}
-    };
     
     class AbstractHandleData {
     public:
@@ -39,10 +31,13 @@ namespace coroserver {
     public:
     
         coro::prepared_coro sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p);
+        coro::prepared_coro on_complete(DWORD , LPOVERLAPPED) {return {};}
         coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
         coro::prepared_coro on_shutdown();
-        coro::prepared_coro on_error(DWORD, LPOVERLAPPED) {}
-    protected:
+        coro::prepared_coro on_error(DWORD, LPOVERLAPPED) {return {};}
+        bool safe_to_close() const {return !_p;}
+        void set_closing() {}
+        protected:
         coro::awaitable<bool>::result _p;
     };
         
@@ -54,11 +49,14 @@ namespace coroserver {
         SOCKET get_socket() const {return _socket;}
         HANDLE get_handle() const {return _handle;}        
     
+        void set_closing() {_closing = true;}
+
     protected:
         union {
             SOCKET _socket;
             HANDLE _handle;
         };
+        bool _closing;
 
     };
         
@@ -66,14 +64,15 @@ namespace coroserver {
     public:
 
         ServerHandleData(SOCKET s, int af, ContextImpl *ctx);
+        virtual ~ServerHandleData();
     
-        int do_accept_sync();
         coro::prepared_coro do_accept_async(std::chrono::system_clock::time_point tp, coro::awaitable<Context::Handle>::result p);
-        coro::prepared_coro on_complete();
+        coro::prepared_coro on_complete(DWORD , LPOVERLAPPED);
         coro::prepared_coro on_error(DWORD error, LPOVERLAPPED ovr);
         coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
         coro::prepared_coro on_shutdown();
     
+        bool safe_to_close() const;
     
     protected:
         //buffer to store accept data
@@ -104,18 +103,19 @@ namespace coroserver {
         using H = std::conditional_t<type == StreamType::socket, SOCKET, HANDLE>;
     
         StreamHandleData(H h);
+        virtual ~StreamHandleData();
     
-        ///receive async - must be used after recv_sync to set buffers
+        void set_recv_buffer(char *buffer, std::size_t sz);
+        void set_send_buffer(const char *buffer, std::size_t sz);
         coro::prepared_coro recv_async(std::chrono::system_clock::time_point tp, coro::awaitable<std::size_t>::result p);
-        ///send async - must be used after send_sync to set buffers
         coro::prepared_coro send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p);
     
-        coro::prepared_coro on_complete_recv();
-        coro::prepared_coro on_complete_send();
+        coro::prepared_coro on_complete(DWORD , LPOVERLAPPED);
         coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
         coro::prepared_coro on_shutdown();
         coro::prepared_coro on_error(DWORD error, LPOVERLAPPED);
         StreamState get_state() const;
+        bool safe_to_close() const;
     
         void send_close();
 
@@ -123,8 +123,6 @@ namespace coroserver {
         std::chrono::system_clock::time_point _recv_timeout = std::chrono::system_clock::time_point::max();
         std::chrono::system_clock::time_point _send_timeout = std::chrono::system_clock::time_point::max();
     
-        int do_recv();
-        int do_send();
     
         char *_recv_buffer = 0;
         std::size_t _recv_buffer_size = 0;
@@ -136,14 +134,13 @@ namespace coroserver {
         coro::awaitable<bool>::result _send_result = {};
         OVERLAPPED _send_ovr = {};
 
-        int _connect_error = 0;
+        DWORD _connect_error = 0;
         bool _state_eof = false;
         bool _send_closed = false;
-        bool _opening = true;
+        bool _opening = false;
     
     
         void update_timeout();
-        void update_flags();
     };
     
     
@@ -174,4 +171,53 @@ namespace coroserver {
     
     
 
+class ContextImpl {
+public:
+
+    ContextImpl();
+    using Handle = Context::Handle;
+    static constexpr auto null_handle = Context::null_handle;
+
+    Handle create_server(std::string host, std::string def_port);
+    Handle connect(std::string host, std::string def_port);
+    Handle connect(SpecialDevice dev);
+    Handle create_timer();
+    void close(Handle h);
+    std::string get_host(Handle h) const;
+    coro::awaitable<bool> sleep(Handle timer, std::chrono::system_clock::time_point tp);
+    coro::awaitable<Handle> accept(Handle server, std::chrono::system_clock::time_point timeout);
+    coro::awaitable<size_t> receive(Handle stream, char *buffer, std::size_t sz, std::chrono::system_clock::time_point timeout);
+    coro::awaitable<bool> send(Handle stream, const char *buffer, std::size_t sz, std::chrono::system_clock::time_point timeout);
+    coro::awaitable<bool> send_eof(Handle stream);
+    StreamState get_state(Handle h);
+    void shutdown(Handle h);
+
+    void thread_entry_point();
+    void signal_stop();
+
+ 
+protected:
+    using PHandleData = std::unique_ptr<AbstractHandleData>;
+    using HandleMap = HandleHashMap<PHandleData>;
+
+
+    HandleMap _handleMap;
+    IOCP _iocp;
+
+    std::chrono::system_clock::time_point _awaiting_tp = std::chrono::system_clock::time_point::max();
+    std::chrono::system_clock::time_point _new_tp = std::chrono::system_clock::time_point::max();
+    std::size_t _awaiting_thread = 0;
+    std::size_t _thread_counter = 0;
+    bool _stop_signaled = false;
+
+    mutable std::mutex _mx;
+
+    void update_epoll_flags(Handle h, const SocketHandleData &pb);
+    void update_timeout(const AbstractHandleData &hd);
+    Handle create_stream(SOCKET socket);
+    Handle connect_fifo(const char *fname, int flags);
+
+    friend class ServerHandleData;
+};        
+        
 }
