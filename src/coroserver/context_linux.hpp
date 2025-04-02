@@ -28,10 +28,10 @@ public:
     bool is_base_of() const;
 
     const std::chrono::system_clock::time_point& get_timeout() const {return _tp;}
-    StreamState get_state() const {return _shutted_down?StreamState::closed:StreamState::active;}
+    StreamState get_state() const {return _was_shutdown?StreamState::closed:StreamState::active;}
 protected:
     std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
-    bool _shutted_down = false;
+    bool _was_shutdown = false;
 };
 
 class TimerHandleData: public AbstractHandleData {
@@ -61,18 +61,18 @@ protected:
 class ServerHandleData: public SocketHandleData {
 public:
 
-    using SocketHandleData::SocketHandleData;
+    ServerHandleData(int socket, ContextImpl *ctx);
 
     int do_accept_sync();
     coro::prepared_coro do_accept_async(std::chrono::system_clock::time_point tp, coro::awaitable<Context::Handle>::result p);
-    template<std::invocable<int> HandleCreation>
-    coro::prepared_coro on_complete(HandleCreation &&hc);
+    coro::prepared_coro on_complete();
     coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
     coro::prepared_coro on_shutdown();
 
 
 protected:
     coro::awaitable<Context::Handle>::result _p = {};
+    ContextImpl *_ctx;
 };
 
 
@@ -202,7 +202,8 @@ protected:
     void update_timeout(const AbstractHandleData &hd);
     Handle create_stream(int socket);
     Handle connect_fifo(const char *fname, int flags);
-
+    
+    friend class ServerHandleData;
 
 
 };

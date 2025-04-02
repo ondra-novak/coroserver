@@ -19,7 +19,7 @@ namespace coroserver {
 
 
 coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
-   if (_shutted_down) {
+   if (_was_shutdown) {
        return p(false);
    }
    _tp = tp;
@@ -36,7 +36,7 @@ coro::prepared_coro TimerHandleData::on_timeout(std::chrono::system_clock::time_
 }
 
 coro::prepared_coro TimerHandleData::on_shutdown() {
-   _shutted_down = true;
+   _was_shutdown = true;
    _tp = std::chrono::system_clock::time_point::max();
    return _p(false);
 }
@@ -57,7 +57,7 @@ int ServerHandleData::do_accept_sync() {
 coro::prepared_coro ServerHandleData::do_accept_async(
         std::chrono::system_clock::time_point tp,
         coro::awaitable<Context::Handle>::result p) {
-    if (_shutted_down) {
+    if (_was_shutdown) {
         return p(0);
     }
     _tp = tp;
@@ -66,8 +66,10 @@ coro::prepared_coro ServerHandleData::do_accept_async(
     return {};
 }
 
-template<std::invocable<int> HandleCreation>
-coro::prepared_coro ServerHandleData::on_complete(HandleCreation &&hc) {
+ServerHandleData::ServerHandleData(int socket, ContextImpl *ctx)
+    :SocketHandleData(socket), _ctx(ctx) {}
+
+coro::prepared_coro ServerHandleData::on_complete() {
     try {
         _flags = -1;
         int i = do_accept_sync();
@@ -75,7 +77,7 @@ coro::prepared_coro ServerHandleData::on_complete(HandleCreation &&hc) {
             return do_accept_async(_tp, std::move(_p));
         }
         _tp = std::chrono::system_clock::time_point::max();
-        return _p(hc(i));
+        return _p(_ctx->create_stream(i));
     } catch (...) {
         _tp = std::chrono::system_clock::time_point::max();
         return _p.set_exception(std::current_exception());
@@ -92,7 +94,7 @@ coro::prepared_coro ServerHandleData::on_timeout(std::chrono::system_clock::time
 }
 
 coro::prepared_coro ServerHandleData::on_shutdown() {
-   _shutted_down = true;
+   _was_shutdown = true;
    _tp = std::chrono::system_clock::time_point::max();
    return _p(false);
 }
@@ -156,9 +158,7 @@ void ContextImpl::thread_entry_point() {
                             using T = std::decay_t<decltype(p)>;
                             TwoCoros cr;
                             if constexpr(std::is_same_v<T, ServerHandleData>) {
-                                cr.a =  p.on_complete([&](int socket){
-                                    return create_stream(socket);
-                                });
+                                cr.a =  p.on_complete();
                             } else if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
                                 if (wr->events & EPOLLIN) {
                                     cr.a = p.on_complete_recv();
@@ -546,7 +546,7 @@ ContextImpl::Handle ContextImpl::create_server(std::string host, std::string def
             chmod(a->ai_canonname, a->ai_flags);
         }
         std::lock_guard _(_mx);
-        Handle h = _handleMap.insert(std::make_unique<ServerHandleData>(s));
+        Handle h = _handleMap.insert(std::make_unique<ServerHandleData>(s,this));
         _epoll.add(s, 0, h);
         return h;
     } catch (...) {
@@ -707,7 +707,7 @@ template<StreamType stype>
 coro::prepared_coro StreamHandleData<stype>::recv_async(
                         std::chrono::system_clock::time_point tp,
                         coro::awaitable<std::size_t>::result p) {
-    if (_shutted_down) return p(0);
+    if (_was_shutdown) return p(0);
     this->_recv_timeout = tp;
     this->_recv_result = std::move(p);
     update_timeout();
@@ -721,7 +721,7 @@ coro::prepared_coro StreamHandleData<stype>::send_async(
                         std::chrono::system_clock::time_point tp,
                         coro::awaitable<bool>::result p) {
 
-    if (_shutted_down) return p(false);
+    if (_was_shutdown) return p(false);
     this->_send_timeout = tp;
     this->_send_result = std::move(p);
     update_timeout();
@@ -800,7 +800,7 @@ TwoCoros StreamHandleData<stype>::on_timeout(std::chrono::system_clock::time_poi
 template<StreamType stype>
 TwoCoros StreamHandleData<stype>::on_shutdown() {
     TwoCoros out;
-    _shutted_down = true;
+    _was_shutdown = true;
     out.a = _recv_result.set_value(0);
     out.b = _send_result.set_value(false);
     _recv_timeout = std::chrono::system_clock::time_point::max();

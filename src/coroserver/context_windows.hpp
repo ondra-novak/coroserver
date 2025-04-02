@@ -21,10 +21,10 @@ namespace coroserver {
         bool is_base_of() const;
     
         const std::chrono::system_clock::time_point& get_timeout() const {return _tp;}
-        StreamState get_state() const {return _shutted_down?StreamState::closed:StreamState::active;}
+        StreamState get_state() const {return _was_shutdown?StreamState::closed:StreamState::active;}
     protected:
         std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
-        bool _shutted_down = false;
+        bool _was_shutdown = false;
     };
     
     class TimerHandleData: public AbstractHandleData {

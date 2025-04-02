@@ -9,7 +9,7 @@ static MsWSock mswsock;
 namespace coroserver {
 
 coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
-    if (_shutted_down) {
+    if (_was_shutdown) {
         return p(false);
     }
     _tp = tp;
@@ -26,7 +26,7 @@ coro::prepared_coro TimerHandleData::on_timeout(std::chrono::system_clock::time_
 }
 
 coro::prepared_coro TimerHandleData::on_shutdown() {
-    _shutted_down = true;
+    _was_shutdown = true;
     _tp = std::chrono::system_clock::time_point::max();
     return _p(false);
 }
@@ -38,7 +38,7 @@ coro::prepared_coro ServerHandleData::do_accept_async(
             std::chrono::system_clock::time_point tp, 
             coro::awaitable<Context::Handle>::result p) {    
 
-    if (_shutted_down) return p.set_value(0);
+    if (_was_shutdown) return p.set_value(0);
 
     ZeroMemory(&_ovr, sizeof(OVERLAPPED));
     SOCKET newSocket = socket(_af, SOCK_STREAM, IPPROTO_TCP);  //create socket
@@ -82,7 +82,7 @@ coro::prepared_coro ServerHandleData::on_error(DWORD err, LPOVERLAPPED ovr) {
     if (ovr == &_ovr) {
         _tp = _tp.max();
         if (err == ERROR_OPERATION_ABORTED) {
-            if (_shutted_down) {
+            if (_was_shutdown) {
                 return _p.set_value(0);
             } else {
                 return _p.set_empty();
@@ -103,8 +103,8 @@ coro::prepared_coro ServerHandleData::on_timeout(std::chrono::system_clock::time
 }
 
 coro::prepared_coro ServerHandleData::on_shutdown() {
-    if (!_shutted_down) {
-        _shutted_down = true;
+    if (!_was_shutdown) {
+        _was_shutdown = true;
         if (_p) {
             CancelIoEx(_handle, &_ovr);
         }
@@ -229,7 +229,7 @@ coro::prepared_coro StreamHandleData<type>::on_timeout(std::chrono::system_clock
 
 template<StreamType type>
 coro::prepared_coro StreamHandleData<type>::on_shutdown() {
-    _shutted_down = true;
+    _was_shutdown = true;
     CancelIoEx(_handle, &_send_ovr);
     CancelIoEx(_handle, &_recv_ovr);
     _send_timeout = _send_timeout.max();        
@@ -262,7 +262,7 @@ coro::prepared_coro StreamHandleData<type>::on_error(DWORD error, LPOVERLAPPED o
         update_timeout();
         if constexpr(type == StreamType::socket) {
             if (error == WSA_OPERATION_ABORTED) {
-                if (_shutted_down) return _recv_result.set_value(0);
+                if (_was_shutdown) return _recv_result.set_value(0);
                 else return _recv_result.set_empty();
             }
             if (error == WSAECONNABORTED || error == WSAECONNRESET) {
@@ -270,7 +270,7 @@ coro::prepared_coro StreamHandleData<type>::on_error(DWORD error, LPOVERLAPPED o
             }
         } else {
             if (error == ERROR_OPERATION_ABORTED) {
-                if (_shutted_down) return _recv_result.set_value(0);
+                if (_was_shutdown) return _recv_result.set_value(0);
                 else return _recv_result.set_empty();
             }
             if (error == ERROR_BROKEN_PIPE) {

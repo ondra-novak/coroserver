@@ -5,6 +5,7 @@ set(COMMON_FILES
     network.cpp
     ssl_stream.cpp        
     basic_stream.cpp
+    chunked_stream.cpp
     server.cpp
     client.cpp
 )

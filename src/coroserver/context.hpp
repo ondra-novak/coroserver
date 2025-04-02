@@ -24,6 +24,9 @@ public:
 
     static constexpr Handle null_handle = 0;
 
+    ///Default constructor doesn't create context, it just declares empty variable
+    Context() = default;
+    
     Context(std::shared_ptr<ContextImpl>);
     ~Context();
 

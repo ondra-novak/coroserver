@@ -95,9 +95,11 @@ class ReceiveBlockState {
 public:
 
     ReceiveBlockState(Cont &buff,
-            std::size_t maxbuff,
+        std::size_t processed,
+        std::size_t maxbuff,
             std::shared_ptr<IStream> stream)
         :_buff(buff)
+        ,_processed(processed)
         ,_maxbuff(maxbuff)
         ,_stream(std::move(stream)) {}
 
@@ -109,6 +111,7 @@ public:
 
 protected:
     Cont &_buff;
+    std::size_t _processed;
     std::size_t _maxbuff;
     std::shared_ptr<IStream> _stream;
 
@@ -119,7 +122,7 @@ protected:
             if (data.empty()) {
                 return promise(false);
             }
-            std::size_t remain = _maxbuff - _buff.size();
+            std::size_t remain = _maxbuff - _processed;
             if (remain <= data.size()) {
                 auto a = data.substr(0,remain);
                 auto b = data.substr(remain);
@@ -128,6 +131,7 @@ protected:
                 return promise(true);
             }
             std::copy(data.begin(), data.end(), std::back_inserter(_buff));
+            _processed += data.size();
             _callback.await_cont(_stream->read());
             return {};
         } catch (...) {
@@ -284,6 +288,7 @@ public:
      */
     template<typename Cont>
     coro::awaitable<Status> read_block(Cont &buffer, size_t size) {
+        std::size_t processed = 0;
         buffer.clear();
         auto awt = _ptr->read();
         if (awt.is_ready()) {
@@ -295,9 +300,36 @@ public:
                 return true;
             }
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
+            processed = z.size();
         }
         awt.cancel();
-        return ReceiveBlockState<Cont>(buffer, size, _ptr);
+        return ReceiveBlockState<Cont>(buffer, processed, size, _ptr);
+    }
+
+    template<std::size_t buffer_size = 1024>
+    coro::awaitable<bool> fill(std::size_t count, char byte) {
+        if (count == 0) co_return true;
+
+        char buffer[buffer_size];
+        std::fill(std::begin(buffer), std::end(buffer), byte);
+        while (count > buffer_size) {
+            bool b = co_await write(std::string_view(buffer, buffer_size));
+            if (!b) co_return false;
+            count -= buffer_size;
+        }
+        co_return write(std::string_view(buffer, count));
+    }
+
+    auto skip(std::size_t count) {
+
+        struct FakeContainer {
+            using value_type =  char;
+            void clear() {};
+            void push_back(char) {};
+        };
+        static FakeContainer cntr;
+        return read_block(cntr,count);
+
     }
 
     using Counters = IStream::Counters;

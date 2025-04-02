@@ -31,15 +31,16 @@ public:
         {v(std::back_inserter(buff))};
     })
     bool write_buff(Fn &&fn) {
-        coro::prepared_coro p;
-        std::lock_guard _(_wrmx);
-        if (_closed) return false;
-        auto iter = std::back_inserter(_current_buffer);
-        fn(iter);
-        if (_is_pending) return true;
-        _is_pending = shared_from_this();
-        _pending_buffer = std::move(_current_buffer);
-        p = _cb.await(write(std::string_view(_pending_buffer.data(), _pending_buffer.size())),
+        {
+            std::lock_guard _(_wrmx);
+            if (_closed) return false;
+            auto iter = std::back_inserter(_current_buffer);
+            fn(iter);
+            if (_is_pending) return true;
+            _is_pending = shared_from_this();
+            _pending_buffer = std::move(_current_buffer);
+        }
+        _cb.await(write(std::string_view(_pending_buffer.data(), _pending_buffer.size())),
                 [this](auto &awt){return finish_write(awt);});
         return true;
     }
@@ -100,13 +101,14 @@ protected:
             if (_pending_buffer.empty()) {
                 auto h = std::move(_is_pending);
                 _is_pending.reset();
+                auto p = finish_flush(lk, wrsz + _current_buffer.size(), true); 
                 if (_closed) {
                     _cb.await(close(), [h = std::move(h)](auto &) {});
                 }
-                return finish_flush(lk, wrsz + _current_buffer.size(), true);
+                return p;
             } else {
-                auto p = _cb.await_cont(write(std::string_view(_pending_buffer.data(), _pending_buffer.size())));
                 auto q = finish_flush(lk, wrsz, true);
+                auto p = _cb.await_cont(write(std::string_view(_pending_buffer.data(), _pending_buffer.size())));
                 return p?std::move(p):std::move(q);
             }
 
