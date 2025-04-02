@@ -52,6 +52,7 @@ protected:
     coro::prepared_coro process_data(coro::awaitable<std::string_view> &awt, coro::awaitable_result<ReceiveBlockStatus> &promise) {
         {
            try {
+                if (!awt.has_value()) return promise.set_empty();
                std::string_view data = awt.await_resume();
                if (data.empty()) {
                    return promise(false);
@@ -135,6 +136,7 @@ protected:
             coro::awaitable_result<ReceiveBlockStatus> &promise) {
         try {
             std::size_t remain = _maxbuff - _processed;
+            if (!awt.has_value()) return promise.set_empty();
             std::string_view data = awt.await_resume();
             auto sub = data.substr(0, remain);
             _stream->put_back(data.substr(sub.size()));

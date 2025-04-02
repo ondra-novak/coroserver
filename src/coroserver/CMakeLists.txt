@@ -8,6 +8,7 @@ set(COMMON_FILES
     chunked_stream.cpp
     server.cpp
     client.cpp
+    http_server_request.cpp
 )
 
 if(MSVC)
