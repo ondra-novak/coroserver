@@ -22,11 +22,14 @@ public:
     ReceiveUntilState(Cont &buff,
             pattern_search<char> &&patt,
             std::size_t maxbuff,
-            std::shared_ptr<IStream> stream)
+            std::shared_ptr<IStream> stream,
+            coro::awaitable<std::string_view> &awt)
         :_buff(buff)
         ,_patt(std::move(patt))
         ,_maxbuff(maxbuff)
-        ,_stream(std::move(stream)) {}
+        ,_stream(std::move(stream)) {
+            _callback.set_awaiter(awt);
+        }
 
 
     coro::prepared_coro operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
@@ -97,14 +100,17 @@ public:
     ReceiveBlockState(Cont &buff,
         std::size_t processed,
         std::size_t maxbuff,
-            std::shared_ptr<IStream> stream)
+        std::shared_ptr<IStream> stream,
+        coro::awaitable<std::string_view> &awt)
         :_buff(buff)
         ,_processed(processed)
         ,_maxbuff(maxbuff)
-        ,_stream(std::move(stream)) {}
+        ,_stream(std::move(stream)) {
+            _callback.set_awaiter(awt);
+        }
 
         void operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-        _callback.await(_stream->read(),[this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
+        _callback.await([this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
             return process_data(awt, promise);
         });
     }
@@ -118,20 +124,14 @@ protected:
     coro::prepared_coro process_data(coro::awaitable<std::string_view> &awt,
             coro::awaitable_result<ReceiveBlockStatus> &promise) {
         try {
-            std::string_view data = awt.await_resume();
-            if (data.empty()) {
-                return promise(false);
-            }
             std::size_t remain = _maxbuff - _processed;
-            if (remain <= data.size()) {
-                auto a = data.substr(0,remain);
-                auto b = data.substr(remain);
-                std::copy(a.begin(),a.end(), std::back_inserter(_buff));
-                _stream->put_back(b);
-                return promise(true);
-            }
+            std::string_view data = awt.await_resume();
+            auto sub = data.substr(0, remain);
+            _stream->put_back(data.substr(sub.size()));
+            if (sub.empty()) return promise(false);
             std::copy(data.begin(), data.end(), std::back_inserter(_buff));
             _processed += data.size();
+            if (_processed >= _maxbuff) return promise(true);
             _callback.await_cont(_stream->read());
             return {};
         } catch (...) {
@@ -212,6 +212,19 @@ public:
     void put_back(std::string_view s){
         _ptr->put_back(s);
     }
+
+    ///Crops incoming data to given size, and puts back extra data (cropped out)
+    /**
+     * @param source data (received from read() function)
+     * @param max_size required size
+     * @return returns string long max size bytes. Note the function can return smaller string
+     */
+    std::string_view crop_data(std::string_view data, std::size_t max_size) {
+        std::string_view sub = data.substr(0,max_size);
+        put_back(data.substr(sub.size()));
+        return sub;
+    }
+
     /// Send data to the stream asynchronously.
     [[nodiscard]] coro::awaitable<bool> write(std::string_view data) {
         return _ptr->write(data);
@@ -258,7 +271,7 @@ public:
         pattern_search<char> patt(pattern);
         buffer.clear();
         auto awt = _ptr->read();
-        if (awt.is_ready()) {
+        while (awt.is_ready()) {
             std::string_view z = awt.await_resume();
             for (std::size_t i = 0; i < z.size(); ++i) {
                 if (patt(z[i])) {
@@ -271,9 +284,9 @@ public:
                 }
             }
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
+            awt = _ptr->read();
         }
-        awt.cancel();
-        return ReceiveUntilState<Cont>(buffer, std::move(patt), limit, _ptr);
+        return ReceiveUntilState<Cont>(buffer, std::move(patt), limit, _ptr, awt);
 
     }
 
@@ -291,19 +304,15 @@ public:
         std::size_t processed = 0;
         buffer.clear();
         auto awt = _ptr->read();
-        if (awt.is_ready()) {
-            std::string_view z = awt.await_resume();
-            if (z.size() >= size) {
-                auto sub = z.substr(0,size);
-                _ptr->put_back(z.substr(size));
-                std::copy(sub.begin(), sub.end(), std::back_inserter(buffer));
-                return true;
-            }
+        while (awt.is_ready()) {
+            std::string_view z = crop_data(awt.await_resume(), size-processed);
+            if (z.empty()) return false;
             std::copy(z.begin(), z.end(), std::back_inserter(buffer));
-            processed = z.size();
+            processed += z.size();
+            if (processed >= size) return true;
+            awt = _ptr->read();
         }
-        awt.cancel();
-        return ReceiveBlockState<Cont>(buffer, processed, size, _ptr);
+        return ReceiveBlockState<Cont>(buffer, processed, size, _ptr, awt);
     }
 
     template<std::size_t buffer_size = 1024>

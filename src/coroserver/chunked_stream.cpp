@@ -34,10 +34,14 @@ coro::awaitable<std::string_view> ChunkedStream::read()
             return _chkparser.data_out();
         }
     }
-    _cb.prepare_await(awt);
-    return [this](coro::awaitable<std::string_view>::result p) {
+    _cb.set_awaiter(awt);
+    return [this](coro::awaitable<std::string_view>::result p) -> coro::prepared_coro {
+        if (!p) {
+            _cb.get_awaiter().cancel();
+            return {};
+        }
         _read_result = std::move(p);
-        _cb.await_on_prepared([this](auto &awt){return read_from_stream(awt);});
+        return _cb.await([this](auto &awt){return read_from_stream(awt);});
     };
 
 }

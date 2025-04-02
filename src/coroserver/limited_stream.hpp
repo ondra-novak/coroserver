@@ -21,13 +21,13 @@ public:
         if (awt.await_ready()) {
             return crop_input(awt.await_resume());
         }
-        _cb.prepare_await(awt);
-        return [this](coro::awaitable<std::string_view>::result r) {
+        _cb.set_awaiter(awt);
+        return [this](coro::awaitable<std::string_view>::result r) -> coro::prepared_coro {
             if (!r) {
-                _cb.get_awaiter()->cancel();
-                return coro::prepared_coro();
+                _cb.get_awaiter().cancel();
+                return {};
             }
-            return _cb.await_on_prepared([this, r = std::move(r)](coro::awaitable<std::string_view> &awt) mutable {
+            return _cb.await([this, r = std::move(r)](coro::awaitable<std::string_view> &awt) mutable {
                 try {
                     return r(crop_input(awt.await_resume()));
                 } catch (...) {

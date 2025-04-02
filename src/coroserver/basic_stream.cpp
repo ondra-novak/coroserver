@@ -27,21 +27,26 @@ coro::awaitable<std::string_view> BasicStream::read() {
        auto sz = awt.await_resume();
        return std::string_view(_buffer.data(), sz);
     } else {
-        _read_awt_cb.prepare_await(awt);
-        return [this, _ = _read_awt_cb.get_auto_cancel()](coro::awaitable<std::string_view>::result r){
-            return _read_awt_cb.await_on_prepared([this, r = std::move(r)](coro::awaitable<std::size_t> &awt) mutable {
-                try {
-                    if (!awt.has_value()) {
-                        return r.set_empty();
+        _read_awt_cb.set_awaiter(awt);
+        return [this](coro::awaitable<std::string_view>::result r) -> coro::prepared_coro{
+            if (!r) {
+                _read_awt_cb.get_awaiter().cancel();
+                return {};
+            } else {
+                return _read_awt_cb.await([this, r = std::move(r)](coro::awaitable<std::size_t> &awt) mutable {
+                    try {
+                        if (!awt.has_value()) {
+                            return r.set_empty();
+                        }
+                        std::size_t sz = awt.await_resume();
+                        _cntrs.received+=sz;
+                        if (sz == _buffer.size()) _next_buffer_size = _next_buffer_size * 3 / 2;
+                        return r.set_value(std::string_view(_buffer.data(), sz));
+                    } catch(...) {
+                        return r.set_exception(std::current_exception());
                     }
-                    std::size_t sz = awt.await_resume();
-                    _cntrs.received+=sz;
-                    if (sz == _buffer.size()) _next_buffer_size = _next_buffer_size * 3 / 2;
-                    return r.set_value(std::string_view(_buffer.data(), sz));
-                } catch(...) {
-                    return r.set_exception(std::current_exception());
-                }
-            });
+                });
+            }
         };
     }
 }
