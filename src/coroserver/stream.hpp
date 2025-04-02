@@ -33,9 +33,14 @@ public:
 
 
     coro::prepared_coro operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-        return _callback.await(_stream->read(), [this,promise = std::move(promise)](auto &awt) mutable {
-            return process_data(awt, promise);
-        });
+        if (!promise) {
+            _callback.get_awaiter().cancel();
+            return {};
+        } else {
+            return _callback.await([this,promise = std::move(promise)](auto &awt) mutable {
+                return process_data(awt, promise);
+            });
+        }
     }
 
 protected:
@@ -109,10 +114,15 @@ public:
             _callback.set_awaiter(awt);
         }
 
-        void operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-        _callback.await([this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
-            return process_data(awt, promise);
-        });
+        coro::prepared_coro operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
+            if (!promise) {
+                _callback.get_awaiter().cancel();
+                return {};
+            } else {
+                return _callback.await([this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
+                    return process_data(awt, promise);
+                });
+            }
     }
 
 protected:
@@ -273,6 +283,7 @@ public:
         auto awt = _ptr->read();
         while (awt.is_ready()) {
             std::string_view z = awt.await_resume();
+            if (z.empty()) return false;
             for (std::size_t i = 0; i < z.size(); ++i) {
                 if (patt(z[i])) {
                     ++i;
@@ -318,6 +329,7 @@ public:
     template<std::size_t buffer_size = 1024>
     coro::awaitable<bool> fill(std::size_t count, char byte) {
         if (count == 0) co_return true;
+        if (co_await coro::awaitable<bool>::is_detached()) co_return false;
 
         char buffer[buffer_size];
         std::fill(std::begin(buffer), std::end(buffer), byte);
