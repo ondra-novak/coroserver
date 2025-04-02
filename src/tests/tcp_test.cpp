@@ -83,6 +83,11 @@ int test2() {
 
 
 int main() {
-    test1();
-    test2();
+    try {
+        test1();
+        test2();
+    } catch (std::exception &e) {
+        std::cerr << "EXCEPTION: " << e.what() << std::endl;
+        return 1;
+    }
 }

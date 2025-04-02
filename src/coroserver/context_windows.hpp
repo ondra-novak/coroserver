@@ -56,7 +56,7 @@ namespace coroserver {
             SOCKET _socket;
             HANDLE _handle;
         };
-        bool _closing;
+        bool _closing = false;
 
     };
         
@@ -118,8 +118,11 @@ namespace coroserver {
         bool safe_to_close() const;
     
         void send_close();
+        void mark_opening() {_opening = true;}
 
-        protected:
+        LPOVERLAPPED get_connect_overlapped() {return &_send_ovr;};
+
+    protected:
         std::chrono::system_clock::time_point _recv_timeout = std::chrono::system_clock::time_point::max();
         std::chrono::system_clock::time_point _send_timeout = std::chrono::system_clock::time_point::max();
     

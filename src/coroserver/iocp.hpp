@@ -7,7 +7,7 @@ class IOCP {
 public:
 
     IOCP() {
-        _h = CreateIoCompletionPort(NULL,NULL,0,0);
+        _h = CreateIoCompletionPort(INVALID_HANDLE_VALUE,NULL,0,0);
         if (!_h) throw Win32Error("IOCP creation");
     }
     ~IOCP() {
@@ -25,8 +25,9 @@ public:
     }
 
     void add(HANDLE h, ULONG_PTR key) {
-        HANDLE x = CreateIoCompletionPort(h, _h, key, 0);
+        HANDLE x = CreateIoCompletionPort(h, _h, key, 0);        
         if (!x) throw Win32Error("Associate handle with IOCP");
+        SetFileCompletionNotificationModes (h, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS);
     }
 
     struct Event {

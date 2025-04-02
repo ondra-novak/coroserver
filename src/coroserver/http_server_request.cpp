@@ -50,7 +50,7 @@ HttpServerRequest::ParseHeaderStatus HttpServerRequest::parse_header()
     _path = split_at(first_line, " ");
     _protocol = first_line;
 
-    
+    return ParseHeaderStatus::ok;    
 
 }
 }

@@ -1,12 +1,19 @@
 #include "win_mswsex.h"
 #include "context_windows.hpp"
 #include "context_inc.hpp"
+#include <ws2tcpip.h>
 
 #pragma comment(lib, "Ws2_32.lib")
 
 static MsWSock mswsock;
 
 namespace coroserver {
+
+LPOVERLAPPED init_ovr(LPOVERLAPPED ptr) {
+    ZeroMemory(ptr,sizeof(OVERLAPPED));
+    return ptr;
+}
+    
 
 coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
     if (_was_shutdown) {
@@ -40,7 +47,6 @@ coro::prepared_coro ServerHandleData::do_accept_async(
 
     if (_was_shutdown) return p.set_value(0);
 
-    ZeroMemory(&_ovr, sizeof(OVERLAPPED));
     SOCKET newSocket = socket(_af, SOCK_STREAM, IPPROTO_TCP);  //create socket
     if (newSocket == INVALID_SOCKET) {
         return p.set_exception(std::make_exception_ptr(Win32Error("socket")));
@@ -51,7 +57,7 @@ coro::prepared_coro ServerHandleData::do_accept_async(
     _p = std::move(p);
     _tp = tp;
     BOOL res = mswsock.AcceptEx(_socket, _prepared_socket, 
-                                _accept_buffer, 0, bfs, bfs, &rd, &_ovr);
+                                _accept_buffer, 0, bfs, bfs, &rd, init_ovr(&_ovr));
     if (res) {
         return on_complete(0, &_ovr);
     } else {
@@ -67,7 +73,7 @@ coro::prepared_coro ServerHandleData::on_complete(DWORD, LPOVERLAPPED) {
     if (_prepared_socket == INVALID_SOCKET) return {};
     setsockopt(_prepared_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, reinterpret_cast<char *>(&_socket), sizeof(SOCKET));
     sockaddr_storage *local, *remote;
-    int local_sz = sizeof(local_sz), remote_sz = sizeof(remote_sz);
+    int local_sz = sizeof(sockaddr_storage), remote_sz = sizeof(sockaddr_storage);
     constexpr auto bfs = sizeof(_accept_buffer)/2;
     mswsock.GetAcceptExSockaddrs(_accept_buffer,0,bfs,bfs,
         reinterpret_cast<sockaddr **>(&local), &local_sz, reinterpret_cast<sockaddr **>(&remote), &remote_sz);
@@ -137,13 +143,15 @@ void StreamHandleData<type>::set_send_buffer(const char *buffer, std::size_t sz)
 
 template<StreamType type>
 coro::prepared_coro StreamHandleData<type>::recv_async(std::chrono::system_clock::time_point tp, coro::awaitable<std::size_t>::result p) {
+    if (_connect_error) return p.set_exception(std::make_exception_ptr(Win32Error(_connect_error, "Connect error")));
     _recv_timeout = tp;
     _recv_result = std::move(p);
     update_timeout();
     DWORD bytes = 0;
     if constexpr(type == StreamType::socket) {
         WSABUF buff = {static_cast<ULONG>(_recv_buffer_size), _recv_buffer};
-        if (!WSARecv(_socket,&buff,1,&bytes, 0, &_recv_ovr, NULL)) {
+        DWORD flags = 0;
+        if (WSARecv(_socket,&buff,1,&bytes, &flags, init_ovr(&_recv_ovr), NULL)) {
             DWORD err = WSAGetLastError();
             if (err == WSAECONNRESET || err == WSAECONNABORTED) {
                 _state_eof = true;
@@ -153,7 +161,7 @@ coro::prepared_coro StreamHandleData<type>::recv_async(std::chrono::system_clock
             return _recv_result.set_exception(std::make_exception_ptr(Win32Error(err, "WSARecv")));
         }
     } else {
-        if (!ReadFile(_handle, _recv_buffer, static_cast<DWORD>(_recv_buffer_size), &bytes, &_recv_ovr)) {
+        if (!ReadFile(_handle, _recv_buffer, static_cast<DWORD>(_recv_buffer_size), &bytes, init_ovr(&_recv_ovr))) {
             DWORD err = GetLastError();
             if (err == ERROR_IO_PENDING) return {};
             if (err == ERROR_BROKEN_PIPE) {
@@ -168,21 +176,23 @@ coro::prepared_coro StreamHandleData<type>::recv_async(std::chrono::system_clock
 
 template<StreamType type>
 coro::prepared_coro StreamHandleData<type>::send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
+    if (_connect_error) return p.set_exception(std::make_exception_ptr(Win32Error(_connect_error, "Connect error")));
     _send_timeout = tp;
     _send_result = std::move(p);
     update_timeout();
     if (_opening) return {};
     DWORD bytes = 0;
     if constexpr(type == StreamType::socket) {
+        DWORD flags = 0;
         WSABUF buff = {static_cast<ULONG>(_send_buffer_size), const_cast<char *>(_send_buffer)};
-        if (!WSASend(_socket, &buff, 1, &bytes, 0, &_send_ovr, NULL)) {
+        if (WSASend(_socket, &buff, 1, &bytes, flags, init_ovr(&_send_ovr), NULL)) {
             DWORD err = WSAGetLastError();
             if (err == WSA_IO_PENDING) return {};
             if (err == WSAECONNRESET || err == WSAECONNABORTED) return _send_result.set_value(false);
             return _send_result.set_exception(std::make_exception_ptr(Win32Error(err, "WSASend")));
         }
     } else {
-        if (!WriteFile(_handle,&_send_buffer, static_cast<DWORD>(_send_buffer_size), &bytes, &_send_ovr)) {
+        if (!WriteFile(_handle,&_send_buffer, static_cast<DWORD>(_send_buffer_size), &bytes, init_ovr(&_send_ovr))) {
             DWORD err = GetLastError();
             if (err == ERROR_IO_PENDING) return {};
             if (err == ERROR_BROKEN_PIPE) return _recv_result.set_value(false);
@@ -195,7 +205,10 @@ coro::prepared_coro StreamHandleData<type>::send_async(std::chrono::system_clock
 template<StreamType type>
 coro::prepared_coro StreamHandleData<type>::on_complete(DWORD bytes, LPOVERLAPPED ovr) {
     if (ovr == &_send_ovr) {
-        _opening = false;
+        if (_opening) {
+            setsockopt(_socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
+            _opening = false;
+        }
         _send_buffer+=bytes;
         _send_buffer_size-= bytes;
         if (_send_buffer_size) {
@@ -205,9 +218,11 @@ coro::prepared_coro StreamHandleData<type>::on_complete(DWORD bytes, LPOVERLAPPE
         update_timeout();
         return _send_result(true);
     } else if (ovr == &_recv_ovr) {
-        _send_timeout = _send_timeout.max();
+        _recv_timeout = _send_timeout.max();
         update_timeout();
-        if (bytes == 0) _state_eof = 0;
+        if (bytes == 0) {
+            _state_eof = true;
+        }
         return _recv_result(bytes);
     }
     return {};
@@ -326,6 +341,8 @@ StreamHandleData<type>::~StreamHandleData() {
 }
 
 
+ContextImpl::ContextImpl() {}
+
 
 void ContextImpl::thread_entry_point() {
     std::vector<coro::prepared_coro> prepared;
@@ -442,10 +459,88 @@ coro::awaitable<bool> ContextImpl::sleep(Handle timer, std::chrono::system_clock
 
         });
     };
-
-
 }
+
+
+std::shared_ptr<struct addrinfo> dns_resolve(std::string host, std::string def_port, bool passive) {
+    if (!host.empty()) {
+        std::string_view vhost = host;
+        if (vhost.front() == '[')   { //ipv6 addr
+            auto sep = vhost.find(']');
+            if (sep == vhost.npos) {
+                throw std::invalid_argument("Incomplete IPv6 address");
+            }
+            auto sep2 = vhost.find(':', sep);
+            if (sep2 != vhost.npos) {
+                def_port = std::string(vhost.substr(sep2+1));
+            }
+            host = std::string(vhost.substr(1, sep-1));
+        } else {
+            auto sep = vhost.rfind(':');
+            if (sep != vhost.npos) {
+                def_port = std::string(vhost.substr(sep+1));
+                host.resize(sep);
+            }
+        }
+    }
+
+    struct addrinfo req =  {};
+    req.ai_family = AF_UNSPEC;
+    req.ai_socktype = SOCK_STREAM;
+    req.ai_protocol = IPPROTO_TCP;
+    req.ai_flags = (passive?AI_PASSIVE:0)|AI_ADDRCONFIG;
+    struct addrinfo *out = nullptr;
+    int r = getaddrinfo(host.empty()?nullptr:host.c_str(), def_port.c_str(), &req, &out);
+    if (r != 0) {
+        throw std::runtime_error("GAI Error: " + std::string(gai_strerror(r)));
+    } else {
+        return {out, [](auto a){freeaddrinfo(a);}};
+    }
+}
+
+
+
+ContextImpl::Handle ContextImpl::create_server(std::string host, std::string def_port) {
+    auto a =  dns_resolve(host, def_port, true);
+    if (a == nullptr) throw std::system_error(ENOENT, std::system_category(), "DNS resolv failed");
+    SOCKET s = socket(a->ai_family,SOCK_STREAM, a->ai_protocol);
+    if (s < 0) throw std::system_error(errno, std::system_category(), "socket");
+    try {
+        if (bind(s, a->ai_addr, static_cast<int>(a->ai_addrlen)) != 0) {
+            throw std::system_error(errno, std::system_category(), "bind");
+        }
+        if (listen(s, SOMAXCONN) != 0) {
+            throw std::system_error(errno, std::system_category(), "listen");
+        }
+        std::lock_guard _(_mx);
+        Handle h = _handleMap.insert(std::make_unique<ServerHandleData>(s,a->ai_family,this));
+        _iocp.add(reinterpret_cast<HANDLE>(s), h);
+        return h;
+    } catch (...) {
+        close(s);
+        throw;
+    }
+}
+
+
 coro::awaitable<ContextImpl::Handle> ContextImpl::accept(Handle server, std::chrono::system_clock::time_point timeout) {
+    return [this, server, timeout](coro::awaitable<ContextImpl::Handle>::result r) -> coro::prepared_coro{
+        if (!r) return {};
+        std::lock_guard _(_mx);
+        auto iter = _handleMap.find(server);
+        if (iter == _handleMap.end()) return r(0);
+        return iter->_value->visit([&](auto &srv) -> coro::prepared_coro {
+            using T = std::decay_t<decltype(srv)>;
+            coro::prepared_coro p;
+            if constexpr(std::is_same_v<T, ServerHandleData>) {
+                p =srv.do_accept_async(timeout, std::move(r));
+                update_timeout(srv);                
+            } else {
+                p = r(0);
+            }
+            return p;
+        });
+    };
 
 }
 coro::awaitable<size_t> ContextImpl::receive(Handle stream, char *buffer, std::size_t sz, std::chrono::system_clock::time_point timeout) {
@@ -464,8 +559,9 @@ coro::awaitable<size_t> ContextImpl::receive(Handle stream, char *buffer, std::s
                     if (iter == _handleMap.end()) pc = p(0);
                     else {
                         auto &strm = static_cast<T &>(*iter->_value);
+                        auto me = this;
                         pc =  strm.recv_async(timeout, std::move(p));
-                        update_timeout(strm);
+                        me->update_timeout(strm);
                     }
                 }
                 return pc;
@@ -491,8 +587,9 @@ coro::awaitable<bool> ContextImpl::send(Handle stream, const char *buffer, std::
                     if (iter == _handleMap.end()) pc = p(0);
                     else {
                         auto &strm = static_cast<T &>(*iter->_value);
+                        auto me = this;
                         pc =  strm.send_async(timeout, std::move(p));
-                        update_timeout(strm);
+                        me->update_timeout(strm);
                     }
                 }
                 return pc;
@@ -519,7 +616,119 @@ coro::awaitable<bool> ContextImpl::send_eof(Handle stream) {
     });
 }
 
+ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port) {
+    auto a = dns_resolve(std::move(host), std::move(def_port), false);
+    if (a == nullptr) throw std::system_error(ENOENT, std::system_category(), "DNS resolv failed");
+    SOCKET s = socket(a->ai_family,a->ai_socktype, a->ai_protocol);
+    if (s < 0) throw std::system_error(errno, std::system_category(), "socket");
+    try {
+        coro::prepared_coro pc;
+        auto hds = std::make_unique<StreamHandleData<StreamType::socket> >(s);                
+        auto &hdsr = *hds;
+        hdsr.mark_opening();
+        std::lock_guard _(_mx);
+        Handle h = _handleMap.emplace(std::move(hds));
+        _iocp.add(reinterpret_cast<HANDLE>(s),h);
+        
+        {
+            struct sockaddr_storage addr = {};
+            ZeroMemory(&addr, sizeof(addr));
+            addr.ss_family = static_cast<ADDRESS_FAMILY>(a->ai_family);
+            bind(s, reinterpret_cast<SOCKADDR*>(&addr), static_cast<int>(a->ai_addrlen));
+        }
+
+        BOOL r = mswsock.ConnectEx(s, a->ai_addr, static_cast<int>(a->ai_addrlen),NULL,0,NULL,init_ovr(hdsr.get_connect_overlapped()));
+        if (r) {
+            pc = hdsr.on_complete(0, hds->get_connect_overlapped());
+        } else {
+            DWORD error = WSAGetLastError();
+            if (error != WSA_IO_PENDING) {
+                _handleMap.erase(h);
+                throw Win32Error(error, "ConnectEx");
+            }
+        }
+        update_timeout(hdsr);
+        return h;
+    } catch (...) {
+        closesocket(s);
+        throw;
+    }
+}
+
+ContextImpl::Handle ContextImpl::connect(SpecialDevice) {
+    throw std::runtime_error("unsupported");
+}
+
+static std::string sockaddrToString(const sockaddr* addr) {
+    if (addr == nullptr) {
+        return "unknown";
+    }
+
+    switch (addr->sa_family) {
+        case AF_INET: {
+            const sockaddr_in* ipv4 = reinterpret_cast<const sockaddr_in*>(addr);
+            char ip_str[INET_ADDRSTRLEN];
+            if (ipv4->sin_addr.S_un.S_addr != INADDR_ANY) {
+                inet_ntop(AF_INET, &(ipv4->sin_addr), ip_str, INET_ADDRSTRLEN);
+            } else {
+                strcpy_s(ip_str, "127.0.0.1");
+            }
+            return std::string(ip_str) + ":" + std::to_string(ntohs(ipv4->sin_port));
+        }
+
+        case AF_INET6: {
+            const sockaddr_in6* ipv6 = reinterpret_cast<const sockaddr_in6*>(addr);
+            char ip_str[INET6_ADDRSTRLEN];
+            if (IN6_IS_ADDR_UNSPECIFIED(&ipv6->sin6_addr)) {
+                strcpy_s(ip_str, "::1");
+            } else {
+                inet_ntop(AF_INET6, &(ipv6->sin6_addr), ip_str, INET6_ADDRSTRLEN);
+            }
+            return "[" + std::string(ip_str) + "]:" + std::to_string(ntohs(ipv6->sin6_port));
+        }
+
+        default:
+            return "unknown";
+    }
+}
 
 
-     
+std::string ContextImpl::get_host(Handle h) const {
+    std::lock_guard _(_mx);
+    auto iter = _handleMap.find(h);
+    if (iter == _handleMap.end()) return {};
+    return iter->_value->visit([&](const auto &p) -> std::string {
+        using T = std::decay_t<decltype(p)>;
+        sockaddr_storage sock_stor;
+        socklen_t slen = sizeof(sock_stor);
+       if constexpr(std::is_same_v<ServerHandleData, T>) {
+           SOCKET socket = p.get_socket();
+           if (getsockname(socket, reinterpret_cast<sockaddr *>(&sock_stor), &slen) == 0) {
+               return sockaddrToString(reinterpret_cast<sockaddr *>(&sock_stor));
+           } else {
+               return {};
+           }
+       } else {
+           return {};
+       }
+    });
+}
+ 
+void ContextImpl::update_timeout(const AbstractHandleData &hd) {
+    auto tm = hd.get_timeout();
+    if (tm < _new_tp) {
+        _new_tp = tm;
+        _iocp.post(0);
+    }
+}
+
+ContextImpl::Handle ContextImpl::create_stream(SOCKET socket) {
+    Handle h = _handleMap.emplace(std::make_unique<StreamHandleData<StreamType::socket> >(socket));
+    _iocp.add(reinterpret_cast<HANDLE>(socket), h);
+    return h;
+    
+}
+
+
+
 }
