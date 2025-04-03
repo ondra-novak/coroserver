@@ -7,6 +7,13 @@
 
 namespace coroserver {
 
+enum class HandleType {
+    timer,
+    server,
+    socket,
+    pipes
+};
+
 struct TwoCoros {
     coro::prepared_coro a = {};
     coro::prepared_coro b = {};
@@ -18,42 +25,56 @@ struct TwoCoros {
 
 class AbstractHandleData {
 public:
-    virtual ~AbstractHandleData() = default;
+
+    AbstractHandleData(HandleType type):_type(type) {}
+
+    HandleType get_type() const {return _type;}
 
 
     template<typename Fn>
     auto visit(Fn &&fn);
+    template<typename Fn>
+    auto visit(Fn &&fn) const;
 
-    template<typename X>
-    bool is_base_of() const;
 
-    const std::chrono::system_clock::time_point& get_timeout() const {return _tp;}
     StreamState get_state() const {return _was_shutdown?StreamState::closed:StreamState::active;}
 protected:
-    std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
+    HandleType _type;
     bool _was_shutdown = false;
 };
 
 class TimerHandleData: public AbstractHandleData {
 public:
 
+    TimerHandleData():AbstractHandleData(HandleType::timer) {}
+
     coro::prepared_coro sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p);
+    coro::prepared_coro on_complete(int) {return {};}
     coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
     coro::prepared_coro on_shutdown();
+
+    template<std::invocable<int, int> Svc>
+    void apply_epoll_flags(Svc &&) const {}
+
+    const std::chrono::system_clock::time_point& get_timeout() const {return _tp;}
+
 protected:
     coro::awaitable<bool>::result _p;
+    std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
 };
 
 class SocketHandleData: public AbstractHandleData {
 public:
-    SocketHandleData(int socket):_socket(socket) {}
+    SocketHandleData(HandleType type, int socket):AbstractHandleData(type),_socket(socket) {}
 
-    int get_socket() const {return _socket;}
-    int get_flags() const {return _flags;}
+//    int get_socket() const {return _socket;}
+
+    std::string get_host() const;
+
+    ~SocketHandleData();
 
 protected:
     int _socket;
-    int _flags = -1;
 
 };
 
@@ -65,25 +86,25 @@ public:
 
     int do_accept_sync();
     coro::prepared_coro do_accept_async(std::chrono::system_clock::time_point tp, coro::awaitable<Context::Handle>::result p);
-    coro::prepared_coro on_complete();
+    coro::prepared_coro on_complete(int flags);
     coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
     coro::prepared_coro on_shutdown();
+
+    template<std::invocable<int, int> Svc>
+    void apply_epoll_flags(Svc &&svc) const;
+
+    const std::chrono::system_clock::time_point& get_timeout() const {return _tp;}
 
 
 protected:
     coro::awaitable<Context::Handle>::result _p = {};
+    std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
     ContextImpl *_ctx;
 };
 
 
-enum class StreamType {
-    socket,
-    pipe
-};
-
 class StreamHandleTag {};
 
-template<StreamType type>
 class StreamHandleData: public SocketHandleData, public StreamHandleTag {
 public:
 
@@ -97,13 +118,17 @@ public:
     ///send async - must be used after send_sync to set buffers
     coro::prepared_coro send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p);
 
-    coro::prepared_coro on_complete_recv();
-    coro::prepared_coro on_complete_send();
+    TwoCoros on_complete(int flags);
     TwoCoros on_timeout(std::chrono::system_clock::time_point tp);
     TwoCoros on_shutdown();
     StreamState get_state() const;
 
     void send_close();
+
+    template<std::invocable<int, int> Svc>
+    void apply_epoll_flags(Svc &&svc) const;
+
+    std::chrono::system_clock::time_point get_timeout() const;
 
 
 protected:
@@ -126,35 +151,7 @@ protected:
     bool _opening = true;
 
 
-    void update_timeout();
-    void update_flags();
 };
-
-
-template<typename Fn>
-auto AbstractHandleData::visit(Fn &&fn) {
-    const std::type_info &t = typeid(*this);
-    if (t == typeid(StreamHandleData<StreamType::socket>)) {
-        return fn(*static_cast<StreamHandleData<StreamType::socket> *>(this));
-    } else if (t == typeid(StreamHandleData<StreamType::pipe>)) {
-        return fn(*static_cast<StreamHandleData<StreamType::pipe> *>(this));
-    } else if (t == typeid(ServerHandleData)) {
-        return fn(*static_cast<ServerHandleData *>(this));
-    } else if (t == typeid(TimerHandleData)) {
-        return fn(*static_cast<TimerHandleData *>(this));
-    } else {
-        throw std::logic_error("unknown handle data");
-    }
-}
-
-
-template<typename X>
-bool AbstractHandleData::is_base_of() const {
-    return visit([](const auto &x){
-        using T = std::decay_t<decltype(x)>;
-        return std::is_base_of_v<X, T>;
-    });
-}
 
 
 class ContextImpl {
@@ -182,7 +179,12 @@ public:
     void signal_stop();
 
 protected:
-    using PHandleData = std::unique_ptr<AbstractHandleData>;
+
+    struct HandleDataDeleter {
+        void operator()(AbstractHandleData *p);
+    };
+
+    using PHandleData = std::unique_ptr<AbstractHandleData, HandleDataDeleter>;
     using HandleMap = HandleHashMap<PHandleData>;
 
 
@@ -198,11 +200,11 @@ protected:
 
     mutable std::mutex _mx;
 
-    void update_epoll_flags(Handle h, const SocketHandleData &pb);
+    void update_epoll_flags(Handle h, const AbstractHandleData &pb);
     void update_timeout(const AbstractHandleData &hd);
     Handle create_stream(int socket);
     Handle connect_fifo(const char *fname, int flags);
-    
+
     friend class ServerHandleData;
 
 

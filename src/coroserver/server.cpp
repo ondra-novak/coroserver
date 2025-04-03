@@ -6,6 +6,14 @@ namespace coroserver {
 TCPServer::TCPServer(Context ctx, Context::Handle h)
         :_ctx(std::move(ctx)), _h(std::move(h)) {}
 
+TCPServer::~TCPServer() {
+    if (_h) _ctx.close(_h);
+}
+
+TCPServer::TCPServer(TCPServer &&other):_ctx(std::move(other._ctx)),_h(other._h) {
+    other._h = Context::null_handle;
+}
+
 TCPServer TCPServer::create(Context ctx, std::string host, std::string def_port) {
     auto h = ctx.create_server(host, def_port);
     return {std::move(ctx), h};
@@ -45,6 +53,7 @@ coro::awaitable<Stream> TCPServer::accept(std::chrono::system_clock::time_point 
 }
 
 void TCPServer::shutdown() {
+    _ctx.shutdown(_h);
 }
 
 }

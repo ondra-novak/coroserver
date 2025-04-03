@@ -12,6 +12,10 @@ public:
 
     TCPServer(Context ctx, Context::Handle h);
 
+    ~TCPServer();
+
+    TCPServer(TCPServer &&other);
+
     static TCPServer create(Context ctx, std::string host, std::string def_port);
 
     std::string get_host() const;
@@ -24,7 +28,7 @@ public:
 
 protected:
     Context _ctx;
-    Context::Handle _h;
+    Context::Handle _h = 0;
 
     coro::awaiting_callback<coro::awaitable<Context::Handle> ,
         TCPServer *, coro::awaitable<Stream>::result> _callback;

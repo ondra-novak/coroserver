@@ -17,6 +17,37 @@
 
 namespace coroserver {
 
+constexpr auto max_timeout = std::chrono::system_clock::time_point::max();
+
+
+template<typename Fn>
+auto AbstractHandleData::visit(Fn &&fn) {
+    switch (_type) {
+        case HandleType::socket: return fn(*static_cast<StreamHandleData *>(this));
+        case HandleType::server: return fn(*static_cast<ServerHandleData *>(this));
+        case HandleType::timer: return fn(*static_cast<TimerHandleData *>(this));
+        default:throw std::logic_error("unknown handle data");
+    }
+}
+template<typename Fn>
+auto AbstractHandleData::visit(Fn &&fn) const {
+    switch (_type) {
+        case HandleType::socket: return fn(*static_cast<const StreamHandleData *>(this));
+        case HandleType::server: return fn(*static_cast<const ServerHandleData *>(this));
+        case HandleType::timer: return fn(*static_cast<const TimerHandleData *>(this));
+        default:throw std::logic_error("unknown handle data");
+    }
+}
+
+void ContextImpl::HandleDataDeleter::operator()(AbstractHandleData *p) {
+    p->visit([](auto &x){
+        auto ptr = &x;
+        delete ptr;
+    });
+}
+
+
+
 
 coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
    if (_was_shutdown) {
@@ -29,7 +60,7 @@ coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time
 
 coro::prepared_coro TimerHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
    if (tp <= _tp) {
-       _tp = std::chrono::system_clock::time_point::max();
+       _tp = max_timeout;
        return _p(true);
    }
    return {};
@@ -37,8 +68,12 @@ coro::prepared_coro TimerHandleData::on_timeout(std::chrono::system_clock::time_
 
 coro::prepared_coro TimerHandleData::on_shutdown() {
    _was_shutdown = true;
-   _tp = std::chrono::system_clock::time_point::max();
+   _tp = max_timeout;
    return _p(false);
+}
+
+SocketHandleData::~SocketHandleData() {
+    if (_socket >= 0) ::close(_socket);
 }
 
 int ServerHandleData::do_accept_sync() {
@@ -54,6 +89,17 @@ int ServerHandleData::do_accept_sync() {
     return r;
 }
 
+template<std::invocable<int, int> Svc>
+void ServerHandleData::apply_epoll_flags(Svc &&svc) const {
+    if (_p) {
+        svc(_socket, EPOLLIN|EPOLLONESHOT);
+    } else {
+        svc(_socket, 0);
+    }
+
+}
+
+
 coro::prepared_coro ServerHandleData::do_accept_async(
         std::chrono::system_clock::time_point tp,
         coro::awaitable<Context::Handle>::result p) {
@@ -62,32 +108,29 @@ coro::prepared_coro ServerHandleData::do_accept_async(
     }
     _tp = tp;
     _p = std::move(p);
-    _flags = EPOLLIN|EPOLLONESHOT;
     return {};
 }
 
 ServerHandleData::ServerHandleData(int socket, ContextImpl *ctx)
-    :SocketHandleData(socket), _ctx(ctx) {}
+    :SocketHandleData(HandleType::server, socket), _ctx(ctx) {}
 
-coro::prepared_coro ServerHandleData::on_complete() {
+coro::prepared_coro ServerHandleData::on_complete(int /*flags*/) {
     try {
-        _flags = -1;
         int i = do_accept_sync();
         if (i == -1) {
             return do_accept_async(_tp, std::move(_p));
         }
-        _tp = std::chrono::system_clock::time_point::max();
+        _tp = max_timeout;
         return _p(_ctx->create_stream(i));
     } catch (...) {
-        _tp = std::chrono::system_clock::time_point::max();
+        _tp = max_timeout;
         return _p.set_exception(std::current_exception());
     }
 }
 
 coro::prepared_coro ServerHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
     if (tp <= _tp) {
-        _flags = -1;
-        _tp = std::chrono::system_clock::time_point::max();
+        _tp = max_timeout;
         return _p(0);
     }
     return {};
@@ -95,7 +138,7 @@ coro::prepared_coro ServerHandleData::on_timeout(std::chrono::system_clock::time
 
 coro::prepared_coro ServerHandleData::on_shutdown() {
    _was_shutdown = true;
-   _tp = std::chrono::system_clock::time_point::max();
+   _tp = max_timeout;
    return _p(false);
 }
 
@@ -103,12 +146,12 @@ ContextImpl::ContextImpl() {
     _epoll.add(_epoll_wk.get_fd(),EPOLLIN|EPOLLONESHOT,null_handle);
 }
 
-void ContextImpl::update_epoll_flags(Handle h, const SocketHandleData &pb) {
-    int socket = pb.get_socket();
-    int flags = pb.get_flags();
-    if (flags != -1) {
-        _epoll.mod(socket, flags, h);
-    }
+void ContextImpl::update_epoll_flags(Handle h, const AbstractHandleData &pb) {
+    pb.visit([&](const auto &b){
+        b.apply_epoll_flags([&](int socket, int flags) {
+            _epoll.mod(socket, flags, h);
+        });
+    });
 
 }
 
@@ -123,22 +166,19 @@ void ContextImpl::thread_entry_point() {
         }
         auto now = std::chrono::system_clock::now();
         if (_awaiting_thread == my_thread_id && now >= _awaiting_tp) {
-            auto tp = std::chrono::system_clock::time_point::max();
+            auto tp = max_timeout;
             for (auto &hm : _handleMap) {
-                auto ctp = hm._value->get_timeout();
-                if (ctp <= now) {
-                    TwoCoros r = hm._value->visit([&](auto &p)->TwoCoros{
-                        auto r = p.on_timeout(now);
-                        if constexpr(std::is_base_of_v<SocketHandleData, std::decay<decltype(p)> >) {
-                            update_epoll_flags(hm._handle, p);
-                        }
-                        return r;
-                    });
-                    if (r.a) prepared.push_back(std::move(r.a));
-                    if (r.b) prepared.push_back(std::move(r.b));
-                } else {
-                    if (ctp < tp) tp = ctp;
-                }
+                hm._value->visit([&](auto &p) {
+                    auto ctp = p.get_timeout();
+                    if (ctp <= now) {
+                        TwoCoros r = p.on_timeout(now);
+                        update_epoll_flags(hm._handle, p);
+                        if (r.a) prepared.push_back(std::move(r.a));
+                        if (r.b) prepared.push_back(std::move(r.b));
+                    } else {
+                        if (ctp < tp) tp = ctp;
+                    }
+                });
             }
             _awaiting_tp = tp;
         }
@@ -155,21 +195,8 @@ void ContextImpl::thread_entry_point() {
                     auto iter = _handleMap.find(h);
                     if (iter != _handleMap.end()) {
                         TwoCoros r = iter->_value->visit([&](auto &p) -> TwoCoros {
-                            using T = std::decay_t<decltype(p)>;
-                            TwoCoros cr;
-                            if constexpr(std::is_same_v<T, ServerHandleData>) {
-                                cr.a =  p.on_complete();
-                            } else if constexpr(std::is_base_of_v<StreamHandleTag, T>) {
-                                if (wr->events & EPOLLIN) {
-                                    cr.a = p.on_complete_recv();
-                                }
-                                if (wr->events & EPOLLOUT) {
-                                    cr.b = p.on_complete_send();
-                                }
-                            }
-                            if constexpr(std::is_base_of_v<SocketHandleData, T>) {
-                                update_epoll_flags(h, p);
-                            }
+                            TwoCoros cr = p.on_complete(wr->events);
+                            update_epoll_flags(h, p);
                             return cr;
                         });
                         if (r.a) prepared.push_back(std::move(r.a));
@@ -196,29 +223,9 @@ void ContextImpl::shutdown(Handle h) {
     }
 }
 
-void ContextImpl::close(Handle h) {
-    TwoCoros r;
-    std::lock_guard _(_mx);
-    auto iter = _handleMap.find(h);
-    if (iter != _handleMap.end()) {
-        r = iter->_value->visit([&](auto &p) -> TwoCoros {
-            using T = std::decay_t<decltype(p)>;
-           TwoCoros r =  p.on_shutdown();
-           if constexpr(std::is_base_of_v<SocketHandleData, T>) {
-               SocketHandleData &pb = p;
-               int socket = pb.get_socket();
-               _epoll.del(socket);
-               ::close(socket);
-           }
-           return r;
-        });
-        _handleMap.erase(iter);
-    }
-}
-
 ContextImpl::Handle ContextImpl::create_timer() {
     std::lock_guard _(_mx);
-    Handle h = _handleMap.insert(std::make_unique<TimerHandleData>());
+    Handle h = _handleMap.insert(PHandleData(new TimerHandleData));
     return h;
 }
 
@@ -228,8 +235,7 @@ coro::awaitable<bool> ContextImpl::sleep(Handle timer,
     return [this, timer, tp](coro::awaitable<bool>::result p) -> coro::prepared_coro{
         std::lock_guard _(_mx);
         auto iter = _handleMap.find(timer);
-        auto vptr = iter->_value.get();
-        if (iter == _handleMap.end() || typeid(*vptr) != typeid(TimerHandleData)) return p(false);
+        if (iter == _handleMap.end() && iter->_value->get_type() != HandleType::timer) return p(false);
         auto tm = static_cast<TimerHandleData *>(iter->_value.get());
         auto r =  tm->sleep_until(tp, std::move(p));
         update_timeout(*tm);
@@ -240,8 +246,7 @@ coro::awaitable<bool> ContextImpl::sleep(Handle timer,
 coro::awaitable<ContextImpl::Handle> ContextImpl::accept(Handle server, std::chrono::system_clock::time_point timeout) {
     std::lock_guard _(_mx);
     auto iter = _handleMap.find(server);
-    auto vptr = iter->_value.get();
-    if (iter == _handleMap.end() || typeid(*vptr) != typeid(ServerHandleData)) return null_handle;
+    if (iter == _handleMap.end() || iter->_value->get_type() != HandleType::server) return null_handle;
     auto *srv = static_cast<ServerHandleData *>(iter->_value.get());
     int socket = srv->do_accept_sync();
     if (socket>=0) {
@@ -319,11 +324,13 @@ coro::awaitable<bool> ContextImpl::send(Handle stream, const char *buffer,
 }
 
 void ContextImpl::update_timeout(const AbstractHandleData &hd) {
-    auto tm = hd.get_timeout();
-    if (tm < _new_tp) {
-        _new_tp = tm;
-        _epoll_wk.set();
-    }
+    hd.visit([&](const auto &hd) {
+        auto tm = hd.get_timeout();
+        if (tm < _new_tp) {
+            _new_tp = tm;
+            _epoll_wk.set();
+        }
+    });
 }
 
 coro::awaitable<bool> ContextImpl::send_eof(Handle stream) {
@@ -366,14 +373,22 @@ static std::string sockaddrToString(const sockaddr* addr) {
         case AF_INET: {
             const sockaddr_in* ipv4 = reinterpret_cast<const sockaddr_in*>(addr);
             char ip_str[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &(ipv4->sin_addr), ip_str, INET_ADDRSTRLEN);
+            if (ipv4->sin_addr.s_addr != INADDR_ANY) {
+                inet_ntop(AF_INET, &(ipv4->sin_addr), ip_str, INET_ADDRSTRLEN);
+            } else {
+                strcpy(ip_str, "127.0.0.1");
+            }
             return std::string(ip_str) + ":" + std::to_string(ntohs(ipv4->sin_port));
         }
 
         case AF_INET6: {
             const sockaddr_in6* ipv6 = reinterpret_cast<const sockaddr_in6*>(addr);
             char ip_str[INET6_ADDRSTRLEN];
-            inet_ntop(AF_INET6, &(ipv6->sin6_addr), ip_str, INET6_ADDRSTRLEN);
+            if (IN6_IS_ADDR_UNSPECIFIED(&ipv6->sin6_addr)) {
+                strcpy(ip_str, "::1");
+            } else {
+                inet_ntop(AF_INET6, &(ipv6->sin6_addr), ip_str, INET6_ADDRSTRLEN);
+            }
             return "[" + std::string(ip_str) + "]:" + std::to_string(ntohs(ipv6->sin6_port));
         }
 
@@ -387,21 +402,24 @@ static std::string sockaddrToString(const sockaddr* addr) {
     }
 }
 
+std::string SocketHandleData::get_host() const {
+    sockaddr_storage sock_stor;
+    socklen_t slen = sizeof(sock_stor);
+    if (getsockname(_socket, reinterpret_cast<sockaddr *>(&sock_stor), &slen) == 0) {
+        return sockaddrToString(reinterpret_cast<sockaddr *>(&sock_stor));
+    } else {
+        return {};
+    }
+}
+
 std::string ContextImpl::get_host(Handle h) const {
     std::lock_guard _(_mx);
     auto iter = _handleMap.find(h);
     if (iter == _handleMap.end()) return {};
     return iter->_value->visit([&](const auto &p) -> std::string {
         using T = std::decay_t<decltype(p)>;
-        sockaddr_storage sock_stor;
-        socklen_t slen = sizeof(sock_stor);
-       if constexpr(std::is_same_v<ServerHandleData, T>) {
-           int socket = p.get_socket();
-           if (getsockname(socket, reinterpret_cast<sockaddr *>(&sock_stor), &slen) == 0) {
-               return sockaddrToString(reinterpret_cast<sockaddr *>(&sock_stor));
-           } else {
-               return {};
-           }
+       if constexpr(std::is_base_of_v<SocketHandleData, T>) {
+           return p.get_host();
        } else {
            return {};
        }
@@ -546,7 +564,7 @@ ContextImpl::Handle ContextImpl::create_server(std::string host, std::string def
             chmod(a->ai_canonname, a->ai_flags);
         }
         std::lock_guard _(_mx);
-        Handle h = _handleMap.insert(std::make_unique<ServerHandleData>(s,this));
+        Handle h = _handleMap.insert(PHandleData(new ServerHandleData(s,this)));
         _epoll.add(s, 0, h);
         return h;
     } catch (...) {
@@ -554,8 +572,11 @@ ContextImpl::Handle ContextImpl::create_server(std::string host, std::string def
         throw;
     }
 }
+ContextImpl::Handle ContextImpl::connect(SpecialDevice /*dev*/) {
+    return 0;
 
-ContextImpl::Handle ContextImpl::connect(SpecialDevice dev) {
+    /*
+
     int srcfd;
     switch (dev) {
         case SpecialDevice::standard_input: srcfd = 0;break;
@@ -579,16 +600,20 @@ ContextImpl::Handle ContextImpl::connect(SpecialDevice dev) {
     Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::pipe> >(tfd));
     _epoll.add(tfd, 0, h);
     return h;
+*/
 
 }
 
-ContextImpl::Handle ContextImpl::connect_fifo(const char *fname, int flags) {
+ContextImpl::Handle ContextImpl::connect_fifo(const char */*fname*/, int /*flags*/) {
+    return 0;
+    /*
     int fd = ::open(fname, flags | O_NONBLOCK| O_CLOEXEC);
     if (fd == -1) throw std::system_error(errno, std::system_category(), "fifo open");
     std::lock_guard _(_mx);
     Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::pipe>>(fd));
     _epoll.add(fd, 0, h);
     return h;
+*/
 }
 
 ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port) {
@@ -619,79 +644,56 @@ ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port)
     }
 }
 
-ContextImpl::Handle ContextImpl::create_stream(int socket) {
-    Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::socket>>(socket));
-    _epoll.add(socket, EPOLLOUT|EPOLLONESHOT, h);
+ContextImpl::Handle ContextImpl::create_stream(int s) {
+    Handle h = _handleMap.insert(PHandleData(new StreamHandleData(s)));
+    _epoll.add(s, EPOLLOUT|EPOLLONESHOT, h);
     return h;
 }
 
-template<StreamType stype>
-StreamHandleData<stype>::StreamHandleData(int fd): SocketHandleData(fd), _opening(stype == StreamType::socket) {
+StreamHandleData::StreamHandleData(int fd): SocketHandleData(HandleType::socket,fd), _opening(true) {
 }
 
-template<StreamType stype>
-int StreamHandleData<stype>::recv_sync(char *buffer, std::size_t sz) {
+
+int StreamHandleData::recv_sync(char *buffer, std::size_t sz) {
     this->_recv_buffer = buffer;
     this->_recv_buffer_size = sz;
     return do_recv();
 }
-template<StreamType stype>
-int StreamHandleData<stype>::do_recv() {
+
+int StreamHandleData::do_recv() {
     if (_state_eof) return 0;
     if (_connect_error) throw std::system_error(_connect_error, std::system_category(), "Connect error");
-    if constexpr(stype == StreamType::socket) {
-        int r = ::recv(_socket, this->_recv_buffer, this->_recv_buffer_size, MSG_DONTWAIT);
-        if (r < 0) {
-            int e = errno;
-            if (e == EWOULDBLOCK) return -1;
-            if (e == EPIPE) return 0;
-            throw std::system_error(e, std::system_category(), "recv");
-        }
-        if (r == 0) _state_eof = true;
-        return r;
-    } else {
-        int r = ::read(_socket, this->_recv_buffer, this->_recv_buffer_size);
-        if (r < 0) {
-            int e = errno;
-            if (e == EWOULDBLOCK) return -1;
-            if (e == EPIPE) return 0;
-            throw std::system_error(e, std::system_category(), "read");
-        }
-        if (r == 0) _state_eof = true;
-        return r;
+    int r = ::recv(_socket, this->_recv_buffer, this->_recv_buffer_size, MSG_DONTWAIT);
+    if (r < 0) {
+        int e = errno;
+        if (e == EWOULDBLOCK) return -1;
+        if (e == EPIPE) return 0;
+        throw std::system_error(e, std::system_category(), "recv");
     }
+    if (r == 0) _state_eof = true;
+    return r;
 }
 
-template<StreamType stype>
-int StreamHandleData<stype>::send_sync(const char *buffer, std::size_t sz) {
+
+int StreamHandleData::send_sync(const char *buffer, std::size_t sz) {
     this->_send_buffer = buffer;
     this->_send_buffer_size = sz;
     return do_send();
 }
 
-template<StreamType stype>
-int StreamHandleData<stype>::do_send() {
+
+int StreamHandleData::do_send() {
     if (_send_closed) return 0;
     if (_opening) return -1;
     if (_connect_error) throw std::system_error(_connect_error, std::system_category(), "Connect error");
     while (this->_send_buffer_size) {
         int r;
-        if constexpr(stype == StreamType::socket) {
-            r = ::send(_socket, this->_send_buffer, this->_send_buffer_size, MSG_DONTWAIT);
-            if (r < 0) {
-                int e = errno;
-                if (e == EWOULDBLOCK) return -1;
-                if (e == EPIPE) return 0;
-                throw std::system_error(e, std::system_category(), "send");
-            }
-        } else {
-            r = ::write(_socket, this->_send_buffer, this->_send_buffer_size);
-            if (r < 0) {
-                int e = errno;
-                if (e == EWOULDBLOCK) return -1;
-                if (e == EPIPE) return 0;
-                throw std::system_error(e, std::system_category(), "write");
-            }
+        r = ::send(_socket, this->_send_buffer, this->_send_buffer_size, MSG_DONTWAIT);
+        if (r < 0) {
+            int e = errno;
+            if (e == EWOULDBLOCK) return -1;
+            if (e == EPIPE) return 0;
+            throw std::system_error(e, std::system_category(), "send");
         }
         if (r == 0) {
             _state_eof = 0;
@@ -703,135 +705,123 @@ int StreamHandleData<stype>::do_send() {
     return 1;
 }
 
-template<StreamType stype>
-coro::prepared_coro StreamHandleData<stype>::recv_async(
+
+coro::prepared_coro StreamHandleData::recv_async(
                         std::chrono::system_clock::time_point tp,
                         coro::awaitable<std::size_t>::result p) {
     if (_was_shutdown) return p(0);
     this->_recv_timeout = tp;
     this->_recv_result = std::move(p);
-    update_timeout();
-    update_flags();
     return {};
 
 }
 
-template<StreamType stype>
-coro::prepared_coro StreamHandleData<stype>::send_async(
+
+coro::prepared_coro StreamHandleData::send_async(
                         std::chrono::system_clock::time_point tp,
                         coro::awaitable<bool>::result p) {
 
     if (_was_shutdown) return p(false);
     this->_send_timeout = tp;
     this->_send_result = std::move(p);
-    update_timeout();
-    update_flags();
     return {};
 
 }
 
-template<StreamType stype>
-coro::prepared_coro StreamHandleData<stype>::on_complete_recv() {
-    coro::prepared_coro out;
-    try {
 
-        if (_recv_result) {
-            int r = do_recv();
-            if (r >= 0) {
-                out = _recv_result.set_value(r);
-                _recv_timeout = std::chrono::system_clock::time_point::max();
-                update_timeout();
-                update_flags();
+TwoCoros StreamHandleData::on_complete(int flags) {
+    TwoCoros out;
+    if (flags & EPOLLIN) {
+        try {
+
+            if (_recv_result) {
+                int r = do_recv();
+                if (r >= 0) {
+                    out.a = _recv_result.set_value(r);
+                    _recv_timeout = max_timeout;
+                }
             }
-        }
 
-    } catch (...) {
-        out = _recv_result.set_exception(std::current_exception());
+        } catch (...) {
+            out.a = _recv_result.set_exception(std::current_exception());
+        }
+    }
+    if (flags & EPOLLOUT) {
+        try {
+
+            if (_opening) {
+                _connect_error = 0;;
+                socklen_t len = sizeof(_connect_error);
+                _opening = false;
+                if (getsockopt(_socket, SOL_SOCKET, SO_ERROR, &_connect_error, &len) < 0) {
+                    _connect_error = errno;
+                }
+            }
+
+            if (_send_result) {
+                int r = do_send();
+                if (r >= 0) {
+                    out.b = _send_result.set_value(r);
+                    _send_timeout = max_timeout;
+                }
+            }
+
+        } catch (...) {
+            out.b = _recv_result.set_exception(std::current_exception());
+        }
     }
     return out;
 }
 
-template<StreamType stype>
-coro::prepared_coro StreamHandleData<stype>::on_complete_send() {
-    coro::prepared_coro out;
-    try {
 
-        if (_opening) {
-            _connect_error = 0;;
-            socklen_t len = sizeof(_connect_error);
-            _opening = false;
-            if (getsockopt(_socket, SOL_SOCKET, SO_ERROR, &_connect_error, &len) < 0) {
-                _connect_error = errno;
-            }
-        }
-
-        if (_send_result) {
-            int r = do_send();
-            if (r >= 0) {
-                out = _send_result.set_value(r);
-                _send_timeout = std::chrono::system_clock::time_point::max();
-                update_timeout();
-                update_flags();
-            }
-        }
-
-    } catch (...) {
-        out = _recv_result.set_exception(std::current_exception());
-    }
-    return out;
-}
-
-template<StreamType stype>
-TwoCoros StreamHandleData<stype>::on_timeout(std::chrono::system_clock::time_point tp) {
+TwoCoros StreamHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
     TwoCoros out;
     if (tp >= _recv_timeout) {
         out.a = _recv_result.set_empty();
-        _recv_timeout =std::chrono::system_clock::time_point::max();
+        _recv_timeout =max_timeout;
     }
     if (tp >= _send_timeout) {
         out.b = _send_result.set_empty();
-        _send_timeout =std::chrono::system_clock::time_point::max();
+        _send_timeout =max_timeout;
     }
-    update_flags();
-    update_timeout();
     return out;
 }
 
-template<StreamType stype>
-TwoCoros StreamHandleData<stype>::on_shutdown() {
+template<std::invocable<int, int> Svc>
+void StreamHandleData::apply_epoll_flags(Svc &&svc) const {
+    int flags = 0;
+    if (_send_result) flags |= EPOLLOUT|EPOLLONESHOT;
+    if (_recv_result) flags |= EPOLLIN|EPOLLONESHOT;
+    svc(_socket, flags);
+
+}
+
+
+TwoCoros StreamHandleData::on_shutdown() {
     TwoCoros out;
     _was_shutdown = true;
     out.a = _recv_result.set_value(0);
     out.b = _send_result.set_value(false);
-    _recv_timeout = std::chrono::system_clock::time_point::max();
-    _send_timeout = std::chrono::system_clock::time_point::max();
-    update_flags();
-    update_timeout();
+    _recv_timeout = max_timeout;
+    _send_timeout = max_timeout;
     return out;
 }
 
-template<StreamType stype>
-StreamState StreamHandleData<stype>::get_state() const {
+
+StreamState StreamHandleData::get_state() const {
     if (_connect_error || _state_eof) return StreamState::closed;
     if (_send_closed) return StreamState::closing;
     if (_opening) return StreamState::opening;
     return StreamState::active;
 }
 
-template<StreamType stype>
-void StreamHandleData<stype>::update_timeout() {
-    _tp = std::min(_send_timeout, _recv_timeout);
+
+std::chrono::system_clock::time_point StreamHandleData::get_timeout() const {
+    return std::min(_send_timeout, _recv_timeout);
 }
 
-template<StreamType stype>
-void StreamHandleData<stype>::update_flags() {
-    _flags = 0;
-    if (_send_result) _flags |= EPOLLOUT|EPOLLONESHOT;
-    if (_recv_result) _flags |= EPOLLIN|EPOLLONESHOT;
-}
 
-template<StreamType stype>
-void StreamHandleData<stype>::send_close() {
+void StreamHandleData::send_close() {
     if (!_send_closed) {
         _send_closed = true;
         int r = ::shutdown(_socket, SHUT_WR);
@@ -841,8 +831,23 @@ void StreamHandleData<stype>::send_close() {
     }
 }
 
-template class StreamHandleData<StreamType::pipe>;
-template class StreamHandleData<StreamType::socket>;
+
+void ContextImpl::close(Handle h) {
+    TwoCoros r;
+    std::lock_guard _(_mx);
+    auto iter = _handleMap.find(h);
+    if (iter != _handleMap.end()) {
+        r = iter->_value->visit([&](auto &p) -> TwoCoros {
+           TwoCoros r =  p.on_shutdown();
+           p.apply_epoll_flags([&](int socket, int){
+              _epoll.del(socket);
+           });
+           return r;
+        });
+        _handleMap.erase(iter);
+    }
+}
+
 
 }
 
