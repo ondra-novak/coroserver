@@ -5,6 +5,34 @@
 
 namespace coroserver {
 
+
+template<typename Fn>
+auto AbstractHandleData::visit(Fn &&fn) {
+    switch (_type) {
+        case HandleType::socket: return fn(*static_cast<StreamHandleData *>(this));
+        case HandleType::server: return fn(*static_cast<ServerHandleData *>(this));
+        case HandleType::timer: return fn(*static_cast<TimerHandleData *>(this));
+        default:throw std::logic_error("unknown handle data");
+    }
+}
+template<typename Fn>
+auto AbstractHandleData::visit(Fn &&fn) const {
+    switch (_type) {
+        case HandleType::socket: return fn(*static_cast<const StreamHandleData *>(this));
+        case HandleType::server: return fn(*static_cast<const ServerHandleData *>(this));
+        case HandleType::timer: return fn(*static_cast<const TimerHandleData *>(this));
+        default:throw std::logic_error("unknown handle data");
+    }
+}
+
+void HandleDataDeleter::operator()(AbstractHandleData *p) {
+    p->visit([](auto &q){
+        delete (&q);
+    });
+}
+
+
+
 Context::Context(std::shared_ptr<ContextImpl> impl):_impl(std::move(impl)) {
 
 }

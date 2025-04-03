@@ -27,7 +27,7 @@ public:
     void add(HANDLE h, ULONG_PTR key) {
         HANDLE x = CreateIoCompletionPort(h, _h, key, 0);        
         if (!x) throw Win32Error("Associate handle with IOCP");
-        SetFileCompletionNotificationModes (h, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS);
+//        SetFileCompletionNotificationModes (h, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS);
     }
 
     struct Event {

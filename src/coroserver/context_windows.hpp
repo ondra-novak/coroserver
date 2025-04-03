@@ -1,6 +1,5 @@
 #include "iocp.hpp"
-#include "context.hpp"
-#include "handle_hash_map.hpp"
+#include "context_common.hpp"
 #include <algorithm>
 #include <WinSock2.h>
 
@@ -8,27 +7,10 @@ namespace coroserver {
 
     class ContextImpl;
 
-    
-    class AbstractHandleData {
-    public:
-        virtual ~AbstractHandleData() = default;
-    
-    
-        template<typename Fn>
-        auto visit(Fn &&fn);
-    
-        template<typename X>
-        bool is_base_of() const;
-    
-        const std::chrono::system_clock::time_point& get_timeout() const {return _tp;}
-        StreamState get_state() const {return _was_shutdown?StreamState::closed:StreamState::active;}
-    protected:
-        std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
-        bool _was_shutdown = false;
-    };
-    
     class TimerHandleData: public AbstractHandleData {
     public:
+
+        TimerHandleData():AbstractHandleData(HandleType::timer) {}
     
         coro::prepared_coro sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p);
         coro::prepared_coro on_complete(DWORD , LPOVERLAPPED) {return {};}
@@ -37,26 +19,24 @@ namespace coroserver {
         coro::prepared_coro on_error(DWORD, LPOVERLAPPED) {return {};}
         bool safe_to_close() const {return !_p;}
         void set_closing() {}
-        protected:
+        std::chrono::system_clock::time_point get_timeout() const {return _tp;}
+    protected:
         coro::awaitable<bool>::result _p;
+        std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
     };
         
     class SocketHandleData: public AbstractHandleData {
     public:
-        SocketHandleData(SOCKET socket):_socket(socket) {}
-        SocketHandleData(HANDLE handle):_handle(handle) {}
+        SocketHandleData(HandleType type, SOCKET socket):AbstractHandleData(type),_socket(socket) {}
     
         SOCKET get_socket() const {return _socket;}
-        HANDLE get_handle() const {return _handle;}        
     
         void set_closing() {_closing = true;}
 
     protected:
-        union {
-            SOCKET _socket;
-            HANDLE _handle;
-        };
+        SOCKET _socket;
         bool _closing = false;
+        std::chrono::system_clock::time_point _tp = std::chrono::system_clock::time_point::max();
 
     };
         
@@ -72,6 +52,8 @@ namespace coroserver {
         coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
         coro::prepared_coro on_shutdown();
     
+        std::chrono::system_clock::time_point get_timeout() const {return _tp;}
+
         bool safe_to_close() const;
     
     protected:
@@ -96,13 +78,11 @@ namespace coroserver {
     
     class StreamHandleTag {};
     
-    template<StreamType type>
     class StreamHandleData: public SocketHandleData, public StreamHandleTag {
     public:
 
-        using H = std::conditional_t<type == StreamType::socket, SOCKET, HANDLE>;
     
-        StreamHandleData(H h);
+        StreamHandleData(SOCKET h);
         virtual ~StreamHandleData();
     
         void set_recv_buffer(char *buffer, std::size_t sz);
@@ -119,6 +99,7 @@ namespace coroserver {
     
         void send_close();
         void mark_opening() {_opening = true;}
+        std::chrono::system_clock::time_point get_timeout() const;
 
         LPOVERLAPPED get_connect_overlapped() {return &_send_ovr;};
 
@@ -141,36 +122,7 @@ namespace coroserver {
         bool _state_eof = false;
         bool _send_closed = false;
         bool _opening = false;
-    
-    
-        void update_timeout();
     };
-    
-    
-    template<typename Fn>
-    auto AbstractHandleData::visit(Fn &&fn) {
-        const std::type_info &t = typeid(*this);
-        if (t == typeid(StreamHandleData<StreamType::socket>)) {
-            return fn(*static_cast<StreamHandleData<StreamType::socket> *>(this));
-        } else if (t == typeid(StreamHandleData<StreamType::pipe>)) {
-            return fn(*static_cast<StreamHandleData<StreamType::pipe> *>(this));
-        } else if (t == typeid(ServerHandleData)) {
-            return fn(*static_cast<ServerHandleData *>(this));
-        } else if (t == typeid(TimerHandleData)) {
-            return fn(*static_cast<TimerHandleData *>(this));
-        } else {
-            throw std::logic_error("unknown handle data");
-        }
-    }
-    
-    
-    template<typename X>
-    bool AbstractHandleData::is_base_of() const {
-        return visit([](const auto &x){
-            using T = std::decay_t<decltype(x)>;
-            return std::is_base_of_v<X, T>;
-        });
-    }
     
     
 
@@ -200,7 +152,6 @@ public:
 
  
 protected:
-    using PHandleData = std::unique_ptr<AbstractHandleData>;
     using HandleMap = HandleHashMap<PHandleData>;
 
 

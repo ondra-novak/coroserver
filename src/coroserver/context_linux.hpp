@@ -1,8 +1,7 @@
 #include <algorithm>
 #include <chrono>
-#include "context.hpp"
+#include "context_common.hpp"
 #include "epollpp.hpp"
-#include "handle_hash_map.hpp"
 #include "eventfd.hpp"
 
 namespace coroserver {
@@ -180,13 +179,8 @@ public:
 
 protected:
 
-    struct HandleDataDeleter {
-        void operator()(AbstractHandleData *p);
-    };
 
-    using PHandleData = std::unique_ptr<AbstractHandleData, HandleDataDeleter>;
     using HandleMap = HandleHashMap<PHandleData>;
-
 
     HandleMap _handleMap;
     EPoll<Handle> _epoll;
