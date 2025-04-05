@@ -13,7 +13,7 @@ public:
     /**
      * @param ctx IO context
      * @param h timer's handle
-     * 
+     *
      * @note It is more convenient to use Timer::create()
      */
     Timer(Context ctx, Context::Handle h):_ctx(std::move(ctx)), _h(h) {}
@@ -41,7 +41,7 @@ public:
     }
 
     ///Shutdowns timer instance causing interruption of current sleep
-    /** Once the timer is shut down, you cannot reenable it, you must recreate the timer object */ 
+    /** Once the timer is shut down, you cannot reenable it, you must recreate the timer object */
     void shutdown() {
         _ctx.shutdown(_h);
     }
@@ -72,7 +72,7 @@ public:
     auto get_context() const {return _ctx;}
 
     ///Create timer
-    /** 
+    /**
      * @param ctx IO context
      */
     static Timer create(Context ctx) {
@@ -81,7 +81,7 @@ public:
     }
 
 protected:
-    Context _ctx = {};
+    Context _ctx = {nullptr};
     Context::Handle _h = Context::null_handle;
 };
 

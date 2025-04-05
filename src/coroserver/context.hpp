@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <memory>
+#include <span>
 #include "coroutines.h"
 #include "stream_state.h"
 
@@ -9,6 +10,7 @@ namespace coroserver {
 
 
 class ContextImpl;
+class Environment;
 
 
 enum class SpecialDevice {
@@ -24,9 +26,9 @@ public:
 
     static constexpr Handle null_handle = 0;
 
-    ///Default constructor doesn't create context, it just declares empty variable
-    Context() = default;
-    
+    ///Default constructor is deleted to avoid errors
+    Context() = delete;
+
     Context(std::shared_ptr<ContextImpl>);
     ~Context();
 
@@ -48,8 +50,23 @@ public:
     Handle connect(std::string host, std::string def_port);
 
 
-    ///connect special device
-    Handle connect(SpecialDevice dev);
+    Handle create_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp);
+
+    ///Terminate process created by create_process
+    /**
+     * @param h handle to process created by create_process
+     * @retval true terminated
+     * @retval false invalid handle, process exited etc
+     *
+     * @note the process is force-terminated (TerminateProcess, kill sigkill)
+     *
+     */
+    bool terminate_process(Handle h);
+
+    coro::awaitable<int> get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp);
+
+
+    Handle connect_stdinout();
 
 
     ///creates timer handle, it can be used by function sleep

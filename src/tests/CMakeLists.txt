@@ -4,6 +4,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/)
 set(testFiles
     compile_test.cpp
     tcp_test.cpp
+    spawn_process.cpp
 )
 
 link_libraries(

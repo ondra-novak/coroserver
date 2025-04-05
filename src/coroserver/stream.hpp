@@ -155,6 +155,12 @@ protected:
                 coro::awaitable_result<ReceiveBlockStatus> > _callback;
 };
 
+class  NullContainer {
+public:
+    using value_type =  char;
+    void clear() {};
+    void push_back(char) {};
+};
 
 
 class Stream {
@@ -345,12 +351,7 @@ public:
 
     auto skip(std::size_t count) {
 
-        struct FakeContainer {
-            using value_type =  char;
-            void clear() {};
-            void push_back(char) {};
-        };
-        static FakeContainer cntr;
+        static NullContainer cntr;
         return read_block(cntr,count);
 
     }

@@ -1,46 +1,12 @@
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include "context_common.hpp"
 #include "epollpp.hpp"
 #include "eventfd.hpp"
 
 namespace coroserver {
 
-enum class HandleType {
-    timer,
-    server,
-    socket,
-    pipes
-};
-
-struct TwoCoros {
-    coro::prepared_coro a = {};
-    coro::prepared_coro b = {};
-    TwoCoros() = default;
-    TwoCoros(coro::prepared_coro a):a(std::move(a)) {}
-    TwoCoros(coro::prepared_coro a, coro::prepared_coro b)
-        :a(std::move(a)), b(std::move(b)) {}
-};
-
-class AbstractHandleData {
-public:
-
-    AbstractHandleData(HandleType type):_type(type) {}
-
-    HandleType get_type() const {return _type;}
-
-
-    template<typename Fn>
-    auto visit(Fn &&fn);
-    template<typename Fn>
-    auto visit(Fn &&fn) const;
-
-
-    StreamState get_state() const {return _was_shutdown?StreamState::closed:StreamState::active;}
-protected:
-    HandleType _type;
-    bool _was_shutdown = false;
-};
 
 class TimerHandleData: public AbstractHandleData {
 public:
@@ -152,6 +118,87 @@ protected:
 
 };
 
+class TwoPipesStreamData: public AbstractHandleData, public StreamHandleTag {
+public:
+
+    TwoPipesStreamData(int in_fd, int out_fd, pid_t pid);
+    ~TwoPipesStreamData();
+
+    int recv_sync(char *buffer, std::size_t sz);
+    int send_sync(const char *buffer, std::size_t sz);
+    std::optional<int> get_pid_status_sync();
+
+    ///receive async - must be used after recv_sync to set buffers
+    coro::prepared_coro recv_async(std::chrono::system_clock::time_point tp, coro::awaitable<std::size_t>::result p);
+    ///send async - must be used after send_sync to set buffers
+    coro::prepared_coro send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p);
+
+    coro::prepared_coro get_pid_status_async(std::chrono::system_clock::time_point tp, coro::awaitable<int>::result p);
+
+    TwoCoros on_complete(int flags);
+    TwoCoros on_timeout(std::chrono::system_clock::time_point tp);
+    TwoCoros on_shutdown();
+    StreamState get_state() const;
+
+    void send_close();
+
+    template<std::invocable<int, int> Svc>
+    void apply_epoll_flags(Svc &&svc) const;
+
+    std::chrono::system_clock::time_point get_timeout() const;
+
+    coro::prepared_coro on_status_available(int status);
+
+    bool terminate_process();
+
+protected:
+    std::chrono::system_clock::time_point _recv_timeout = std::chrono::system_clock::time_point::max();
+    std::chrono::system_clock::time_point _send_timeout = std::chrono::system_clock::time_point::max();
+    std::chrono::system_clock::time_point _pidstat_timeout =std::chrono::system_clock::time_point::max();
+
+    int do_recv();
+    int do_send();
+
+    int _in_fd;
+    int _out_fd;
+    int _pid;
+
+    char *_recv_buffer = 0;
+    std::size_t _recv_buffer_size = 0;
+    coro::awaitable<std::size_t>::result _recv_result = {};
+
+    const char *_send_buffer = 0;
+    std::size_t _send_buffer_size = 0;
+    coro::awaitable<bool>::result _send_result = {};
+
+    std::optional<int> _process_status;
+    coro::awaitable<int>::result _process_status_promise = {};
+
+    bool _state_eof = false;
+    bool _send_closed = false;
+};
+
+
+
+class SignalFdHandleData: public AbstractHandleData {
+public:
+    SignalFdHandleData();
+
+    TwoCoros on_complete(int flags);
+    TwoCoros on_timeout(std::chrono::system_clock::time_point)  {return {};}
+    TwoCoros on_shutdown() {return {};}
+    StreamState get_state() const {return {};}
+
+
+    template<std::invocable<int, int> Svc>
+    void apply_epoll_flags(Svc &&) const {}
+
+    std::chrono::system_clock::time_point get_timeout() const {
+        return std::chrono::system_clock::time_point::max();
+    }
+
+};
+
 
 class ContextImpl {
 public:
@@ -162,7 +209,14 @@ public:
 
     Handle create_server(std::string host, std::string def_port);
     Handle connect(std::string host, std::string def_port);
-    Handle connect(SpecialDevice dev);
+
+    Handle connect_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp);
+    Handle connect_stdinout();
+    bool terminate_process(Handle h);
+    coro::awaitable<int> get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp);
+
+    Handle create_from_handles(int rd_fd, int wr_fd, pid_t pid);
+
     Handle create_timer();
     void close(Handle h);
     std::string get_host(Handle h) const;
@@ -185,6 +239,7 @@ protected:
     HandleMap _handleMap;
     EPoll<Handle> _epoll;
     EventFd _epoll_wk;
+    Handle _child_monitor = null_handle;
 
     std::chrono::system_clock::time_point _awaiting_tp = std::chrono::system_clock::time_point::max();
     std::chrono::system_clock::time_point _new_tp = std::chrono::system_clock::time_point::max();
@@ -206,5 +261,4 @@ protected:
 
 
 }
-
 

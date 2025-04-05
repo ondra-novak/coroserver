@@ -11,7 +11,8 @@ enum class HandleType {
     timer,
     server,
     socket,
-    pipes
+    two_pipes,
+    signalfd
 };
 
 struct TwoCoros {

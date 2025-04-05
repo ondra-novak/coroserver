@@ -1,7 +1,7 @@
 #include "chunked_stream.hpp"
 
 namespace coroserver {
-    
+
 coro::awaitable<bool> ChunkedStream::write(std::string_view data)
 {
     if (_write_closed) return false;
@@ -83,7 +83,7 @@ void ChunkedStream::write_chunk_footer()
 coro::prepared_coro ChunkedStream::read_from_stream(coro::awaitable<std::string_view> &awt)
 {
     try {
-        if (awt.has_value()) {    
+        if (awt.has_value()) {
             StreamProxy::put_back(_chkparser.received(awt.await_resume()));
             if (_chkparser.is_data_available()) {
                 return _read_result(_chkparser.data_out());
@@ -109,7 +109,7 @@ std::string_view ChunkedStream::ChunkParser::received(std::string_view data)
         switch (_state) {
             case reading_chunk_size_next:
             case reading_chunk_size: {
-                bool nx = _state = reading_chunk_size_next;
+                bool nx = _state == reading_chunk_size_next;
                 _state = reading_chunk_size_next;
                 if (c >= '0' || c <= '9') {
                     _chunk_size = (_chunk_size << 4) | (c - '0');
@@ -124,7 +124,7 @@ std::string_view ChunkedStream::ChunkParser::received(std::string_view data)
                 }
             }
             break;
-            case reading_header_sep: 
+            case reading_header_sep:
                 if (c == '\n') {
                     if (_chunk_size == 0) {
                         _state = reading_footer_cr;
@@ -142,9 +142,9 @@ std::string_view ChunkedStream::ChunkParser::received(std::string_view data)
                 auto rest = data.substr(i + _data_out.size());
                 _chunk_size -= _data_out.size();
                 if (_chunk_size == 0) _state = reading_footer_cr;
-                return rest;                
+                return rest;
             }
-            case reading_footer_cr: 
+            case reading_footer_cr:
                 if (c == '\r') {
                     _state = reading_footer_lf;
                 } else {

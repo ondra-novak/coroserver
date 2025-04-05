@@ -24,6 +24,8 @@ public:
     virtual void set_timeouts(IOTimeout tm) override;
     virtual void shutdown() override;
 
+    Context::Handle get_handle() const {return _h;}
+
 protected:
     Context _ctx;
     Context::Handle _h;

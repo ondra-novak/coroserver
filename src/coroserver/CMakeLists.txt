@@ -8,6 +8,8 @@ set(COMMON_FILES
     chunked_stream.cpp
     server.cpp
     client.cpp
+    process.cpp
+    stream.cpp
     http_server_request.cpp
 )
 

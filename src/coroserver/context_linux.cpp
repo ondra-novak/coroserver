@@ -1,5 +1,6 @@
 #include "context_linux.hpp"
 #include "context_inc.hpp"
+#include "process.hpp"
 #include <arpa/inet.h>
 #include <stdexcept>
 #include <sys/eventfd.h>
@@ -13,40 +14,38 @@
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <numeric>
 
+
+extern char **environ;
 
 namespace coroserver {
 
+
+class ChildManagerSingleton {
+public:
+
+    ChildManagerSingleton();
+    ~ChildManagerSingleton();
+
+    static ChildManagerSingleton &getInstance();
+
+    coro::prepared_coro on_event();
+    void reg(pid_t p, TwoPipesStreamData *owner);
+    void unreg(pid_t p);
+    int get_fd() const {return _sigfd;}
+
+    static void handleSigChld(int signo);
+
+protected:
+    std::map<pid_t, TwoPipesStreamData *> _pidmap;
+    std::mutex _mx;
+    int _sigfd;
+    int _feedfd;
+};
+
+
 constexpr auto max_timeout = std::chrono::system_clock::time_point::max();
-
-
-template<typename Fn>
-auto AbstractHandleData::visit(Fn &&fn) {
-    switch (_type) {
-        case HandleType::socket: return fn(*static_cast<StreamHandleData *>(this));
-        case HandleType::server: return fn(*static_cast<ServerHandleData *>(this));
-        case HandleType::timer: return fn(*static_cast<TimerHandleData *>(this));
-        default:throw std::logic_error("unknown handle data");
-    }
-}
-template<typename Fn>
-auto AbstractHandleData::visit(Fn &&fn) const {
-    switch (_type) {
-        case HandleType::socket: return fn(*static_cast<const StreamHandleData *>(this));
-        case HandleType::server: return fn(*static_cast<const ServerHandleData *>(this));
-        case HandleType::timer: return fn(*static_cast<const TimerHandleData *>(this));
-        default:throw std::logic_error("unknown handle data");
-    }
-}
-
-void ContextImpl::HandleDataDeleter::operator()(AbstractHandleData *p) {
-    p->visit([](auto &x){
-        auto ptr = &x;
-        delete ptr;
-    });
-}
-
-
 
 
 coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
@@ -144,6 +143,9 @@ coro::prepared_coro ServerHandleData::on_shutdown() {
 
 ContextImpl::ContextImpl() {
     _epoll.add(_epoll_wk.get_fd(),EPOLLIN|EPOLLONESHOT,null_handle);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
+
 }
 
 void ContextImpl::update_epoll_flags(Handle h, const AbstractHandleData &pb) {
@@ -572,49 +574,209 @@ ContextImpl::Handle ContextImpl::create_server(std::string host, std::string def
         throw;
     }
 }
-ContextImpl::Handle ContextImpl::connect(SpecialDevice /*dev*/) {
-    return 0;
 
-    /*
-
-    int srcfd;
-    switch (dev) {
-        case SpecialDevice::standard_input: srcfd = 0;break;
-        case SpecialDevice::standard_output: srcfd = 1;break;
-        case SpecialDevice::standard_error: srcfd = 2;break;
-        default: return null_handle;
+TwoPipesStreamData::TwoPipesStreamData(int in_fd, int out_fd, pid_t pid)
+    :AbstractHandleData(HandleType::two_pipes)
+    ,_in_fd(in_fd),_out_fd(out_fd),_pid(pid) {
+    if (pid >= 0) {
+        ChildManagerSingleton::getInstance().reg(pid, this);
     }
 
-    int tfd =  eventfd(0, EFD_CLOEXEC);
-    if (tfd == -1) {
-        throw std::system_error(errno, std::system_category(), "cannot reserve descriptor by creating eventfd");
+}
+
+TwoPipesStreamData::~TwoPipesStreamData() {
+    if (_in_fd < 0) ::close(_in_fd);
+    if (_out_fd < 0) ::close(_out_fd);
+    if (_pid >= 0) {
+        ChildManagerSingleton::getInstance().unreg(_pid);
     }
-    int r = dup3(srcfd, tfd, O_CLOEXEC);
-    if (r == -1) {
+}
+
+int TwoPipesStreamData::recv_sync(char *buffer, std::size_t sz) {
+    _recv_buffer = buffer;
+    _recv_buffer_size = sz;
+    return do_recv();
+}
+int TwoPipesStreamData::send_sync(const char *buffer, std::size_t sz) {
+    _send_buffer = buffer;
+    _send_buffer_size = sz;
+    return do_send();
+}
+int TwoPipesStreamData::do_recv() {
+    int r = ::read(_in_fd, _recv_buffer, _recv_buffer_size);
+    if (r < 0) {
         int e = errno;
-        ::close(tfd);
-        throw std::system_error(e, std::system_category(), "dup3");
+        if (e == EPIPE) r = 0;
+        else if (e != EWOULDBLOCK) throw std::system_error(e, std::system_category(), "read");
     }
-    fcntl(tfd, F_SETFL, fcntl(tfd, F_GETFL) | O_NONBLOCK);
-    std::lock_guard _(_mx);
-    Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::pipe> >(tfd));
-    _epoll.add(tfd, 0, h);
-    return h;
-*/
-
+    return r;
 }
 
-ContextImpl::Handle ContextImpl::connect_fifo(const char */*fname*/, int /*flags*/) {
-    return 0;
-    /*
-    int fd = ::open(fname, flags | O_NONBLOCK| O_CLOEXEC);
-    if (fd == -1) throw std::system_error(errno, std::system_category(), "fifo open");
-    std::lock_guard _(_mx);
-    Handle h = _handleMap.insert(std::make_unique<StreamHandleData<StreamType::pipe>>(fd));
-    _epoll.add(fd, 0, h);
-    return h;
-*/
+bool TwoPipesStreamData::terminate_process() {
+    if (_pid >= 0) {
+        int r = ::kill(_pid, SIGKILL);
+        if (r != -1) return true;
+    }
+    return false;
 }
+
+coro::prepared_coro TwoPipesStreamData::on_status_available(int status) {
+    if (WIFEXITED(status)) {
+        _process_status = WEXITSTATUS(status);
+    } else {
+        _process_status = -WTERMSIG(status);
+    }
+    return _process_status_promise(*_process_status);
+}
+
+std::optional<int> TwoPipesStreamData::get_pid_status_sync() {
+    return _process_status;
+}
+
+coro::prepared_coro TwoPipesStreamData::get_pid_status_async(
+        std::chrono::system_clock::time_point tp,
+        coro::awaitable<int>::result p) {
+    if (_process_status.has_value()) return p(*_process_status);
+    _process_status_promise = std::move(p);
+    _pidstat_timeout = tp;
+    return {};
+}
+
+int TwoPipesStreamData::do_send() {
+    if (_send_closed) return 0;
+    while (this->_send_buffer_size) {
+        int r = ::write(_out_fd, _send_buffer, _send_buffer_size);
+        if (r < 0) {
+            int e = errno;
+            if (e == EWOULDBLOCK) return -1;
+            if (e == EPIPE) return 0;
+            throw std::system_error(e, std::system_category(), "send");
+        }
+        if (r == 0) {
+            _state_eof = 0;
+            return 0;
+        }
+        this->_send_buffer += r;
+        this->_send_buffer_size -= r;
+    }
+    return 1;
+}
+
+coro::prepared_coro TwoPipesStreamData::recv_async(std::chrono::system_clock::time_point tp, coro::awaitable<std::size_t>::result p) {
+    if (_was_shutdown) return p(0);
+    _recv_result = std::move(p);
+    _recv_timeout = tp;
+    return {};
+}
+
+coro::prepared_coro TwoPipesStreamData::send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
+    if (_was_shutdown) return p(false);
+    _send_result = std::move(p);
+    _send_timeout = tp;
+    return {};
+}
+
+TwoCoros TwoPipesStreamData::on_complete(int flags) {
+    TwoCoros out;
+    if (flags & EPOLLIN) {
+        try {
+
+            if (_recv_result) {
+                int r = do_recv();
+                if (r >= 0) {
+                    out.a = _recv_result.set_value(r);
+                    _recv_timeout = max_timeout;
+                }
+            }
+
+        } catch (...) {
+            out.a = _recv_result.set_exception(std::current_exception());
+        }
+    }
+    if (flags & EPOLLHUP) {
+        if (_recv_result) {
+            out.a = _recv_result.set_value(0);
+        }
+        if (_send_result) {
+            out.b = _send_result.set_value(false);
+        }
+    }
+    if (flags & EPOLLOUT) {
+        try {
+
+            if (_send_result) {
+                int r = do_send();
+                if (r >= 0) {
+                    out.b = _send_result.set_value(r);
+                    _send_timeout = max_timeout;
+                }
+            }
+
+        } catch (...) {
+            out.b = _send_result.set_exception(std::current_exception());
+        }
+    }
+    return out;
+}
+
+TwoCoros TwoPipesStreamData::on_timeout(std::chrono::system_clock::time_point tp) {
+    TwoCoros out;
+    if (tp >= _recv_timeout) {
+        out.a = _recv_result.set_empty();
+        _recv_timeout =max_timeout;
+    }
+    if (tp >= _send_timeout) {
+        out.b = _send_result.set_empty();
+        _send_timeout =max_timeout;
+    }
+    if (!out.a && tp >= _pidstat_timeout) {
+        out.a = _process_status_promise.set_empty();
+        _pidstat_timeout = max_timeout;
+    }
+    return out;
+}
+
+TwoCoros TwoPipesStreamData::on_shutdown() {
+    TwoCoros out;
+    _was_shutdown = true;
+    out.a = _recv_result.set_value(0);
+    out.b = _send_result.set_value(false);
+    _recv_timeout = max_timeout;
+    _send_timeout = max_timeout;
+    return out;
+}
+
+StreamState TwoPipesStreamData::get_state() const {
+    if (_state_eof) return StreamState::closed;
+    if (_send_closed) return StreamState::closing;
+    return StreamState::active;
+}
+
+void TwoPipesStreamData::send_close() {
+    if (!_send_closed) {
+        _send_closed = true;
+        if (_out_fd >= 0) {
+            _out_fd = close(_out_fd);
+            _out_fd = -1;
+        }
+    }
+}
+
+template<std::invocable<int, int> Svc>
+void TwoPipesStreamData::apply_epoll_flags(Svc &&svc) const {
+    if (_out_fd >= 0 && _send_result) {
+        svc(_out_fd, EPOLLOUT|EPOLLONESHOT);
+    }
+    if (_in_fd >= 0 && _recv_result) {
+        svc(_in_fd, EPOLLIN|EPOLLONESHOT);
+    }
+}
+
+std::chrono::system_clock::time_point TwoPipesStreamData::get_timeout() const {
+    return std::min(std::min(_send_timeout, _recv_timeout),_pidstat_timeout);
+}
+
+
 
 ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port) {
     if (host.compare(0, 7, "fifo-r:") == 0) {
@@ -767,7 +929,7 @@ TwoCoros StreamHandleData::on_complete(int flags) {
             }
 
         } catch (...) {
-            out.b = _recv_result.set_exception(std::current_exception());
+            out.b = _send_result.set_exception(std::current_exception());
         }
     }
     return out;
@@ -848,6 +1010,284 @@ void ContextImpl::close(Handle h) {
     }
 }
 
+
+
+Environment Environment::current() {
+    char **env = environ;
+    Environment env_vars;
+      while (*env != nullptr) {
+          std::string entry(*env);
+          size_t pos = entry.find('=');
+          if (pos != std::string::npos) {
+              std::string key = entry.substr(0, pos);
+              std::string value = entry.substr(pos + 1);
+              env_vars[key] = value;
+          }
+          env++;
+      }
+      return env_vars;
+}
+
+ContextImpl::Handle ContextImpl::connect_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & env) {
+
+    std::size_t needsz = std::accumulate(argv.begin(), argv.end(), path.size()+1, [](std::size_t a, const std::string_view &x){
+        return a + x.size()+1;
+    })+ std::accumulate(env.begin(), env.end(), std::size_t(0), [](std::size_t a, const auto &x){
+        return a + x.first.size() + x.second.size() + 2;
+    });
+    std::size_t entry_count = 3 + argv.size() + env.size(); //arg0+argv.size()+env.size()+2x null)
+    char **table = reinterpret_cast<char **>(::malloc(sizeof(char **)*entry_count+sizeof(char *)*needsz));
+    char *strings = reinterpret_cast<char *>(table+entry_count);
+    char **table_p = table;
+    char **env_table = nullptr;
+    char *str_p = strings;
+    *table_p++ = str_p;
+    str_p = std::copy(path.begin(), path.end(), str_p);
+    *str_p++ = 0;
+    for (const auto &s: argv) {
+        *table_p++ = str_p;
+        str_p = std::copy(s.begin(), s.end(), str_p);
+        *str_p++ = 0;
+    }
+    *table_p++ = nullptr;
+    if (env.empty()) {
+        env_table = environ;
+    } else {
+        env_table = table_p;
+        for (const auto &[k,v]: env) {
+            if (k.empty() || k.find('=') != k.npos) continue;
+            *table_p++ = str_p;
+            str_p = std::copy(k.begin(), k.end(), str_p);
+            *str_p++='=';
+            str_p = std::copy(v.begin(), v.end(), str_p);
+            *str_p++ = 0;
+        }
+        *table_p++ = nullptr;
+    }
+
+
+    pid_t pid;
+    int pipe_parent_to_child[2] = {-1,-1};
+    int pipe_child_to_parent[2] = {-1,-1};
+    try {
+        if (pipe2(pipe_parent_to_child, O_CLOEXEC|O_NONBLOCK) == -1)
+            throw std::system_error(errno, std::system_category(), "pipe parent->child");
+        if (pipe2(pipe_child_to_parent, O_CLOEXEC|O_NONBLOCK) == -1)
+            throw std::system_error(errno, std::system_category(), "pipe child->parent");
+
+         posix_spawn_file_actions_t actions;
+         posix_spawn_file_actions_init(&actions);
+
+         posix_spawn_file_actions_adddup2(&actions, pipe_parent_to_child[0], STDIN_FILENO);
+         posix_spawn_file_actions_addclose(&actions, pipe_parent_to_child[1]);
+         posix_spawn_file_actions_addclose(&actions, pipe_child_to_parent[0]);
+
+         posix_spawn_file_actions_adddup2(&actions, pipe_child_to_parent[1], STDOUT_FILENO);
+         posix_spawn_file_actions_addclose(&actions, pipe_child_to_parent[0]);
+         posix_spawn_file_actions_addclose(&actions, pipe_parent_to_child[1]);
+
+
+         // Spuštění procesu
+        if (posix_spawn(&pid, table[0], &actions, NULL, table, env_table) != 0) {
+            throw std::system_error(errno, std::system_category(), std::string("posix_spawn:").append(path));
+        }
+
+        ::close(pipe_parent_to_child[0]);
+        ::close(pipe_child_to_parent[1]);
+
+        ::free(table);
+        return create_from_handles(pipe_child_to_parent[0], pipe_parent_to_child[1], pid);
+
+    } catch (...) {
+        if (pipe_parent_to_child[0] >= 0) ::close(pipe_parent_to_child[0]);
+        if (pipe_parent_to_child[1] >= 0) ::close(pipe_parent_to_child[1]);
+        if (pipe_child_to_parent[0] >= 0) ::close(pipe_child_to_parent[0]);
+        if (pipe_child_to_parent[1] >= 0) ::close(pipe_child_to_parent[1]);
+        free(table);
+        throw;
+    }
+}
+ContextImpl::Handle ContextImpl::connect_stdinout() {
+    int rd_fd = -1;
+    int wr_fd = -1;
+    try {
+        rd_fd = eventfd(0,O_CLOEXEC);
+        if (rd_fd == -1) {
+            throw std::system_error(errno, std::system_category(), "cannot reserve descriptor by creating eventfd");
+        }
+
+        wr_fd = eventfd(0,O_CLOEXEC);
+        if (wr_fd == -1) {
+            throw std::system_error(errno, std::system_category(), "cannot reserve descriptor by creating eventfd");
+        }
+        int r = dup3(STDIN_FILENO, rd_fd, O_CLOEXEC);
+        if (r == -1) {
+            throw std::system_error(errno, std::system_category(), "dup3 (rd)");
+        }
+        r = dup3(STDOUT_FILENO, wr_fd, O_CLOEXEC);
+        if (r == -1) {
+            throw std::system_error(errno, std::system_category(), "dup3 (wr)");
+        }
+
+        ::close(STDIN_FILENO);
+        ::close(STDOUT_FILENO);
+
+        fcntl(rd_fd, F_SETFL, fcntl(rd_fd, F_GETFL) | O_NONBLOCK);
+        fcntl(wr_fd, F_SETFL, fcntl(wr_fd, F_GETFL) | O_NONBLOCK);
+
+        return create_from_handles(rd_fd, wr_fd,-1);
+
+    } catch (...) {
+        if (rd_fd >=0 ) ::close(rd_fd);
+        if (wr_fd >=0 ) ::close(wr_fd);
+        throw;
+    }
+}
+
+ContextImpl::Handle ContextImpl::create_from_handles(int rd_fd, int wr_fd, pid_t pid) {
+    std::lock_guard _(_mx);
+    Handle h  = _handleMap.emplace(PHandleData(new TwoPipesStreamData(rd_fd, wr_fd, pid)));
+    _epoll.add(rd_fd,0, h);
+    _epoll.add(wr_fd,0, h);
+    if (pid >= 0 && !_child_monitor) {
+        ChildManagerSingleton &m = ChildManagerSingleton::getInstance();
+        _child_monitor = _handleMap.emplace(PHandleData(new SignalFdHandleData));
+        _epoll.add(m.get_fd(), EPOLLIN, _child_monitor);
+
+    }
+    return h;
+
+}
+
+bool ContextImpl::terminate_process(Handle h) {
+    std::lock_guard _(_mx);
+    auto iter = _handleMap.find(h);
+    if (iter != _handleMap.end()) {
+        return iter->_value->visit([&](auto &p)  {
+            using T = std::decay_t<decltype(p)>;
+            if constexpr(std::is_same_v<T, TwoPipesStreamData>) {
+                return p.terminate_process();
+            } else {
+                return false;
+            }
+        });
+
+    }
+    return false;
+
+}
+
+coro::awaitable<int> ContextImpl::get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp) {
+    std::lock_guard _(_mx);
+    auto iter = _handleMap.find(h);
+    if (iter != _handleMap.end()) {
+        return iter->_value->visit([&](auto &p) -> coro::awaitable<int> {
+            using T = std::decay_t<decltype(p)>;
+            if constexpr(std::is_same_v<T, TwoPipesStreamData>) {
+                auto s= p.get_pid_status_sync();
+                if (s.has_value()) return *s;
+                else return [this, h, tp](coro::awaitable<int>::result r) {
+                    std::lock_guard _(_mx);
+                    auto iter = _handleMap.find(h);
+                    if (iter != _handleMap.end()) {
+                        auto &p = static_cast<T &>(*iter->_value);
+                        return p.get_pid_status_async(tp, std::move(r));
+                    } else {
+                        return r(-1);
+                    }
+                };
+            } else {
+                return false;
+            }
+        });
+
+    }
+    return -1;
+}
+
+ContextImpl::Handle ContextImpl::connect_fifo(const char *fname, int flags) {
+    int fd = ::open(fname, O_CLOEXEC|O_NONBLOCK|flags);
+    if (fd < 0) throw std::system_error(errno, std::system_category(), "Unable to open fifo");
+    if (flags == O_RDONLY) {
+        return create_from_handles(fd, -1,-1);
+    } else if (flags == O_WRONLY) {
+        return create_from_handles(-1, fd,-1);
+    } else {
+        ::close(fd);
+        throw std::invalid_argument("connect_fifo: invalid flags");
+    }
+}
+
+ChildManagerSingleton &ChildManagerSingleton::getInstance() {
+    static ChildManagerSingleton inst;
+    return inst;
+}
+
+ChildManagerSingleton::ChildManagerSingleton() {
+    int fds[2];
+    int r = pipe2(fds, O_CLOEXEC|O_NONBLOCK);
+    if (r < 0) {
+        throw std::system_error(errno, std::system_category(), "pipe2 (child manager)");
+    }
+    _sigfd = fds[0];
+    _feedfd = fds[1];
+
+    struct sigaction sa{};
+    sa.sa_handler = ChildManagerSingleton::handleSigChld;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+
+    if (sigaction(SIGCHLD, &sa, nullptr) == -1) {
+        throw std::system_error(errno, std::system_category(), "sigaction SIGCHILD");
+    }
+}
+
+void ChildManagerSingleton::handleSigChld(int) {
+
+    while (true) {
+        int status;
+        pid_t pid = waitpid(-1, &status, WNOHANG);
+        if (pid <= 0) break;
+
+        int data[2] = { pid, status };
+        ChildManagerSingleton &inst = getInstance();
+        ssize_t written = write(inst._feedfd, &data, sizeof(data));
+        (void)written; // avoid unused warning
+    }
+}
+
+ChildManagerSingleton::~ChildManagerSingleton() {
+    ::close(_sigfd);
+    ::close(_feedfd);
+}
+
+coro::prepared_coro ChildManagerSingleton::on_event() {
+   int data[2];
+   ssize_t s = read(_sigfd, data, sizeof(data));
+   if (s != sizeof(data)) return {};
+   std::lock_guard _(_mx);
+   auto iter = _pidmap.find(data[0]);
+   if (iter != _pidmap.end()) {
+       return iter->second->on_status_available(data[1]);
+   }
+   return {};
+}
+
+
+void ChildManagerSingleton::reg(pid_t p, TwoPipesStreamData *owner) {
+    std::lock_guard _(_mx);
+    _pidmap[p] = owner;
+}
+void ChildManagerSingleton::unreg(pid_t p) {
+    std::lock_guard _(_mx);
+    _pidmap.erase(p);
+}
+
+TwoCoros SignalFdHandleData::on_complete(int) {
+    return ChildManagerSingleton::getInstance().on_event();
+}
+
+SignalFdHandleData::SignalFdHandleData(): AbstractHandleData(HandleType::signalfd) {}
 
 }
 

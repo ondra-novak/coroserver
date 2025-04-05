@@ -12,6 +12,8 @@ auto AbstractHandleData::visit(Fn &&fn) {
         case HandleType::socket: return fn(*static_cast<StreamHandleData *>(this));
         case HandleType::server: return fn(*static_cast<ServerHandleData *>(this));
         case HandleType::timer: return fn(*static_cast<TimerHandleData *>(this));
+        case HandleType::two_pipes: return fn(*static_cast<TwoPipesStreamData *>(this));
+        case HandleType::signalfd:return fn(*static_cast<SignalFdHandleData *>(this));
         default:throw std::logic_error("unknown handle data");
     }
 }
@@ -21,6 +23,8 @@ auto AbstractHandleData::visit(Fn &&fn) const {
         case HandleType::socket: return fn(*static_cast<const StreamHandleData *>(this));
         case HandleType::server: return fn(*static_cast<const ServerHandleData *>(this));
         case HandleType::timer: return fn(*static_cast<const TimerHandleData *>(this));
+        case HandleType::two_pipes: return fn(*static_cast<const TwoPipesStreamData *>(this));
+        case HandleType::signalfd:return fn(*static_cast<const SignalFdHandleData *>(this));
         default:throw std::logic_error("unknown handle data");
     }
 }
@@ -45,9 +49,14 @@ Context::Handle Context::connect(std::string host, std::string def_port) {
     return _impl->connect(std::move(host), std::move(def_port));
 }
 
-Context::Handle Context::connect(SpecialDevice dev) {
-    return _impl->connect(dev);
+Context::Handle Context::create_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp) {
+    return _impl->connect_process(path, argv, envp);
 }
+
+Context::Handle Context::connect_stdinout() {
+    return _impl->connect_stdinout();
+}
+
 
 Context::Handle Context::create_timer() {
     return _impl->create_timer();
@@ -94,6 +103,14 @@ void Context::shutdown(Handle h) {
     return _impl->shutdown(h);
 }
 
+bool Context::terminate_process(Handle h) {
+    return _impl->terminate_process(h);
+}
+
+coro::awaitable<int> Context::get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp) {
+    return _impl->get_process_exit_status(h, tp);
+}
+
 class ContextThreaded: public ContextImpl {
 public:
 
@@ -117,6 +134,7 @@ protected:
 
 };
 
+
 Context Context::create(unsigned int iothreads) {
     return Context(std::make_shared<ContextThreaded>(iothreads));
 }
@@ -124,3 +142,4 @@ Context Context::create(unsigned int iothreads) {
 Context::~Context() {}
 
 }
+

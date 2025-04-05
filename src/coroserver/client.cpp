@@ -10,10 +10,9 @@ Stream connect(Context ctx, std::string host,std::string def_port) {
     return Stream(std::make_shared<BasicStream>(std::move(ctx), h));
 }
 
-Stream connect(Context ctx, SpecialDevice specdev) {
-    auto h = ctx.connect(specdev);
+Stream connect_stdinout(Context ctx) {
+    auto h = ctx.connect_stdinout();
     return Stream(std::make_shared<BasicStream>(std::move(ctx), h));
-
 }
 
 }
