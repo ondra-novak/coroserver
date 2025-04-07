@@ -180,9 +180,14 @@ protected:
 
 
 
-class SignalFdHandleData: public AbstractHandleData {
+class SigHandleData: public AbstractHandleData {
 public:
-    SignalFdHandleData();
+    enum SigType {
+        schild,
+        sbreak
+    };
+
+    SigHandleData(SigType sigtype);
 
     TwoCoros on_complete(int flags);
     TwoCoros on_timeout(std::chrono::system_clock::time_point)  {return {};}
@@ -196,6 +201,8 @@ public:
     std::chrono::system_clock::time_point get_timeout() const {
         return std::chrono::system_clock::time_point::max();
     }
+protected:
+    SigType _sigtype;
 
 };
 
@@ -216,6 +223,8 @@ public:
     coro::awaitable<int> get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp);
 
     Handle create_from_handles(int rd_fd, int wr_fd, pid_t pid);
+
+    coro::awaitable<BreakType> wait_on_break();
 
     Handle create_timer();
     void close(Handle h);
@@ -240,6 +249,7 @@ protected:
     EPoll<Handle> _epoll;
     EventFd _epoll_wk;
     Handle _child_monitor = null_handle;
+    Handle _break_monitor = null_handle;
 
     std::chrono::system_clock::time_point _awaiting_tp = std::chrono::system_clock::time_point::max();
     std::chrono::system_clock::time_point _new_tp = std::chrono::system_clock::time_point::max();

@@ -13,7 +13,7 @@ auto AbstractHandleData::visit(Fn &&fn) {
         case HandleType::server: return fn(*static_cast<ServerHandleData *>(this));
         case HandleType::timer: return fn(*static_cast<TimerHandleData *>(this));
         case HandleType::two_pipes: return fn(*static_cast<TwoPipesStreamData *>(this));
-        case HandleType::signalfd:return fn(*static_cast<SignalFdHandleData *>(this));
+        case HandleType::signalfd:return fn(*static_cast<SigHandleData *>(this));
         default:throw std::logic_error("unknown handle data");
     }
 }
@@ -24,7 +24,7 @@ auto AbstractHandleData::visit(Fn &&fn) const {
         case HandleType::server: return fn(*static_cast<const ServerHandleData *>(this));
         case HandleType::timer: return fn(*static_cast<const TimerHandleData *>(this));
         case HandleType::two_pipes: return fn(*static_cast<const TwoPipesStreamData *>(this));
-        case HandleType::signalfd:return fn(*static_cast<const SignalFdHandleData *>(this));
+        case HandleType::signalfd:return fn(*static_cast<const SigHandleData *>(this));
         default:throw std::logic_error("unknown handle data");
     }
 }
@@ -109,6 +109,10 @@ bool Context::terminate_process(Handle h) {
 
 coro::awaitable<int> Context::get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp) {
     return _impl->get_process_exit_status(h, tp);
+}
+
+coro::awaitable<BreakType> Context::wait_on_break() {
+    return _impl->wait_on_break();
 }
 
 class ContextThreaded: public ContextImpl {

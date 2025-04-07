@@ -19,6 +19,24 @@ enum class SpecialDevice {
     standard_error
 };
 
+enum class BreakType {
+    // Interrupt triggered by Ctrl+C
+    // Maps to SIGINT on Linux and CTRL_C_EVENT on Windows
+    interrupt,
+
+    // Quit triggered by Ctrl+Break on Windows or Ctrl+\ on Linux
+    // Maps to SIGQUIT on Linux and CTRL_BREAK_EVENT on Windows
+    quit,
+
+    // Terminal closure event
+    // Maps to SIGHUP on Linux (terminal closed) and CTRL_CLOSE_EVENT on Windows
+    terminal_close,
+
+    // Termination request
+    // Maps to SIGTERM on Linux; no direct equivalent on Windows natively
+    terminate,
+
+};
 class Context {
 public:
 
@@ -137,6 +155,25 @@ public:
      * @note only one send or send_eof at time is allowed
      */
     coro::awaitable<bool> send_eof(Handle stream);
+
+    ///let a coroutine co_await break. The coroutine receives the break type
+    /**
+     * @return awaitable type (co_await)
+     *
+     * @note by calling this function causes that necessery handlers are installed
+     * to the system. This can cause that default reaction on events covered by those
+     * handlers are supressed.
+     *
+     * For linux, this means signals SIGTERM, SIGINT, SIGQUIT and SIGHUP no longer
+     * terminates the process.
+     *
+     * @note Under windows, this function works only for console application
+     *
+     * @note under windows, to coroutine should perform cleanup of the code, there
+     * is no way to ignore this event. The application should exit during next
+     * 5 second or it is force terminated
+     */
+    coro::awaitable<BreakType> wait_on_break();
 
     ///retrieves state of the stream
     /**
