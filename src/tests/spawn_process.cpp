@@ -15,7 +15,7 @@ coro::awaitable<int> run_child(coroserver::Context &ctx) {
 
     std::string buffer;
 
-    co_await s.read_block(buffer, 65536);
+    co_await s.read_block(buffer, 1000);
     std::reverse(buffer.begin(), buffer.end());
     co_await s.write(buffer);
 
@@ -43,7 +43,7 @@ coro::awaitable<int> run_test(coroserver::Context &ctx, const char *arg0) {
     co_await s.write("hello world!");
     co_await s.close();
 
-    co_await s.read_block(buffer, 65536);
+    co_await s.read_block(buffer, 1000);
     CHECK_EQUAL(buffer, "!dlrow olleh");
 
 
