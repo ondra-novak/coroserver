@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <numeric>
+#include "context_windows.hpp"
 
 
 extern char **environ;
@@ -31,19 +32,38 @@ public:
     static ChildManagerSingleton &getInstance();
 
     coro::prepared_coro on_event();
-    void reg(pid_t p, TwoPipesStreamData *owner);
+    coro::prepared_coro reg(pid_t p, TwoPipesStreamData *owner);
     void unreg(pid_t p);
-    int get_fd() const {return _sigfd;}
+    int get_fd() const {return _eventfd;}
 
     static void handleSigChld(int signo);
 
 protected:
-    std::map<pid_t, TwoPipesStreamData *> _pidmap;
+    std::vector<std::pair<pid_t, TwoPipesStreamData *>  > _pidmap;
     std::mutex _mx;
-    int _sigfd;
-    int _feedfd;
+    int _eventfd;
 };
 
+class BreakManagerSingleton {
+public:
+    BreakManagerSingleton();
+    ~BreakManagerSingleton();
+
+    static BreakManagerSingleton &getInstance();
+
+    TwoCoros on_event();
+    void reg(coro::awaitable<ExitSignalType>::result r);
+    int get_fd() const {return _eventfd;}
+
+    static void handleSig(int signo);
+
+protected:
+    std::vector<coro::awaitable<ExitSignalType>::result> _awts;
+    std::mutex _mx;
+    int _eventfd;
+    int _signal = 0;
+
+};
 
 constexpr auto max_timeout = std::chrono::system_clock::time_point::max();
 
@@ -580,6 +600,7 @@ TwoPipesStreamData::TwoPipesStreamData(int in_fd, int out_fd, pid_t pid)
     ,_in_fd(in_fd),_out_fd(out_fd),_pid(pid) {
     if (pid >= 0) {
         ChildManagerSingleton::getInstance().reg(pid, this);
+        //we can ignore return value as there is no awaiter yet
     }
 
 }
@@ -634,8 +655,9 @@ std::optional<int> TwoPipesStreamData::get_pid_status_sync() {
 }
 
 coro::prepared_coro TwoPipesStreamData::get_pid_status_async(
-        std::chrono::system_clock::time_point tp,
-        coro::awaitable<int>::result p) {
+    std::chrono::system_clock::time_point tp,
+    coro::awaitable<int>::result p)
+{
     if (_process_status.has_value()) return p(*_process_status);
     _process_status_promise = std::move(p);
     _pidstat_timeout = tp;
@@ -1151,12 +1173,24 @@ ContextImpl::Handle ContextImpl::create_from_handles(int rd_fd, int wr_fd, pid_t
     _epoll.add(wr_fd,0, h);
     if (pid >= 0 && !_child_monitor) {
         ChildManagerSingleton &m = ChildManagerSingleton::getInstance();
-        _child_monitor = _handleMap.emplace(PHandleData(new SignalFdHandleData));
+        _child_monitor = _handleMap.emplace(PHandleData(new SigHandleData(SigHandleData::schild)));
         _epoll.add(m.get_fd(), EPOLLIN, _child_monitor);
 
     }
     return h;
 
+}
+
+coro::awaitable<ExitSignalType> ContextImpl::wait_for_exit_signal() {
+    return [this](coro::awaitable<ExitSignalType>::result r) {
+        std::lock_guard _(_mx);
+        BreakManagerSingleton &m = BreakManagerSingleton::getInstance();
+        if (_break_monitor == null_handle) {
+            _break_monitor = _handleMap.emplace(PHandleData(new SigHandleData(SigHandleData::sbreak)));
+            _epoll.add(m.get_fd(), EPOLLIN, _break_monitor);
+        }
+        m.reg(std::move(r));
+    };
 }
 
 bool ContextImpl::terminate_process(Handle h) {
@@ -1224,13 +1258,11 @@ ChildManagerSingleton &ChildManagerSingleton::getInstance() {
 }
 
 ChildManagerSingleton::ChildManagerSingleton() {
-    int fds[2];
-    int r = pipe2(fds, O_CLOEXEC|O_NONBLOCK);
-    if (r < 0) {
-        throw std::system_error(errno, std::system_category(), "pipe2 (child manager)");
+
+    _eventfd = eventfd(0, O_CLOEXEC|O_NONBLOCK);
+    if (_eventfd < 0) {
+        throw std::system_error(errno, std::system_category(), "eventfd (child monitor)");
     }
-    _sigfd = fds[0];
-    _feedfd = fds[1];
 
     struct sigaction sa{};
     sa.sa_handler = ChildManagerSingleton::handleSigChld;
@@ -1244,50 +1276,160 @@ ChildManagerSingleton::ChildManagerSingleton() {
 
 void ChildManagerSingleton::handleSigChld(int) {
 
-    while (true) {
-        int status;
-        pid_t pid = waitpid(-1, &status, WNOHANG);
-        if (pid <= 0) break;
-
-        int data[2] = { pid, status };
-        ChildManagerSingleton &inst = getInstance();
-        ssize_t written = write(inst._feedfd, &data, sizeof(data));
-        (void)written; // avoid unused warning
-    }
+    ChildManagerSingleton &inst = getInstance();
+    eventfd_write(inst._eventfd, 1);
 }
 
 ChildManagerSingleton::~ChildManagerSingleton() {
-    ::close(_sigfd);
-    ::close(_feedfd);
+    ::close(_eventfd);
 }
 
 coro::prepared_coro ChildManagerSingleton::on_event() {
-   int data[2];
-   ssize_t s = read(_sigfd, data, sizeof(data));
-   if (s != sizeof(data)) return {};
-   std::lock_guard _(_mx);
-   auto iter = _pidmap.find(data[0]);
-   if (iter != _pidmap.end()) {
-       return iter->second->on_status_available(data[1]);
-   }
-   return {};
+    eventfd_t val;
+    coro::prepared_coro r;
+    eventfd_read(_eventfd, &val);
+
+    auto iter = std::remove_if(_pidmap.begin(),
+            _pidmap.end(), [&](const auto &p) {
+        if (!r) {
+            int status = 0;
+            int e = waitpid(p.first, &status, WNOHANG);
+            if (e > 0) {
+                if (p.second) {
+                    r = p.second->on_status_available(status);
+                }
+                return true;
+            }
+        }
+        return false;
+    });
+    _pidmap.erase(iter, _pidmap.end());
+   return r;
 }
 
 
-void ChildManagerSingleton::reg(pid_t p, TwoPipesStreamData *owner) {
+coro::prepared_coro ChildManagerSingleton::reg(pid_t p, TwoPipesStreamData *owner) {
     std::lock_guard _(_mx);
-    _pidmap[p] = owner;
+    int status;
+    int e = waitpid(p, &status, WNOHANG);
+    if (e > 0) {
+        return owner->on_status_available(status);
+    }
+    _pidmap.emplace_back(p, owner);
+    return {};
 }
 void ChildManagerSingleton::unreg(pid_t p) {
     std::lock_guard _(_mx);
-    _pidmap.erase(p);
+    for (auto &[wp,o]: _pidmap) {
+        if (wp == p) o = nullptr;
+    }
 }
 
-TwoCoros SignalFdHandleData::on_complete(int) {
-    return ChildManagerSingleton::getInstance().on_event();
+TwoCoros SigHandleData::on_complete(int) {
+    switch (_sigtype) {
+        case schild: return ChildManagerSingleton::getInstance().on_event();
+        case sbreak: return BreakManagerSingleton::getInstance().on_event();
+        default: break;
+    }
 }
 
-SignalFdHandleData::SignalFdHandleData(): AbstractHandleData(HandleType::signalfd) {}
+SigHandleData::SigHandleData(SigType sigtype): AbstractHandleData(HandleType::signalfd),_sigtype(sigtype) {}
+
+
+
+BreakManagerSingleton::BreakManagerSingleton() {
+
+    _eventfd = eventfd(0, O_CLOEXEC|O_NONBLOCK);
+    if (_eventfd < 0) {
+        throw std::system_error(errno, std::system_category(), "eventfd (child monitor)");
+    }
+
+    struct sigaction sa{};
+    sa.sa_handler = BreakManagerSingleton::handleSig;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART ;
+
+    if (sigaction(SIGINT, &sa, nullptr) == -1) {
+        throw std::system_error(errno, std::system_category(), "sigaction SIGINT");
+    }
+    if (sigaction(SIGTERM, &sa, nullptr) == -1) {
+        throw std::system_error(errno, std::system_category(), "sigaction SIGTERM");
+    }
+    if (sigaction(SIGQUIT, &sa, nullptr) == -1) {
+        throw std::system_error(errno, std::system_category(), "sigaction SIGQUIT");
+    }
+    if (sigaction(SIGHUP, &sa, nullptr) == -1) {
+        throw std::system_error(errno, std::system_category(), "sigaction SIGHUP");
+    }
 
 }
 
+BreakManagerSingleton::~BreakManagerSingleton() {
+    ::close(_eventfd);
+}
+
+BreakManagerSingleton& BreakManagerSingleton::getInstance() {
+    static BreakManagerSingleton inst;
+    return inst;
+}
+
+struct MultiPrepared : coro::coro_frame<MultiPrepared> {
+    std::vector<coro::prepared_coro> lst;
+
+    void do_resume() {
+        delete this;
+    }
+    void do_destroy() {
+        delete this;
+    }
+};
+
+TwoCoros BreakManagerSingleton::on_event() {
+    TwoCoros out;
+
+    std::lock_guard _(_mx);
+    eventfd_t val;
+    int s = std::exchange(_signal,0);
+    eventfd_read(_eventfd, &val);
+    if (_awts.size() == 0) {
+        for (int s: {SIGINT, SIGTERM, SIGQUIT, SIGHUP}) signal(s, SIG_DFL);
+        raise(s);
+        abort();
+    }
+    ExitSignalType br;
+    switch (s) {
+        case SIGINT: br = ExitSignalType::control_c;break;
+        case SIGTERM: br = ExitSignalType::terminate;break;
+        case SIGQUIT: br = ExitSignalType::quit;break;
+        case SIGHUP: br = ExitSignalType::terminal_close;break;
+        default: return {};
+    }
+    if (_awts.size() == 1) {
+        out.a = _awts[0](br);
+        _awts.clear();
+    } else  if (_awts.size() == 2) {
+        out.a = _awts[0](br);
+        out.b = _awts[1](br);
+        _awts.clear();
+    } else {
+        auto m = std::make_unique<MultiPrepared>();
+        m->lst.reserve(_awts.size());
+        for (auto &x: _awts) m->lst.push_back(x(br));
+        _awts.clear();
+        out.a = m.release()->create_handle();
+    }
+    return out;
+}
+
+void BreakManagerSingleton::reg(coro::awaitable<ExitSignalType>::result r) {
+    std::lock_guard _(_mx);
+    _awts.push_back(std::move(r));
+}
+
+void BreakManagerSingleton::handleSig(int signo) {
+    BreakManagerSingleton &inst = getInstance();
+    inst._signal = signo;
+    eventfd_write(inst._eventfd, 1);
+}
+
+}

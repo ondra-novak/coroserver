@@ -13,7 +13,7 @@ auto AbstractHandleData::visit(Fn &&fn) {
         case HandleType::server: return fn(*static_cast<ServerHandleData *>(this));
         case HandleType::timer: return fn(*static_cast<TimerHandleData *>(this));
         case HandleType::two_pipes: return fn(*static_cast<TwoPipesStreamData *>(this));
-        case HandleType::signalfd:return fn(*static_cast<SignalFdHandleData *>(this));
+        case HandleType::signalfd:return fn(*static_cast<SigHandleData *>(this));
         default:throw std::logic_error("unknown handle data");
     }
 }
@@ -24,7 +24,7 @@ auto AbstractHandleData::visit(Fn &&fn) const {
         case HandleType::server: return fn(*static_cast<const ServerHandleData *>(this));
         case HandleType::timer: return fn(*static_cast<const TimerHandleData *>(this));
         case HandleType::two_pipes: return fn(*static_cast<const TwoPipesStreamData *>(this));
-        case HandleType::signalfd:return fn(*static_cast<const SignalFdHandleData *>(this));
+        case HandleType::signalfd:return fn(*static_cast<const SigHandleData *>(this));
         default:throw std::logic_error("unknown handle data");
     }
 }
@@ -49,8 +49,8 @@ Context::Handle Context::connect(std::string host, std::string def_port) {
     return _impl->connect(std::move(host), std::move(def_port));
 }
 
-Context::Handle Context::create_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp) {
-    return _impl->connect_process(path, argv, envp);
+Context::Handle Context::create_process(std::filesystem::path fpath, std::span<const std::string_view> argv,  const Environment & envp) {
+    return _impl->connect_process(fpath, argv, envp);
 }
 
 Context::Handle Context::connect_stdinout() {
@@ -109,6 +109,10 @@ bool Context::terminate_process(Handle h) {
 
 coro::awaitable<int> Context::get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp) {
     return _impl->get_process_exit_status(h, tp);
+}
+
+coro::awaitable<ExitSignalType> Context::wait_for_exit_signal() {
+    return _impl->wait_for_exit_signal();
 }
 
 class ContextThreaded: public ContextImpl {

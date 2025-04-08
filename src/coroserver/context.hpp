@@ -5,6 +5,7 @@
 #include <span>
 #include "coroutines.h"
 #include "stream_state.h"
+#include <filesystem>
 
 namespace coroserver {
 
@@ -19,6 +20,24 @@ enum class SpecialDevice {
     standard_error
 };
 
+enum class ExitSignalType {
+    // Interrupt triggered by Ctrl+C
+    // Maps to SIGINT on Linux and CTRL_C_EVENT on Windows
+    control_c,
+
+    // Quit triggered by Ctrl+Break on Windows or Ctrl+\ on Linux
+    // Maps to SIGQUIT on Linux and CTRL_BREAK_EVENT on Windows
+    quit,
+
+    // Terminal closure event
+    // Maps to SIGHUP on Linux (terminal closed) and CTRL_CLOSE_EVENT on Windows
+    terminal_close,
+
+    // Termination request
+    // Maps to SIGTERM on Linux; no direct equivalent on Windows natively
+    terminate,
+
+};
 class Context {
 public:
 
@@ -49,8 +68,24 @@ public:
      */
     Handle connect(std::string host, std::string def_port);
 
-
-    Handle create_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp);
+    ///Create process and connect it with duplex pipe 
+    /**
+     * This function is support function to spawn_process()
+     * 
+     * @param path to process 
+     * @param argv arguments - they do not include argv0
+     * @param envp environment object. It can be declared empty, in such case, current environment is used, 
+     * or you can build own environment and pass it as argument
+     * @return handle to newly created stream
+     * 
+     * @note When this function is called for the first time, necessery handlers must be instanstalled \
+     * especially under posix compatible systems. The global handler for SIGCHILD is installed, which
+     * allows to asynchronously join any finished child process. Only processes created by
+     * this function can be joined regardless on, whether the exit status is expected
+     * 
+     * @see spawn_process
+     */
+    Handle create_process(std::filesystem::path fpath, std::span<const std::string_view> argv,  const Environment & envp);
 
     ///Terminate process created by create_process
     /**
@@ -63,9 +98,26 @@ public:
      */
     bool terminate_process(Handle h);
 
+    ///Await and retrieve exit status of created process    
+    /**
+     * @param handle valid handle returned by create_process()
+     * @param tp timeout 
+     * @retval awaitable - returns exit code when child process exits.
+     * 
+     * @note under Windows, GetProcessExitCode is used. Under Linux, 
+     * a positive value contains return value from main(). A negative value contains signal number 
+     * if the process  was killed
+     * 
+     * @note if the handle is closed before the child process exits, this function is resolved
+     * with no-value
+     */
     coro::awaitable<int> get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp);
 
 
+    ///Create stream by connection stdin/stdout
+    /**
+     * @note not supported in Windows attempt to connect standard console
+     */
     Handle connect_stdinout();
 
 
@@ -137,6 +189,23 @@ public:
      * @note only one send or send_eof at time is allowed
      */
     coro::awaitable<bool> send_eof(Handle stream);
+
+    ///let a coroutine co_await on exit signal
+    /**
+     * @return awaitable type (co_await). It returns ExitSignalType
+     *
+     * @note by calling this function causes that necessery handlers are installed
+     * to the system. This disables their default actions
+     * 
+     * To achieve maximum portability, the only reaction for such signal is to
+     * exit process as soon as possible. There is no strict definition how
+     * the program should end. It can exit normally through return in main. The
+     * coroutine can send a signal to the main thread to exit. However,
+     * there is timeout, defined by operation system (in most of cases 5 seconds).
+     * If the timeout is reached, the process is terminated
+     * 
+     */
+    coro::awaitable<ExitSignalType> wait_for_exit_signal();
 
     ///retrieves state of the stream
     /**

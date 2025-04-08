@@ -44,7 +44,7 @@ public:
             auto df = std::chrono::duration_cast<std::chrono::milliseconds>(timeout - std::chrono::system_clock::now()).count();
             if (df < 0) tm = 0;
             else if (df >= static_cast<decltype(df)>(INFINITE)) tm = INFINITE-1;
-            else df = static_cast<DWORD>(df);
+            else tm = static_cast<DWORD>(df);
         }
         DWORD bytes;
         LPOVERLAPPED overlapped;
@@ -53,7 +53,7 @@ public:
         if (!GetQueuedCompletionStatus(_h, &bytes, &key, &overlapped, tm)) {
             error = GetLastError();
             if (overlapped == NULL) {
-                if (error == ERROR_TIMEOUT) {
+                if (error == WAIT_TIMEOUT) {
                     out.error = error;
                     return out;
                 }
