@@ -877,7 +877,7 @@ BOOL CreatePipeEx(
   wchar_t PipeNameBuffer[ MAX_PATH ];
 
   if (nSize == 0) {
-    nSize = 4096;
+    nSize = 65536;
   }
 
   wsprintfW( PipeNameBuffer,
@@ -1060,7 +1060,7 @@ static HANDLE make_overlapped_handle(HANDLE h) {
 
     std::thread thr([=]{
         while (true) {
-            char buff[4096];
+            char buff[65536];
             DWORD rd, wr;
             if (!ReadFile(read_end, buff, sizeof(buff), &rd, NULL) || rd == 0) {
                 CloseHandle(close_end);
@@ -1076,6 +1076,7 @@ static HANDLE make_overlapped_handle(HANDLE h) {
                 rd-=wr;
             }
         }
+        CloseHandle(h); //close handle received by argument
     });
     thr.detach();
     return return_end;
