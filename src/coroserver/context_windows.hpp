@@ -123,7 +123,81 @@ namespace coroserver {
         bool _send_closed = false;
         bool _opening = false;
     };
+
     
+class TwoPipesStreamData: public AbstractHandleData, public StreamHandleTag {
+public:
+
+    TwoPipesStreamData(HANDLE in_fd, HANDLE out_fd, HANDLE process_mon, HANDLE hProcess);
+    ~TwoPipesStreamData();
+
+    std::optional<int> get_pid_status_sync();
+
+    void set_recv_buffer(char *buffer, std::size_t sz);
+    void set_send_buffer(const char *buffer, std::size_t sz);
+    coro::prepared_coro recv_async(std::chrono::system_clock::time_point tp, coro::awaitable<std::size_t>::result p);
+    coro::prepared_coro send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p);
+
+    coro::prepared_coro get_pid_status_async(std::chrono::system_clock::time_point tp, coro::awaitable<int>::result p);
+
+    coro::prepared_coro on_complete(DWORD , LPOVERLAPPED);
+    coro::prepared_coro on_timeout(std::chrono::system_clock::time_point tp);
+    coro::prepared_coro on_shutdown();
+    coro::prepared_coro on_error(DWORD error, LPOVERLAPPED);
+    void set_closing();
+    StreamState get_state() const;
+    bool safe_to_close() const;
+
+    void send_close();
+    std::chrono::system_clock::time_point get_timeout() const;
+
+
+    bool terminate_process();
+
+protected:
+    std::chrono::system_clock::time_point _recv_timeout = std::chrono::system_clock::time_point::max();
+    std::chrono::system_clock::time_point _send_timeout = std::chrono::system_clock::time_point::max();
+    std::chrono::system_clock::time_point _pidstat_timeout =std::chrono::system_clock::time_point::max();
+
+
+    HANDLE _in_fd;
+    HANDLE _out_fd;
+    HANDLE _process_mon;
+    HANDLE _hprocess;
+
+    char *_recv_buffer = 0;
+    std::size_t _recv_buffer_size = 0;
+    coro::awaitable<std::size_t>::result _recv_result = {};
+    OVERLAPPED _recv_ovr = {};
+
+    const char *_send_buffer = 0;
+    std::size_t _send_buffer_size = 0;
+    coro::awaitable<bool>::result _send_result = {};
+    OVERLAPPED _send_ovr = {};
+    
+    coro::awaitable<int>::result _exit_result = {};
+    OVERLAPPED _mon_ovr = {};
+
+
+    DWORD _connect_error = 0;
+    char _mon_buff[1];
+    bool _state_eof = false;
+    bool _send_closed = false;
+    bool _closing = false;
+};
+    
+class SigHandleData: public AbstractHandleData {
+public:
+    SigHandleData():AbstractHandleData(HandleType::signalfd) {}
+
+    coro::prepared_coro on_complete(DWORD , LPOVERLAPPED) {return {};}
+    coro::prepared_coro on_timeout(std::chrono::system_clock::time_point) {return {};}
+    coro::prepared_coro on_shutdown() {return {};}
+    coro::prepared_coro on_error(DWORD , LPOVERLAPPED) {return {};}
+    constexpr std::chrono::system_clock::time_point get_timeout() const {return std::chrono::system_clock::time_point::max();}
+    void set_closing() {}
+    bool safe_to_close() const {return true;}
+};
     
 
 class ContextImpl {
@@ -146,6 +220,13 @@ public:
     coro::awaitable<bool> send_eof(Handle stream);
     StreamState get_state(Handle h);
     void shutdown(Handle h);
+
+    Handle connect_process(const std::filesystem::path &path, std::span<const std::string_view> argv,  const Environment & envp);
+    Handle connect_stdinout();
+    bool terminate_process(Handle h);
+    coro::awaitable<int> get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp);
+    coro::awaitable<BreakType> wait_on_break();
+
 
     void thread_entry_point();
     void signal_stop();

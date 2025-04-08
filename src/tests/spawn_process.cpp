@@ -59,6 +59,7 @@ coro::awaitable<int> run_test(coroserver::Context &ctx, const char *arg0) {
 
 int main(int argc, char **argv) {
 
+    try {
     auto ctx = coroserver::Context::create(1);
 
     if (argc == 2 && std::string_view(argv[1]) == "child") {
@@ -70,4 +71,8 @@ int main(int argc, char **argv) {
         return run_test(ctx, argv[0]);
 
     }
+} catch (std::exception &e) {
+    std::cerr << e.what() << std::endl;
+    return 1;
+}
 }

@@ -49,8 +49,8 @@ Context::Handle Context::connect(std::string host, std::string def_port) {
     return _impl->connect(std::move(host), std::move(def_port));
 }
 
-Context::Handle Context::create_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp) {
-    return _impl->connect_process(path, argv, envp);
+Context::Handle Context::create_process(std::filesystem::path fpath, std::span<const std::string_view> argv,  const Environment & envp) {
+    return _impl->connect_process(fpath, argv, envp);
 }
 
 Context::Handle Context::connect_stdinout() {

@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <numeric>
+#include "context_windows.hpp"
 
 
 extern char **environ;
@@ -654,8 +655,9 @@ std::optional<int> TwoPipesStreamData::get_pid_status_sync() {
 }
 
 coro::prepared_coro TwoPipesStreamData::get_pid_status_async(
-        std::chrono::system_clock::time_point tp,
-        coro::awaitable<int>::result p) {
+    std::chrono::system_clock::time_point tp,
+    coro::awaitable<int>::result p)
+{
     if (_process_status.has_value()) return p(*_process_status);
     _process_status_promise = std::move(p);
     _pidstat_timeout = tp;

@@ -60,7 +60,7 @@ StreamState ChunkedStream::get_state() const
 
 static void write_hex(std::vector<char> &buff, std::size_t count) {
     if (count > 0) {
-        auto p = count  & 0xF;
+        auto p = static_cast<std::uint8_t>(count  & 0xF);
         write_hex(buff, count >> 4);
         if (p > 9) buff.push_back('a'+p-10);
         else buff.push_back('0'+p);

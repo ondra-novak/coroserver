@@ -5,6 +5,7 @@
 #include <span>
 #include "coroutines.h"
 #include "stream_state.h"
+#include <filesystem>
 
 namespace coroserver {
 
@@ -68,7 +69,7 @@ public:
     Handle connect(std::string host, std::string def_port);
 
 
-    Handle create_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp);
+    Handle create_process(std::filesystem::path fpath, std::span<const std::string_view> argv,  const Environment & envp);
 
     ///Terminate process created by create_process
     /**
