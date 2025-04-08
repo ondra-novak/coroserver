@@ -12,12 +12,15 @@ coro::awaitable<void> wait_coro(Context &ctx) {
 
 }
 
-int main() {
+int main(int argc, char **argv) {
 
+    bool wt = (argc == 2 && std::string_view(argv[1]) == "w");
+
+    if (!wt) std::cout << "add 'w' argument to test exit timeout\n";
 
     Context ctx = Context::create(1);
     wait_coro(ctx).await();
-    std::this_thread::sleep_for(std::chrono::seconds(1000));
+    if (wt) std::this_thread::sleep_for(std::chrono::seconds(1000));
 
     return 0;
 }

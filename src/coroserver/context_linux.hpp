@@ -150,7 +150,7 @@ public:
     coro::prepared_coro on_status_available(int status);
 
     bool terminate_process();
-    
+
 
 protected:
     std::chrono::system_clock::time_point _recv_timeout = std::chrono::system_clock::time_point::max();
@@ -218,7 +218,7 @@ public:
     Handle create_server(std::string host, std::string def_port);
     Handle connect(std::string host, std::string def_port);
 
-    Handle connect_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & envp);
+    Handle connect_process(std::filesystem::path path, std::span<const std::string_view> argv,  const Environment & envp);
     Handle connect_stdinout();
     bool terminate_process(Handle h);
     coro::awaitable<int> get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp);

@@ -8,9 +8,9 @@ using namespace coroserver;
 static coro::mutex console_lock;
 
 coro::awaitable<void> async_write(Timer &tmr, Stream s) {
-    while (co_await tmr.sleep_for(std::chrono::seconds(1))) {        
+    while (co_await tmr.sleep_for(std::chrono::seconds(1))) {
         auto own = co_await console_lock.lock();
-        co_await s.write("... and next line\r\n");
+        co_await s.write("... and next line\n");
     }
 }
 

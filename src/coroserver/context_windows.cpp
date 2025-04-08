@@ -14,7 +14,7 @@ LPOVERLAPPED init_ovr(LPOVERLAPPED ptr) {
     ZeroMemory(ptr,sizeof(OVERLAPPED));
     return ptr;
 }
-    
+
 
 coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
     if (_was_shutdown) {
@@ -43,8 +43,8 @@ ServerHandleData::ServerHandleData(SOCKET s, int af, ContextImpl *ctx)
     :SocketHandleData(HandleType::server,s),_af(af),_ctx(ctx) {}
 
 coro::prepared_coro ServerHandleData::do_accept_async(
-            std::chrono::system_clock::time_point tp, 
-            coro::awaitable<Context::Handle>::result p) {    
+            std::chrono::system_clock::time_point tp,
+            coro::awaitable<Context::Handle>::result p) {
 
     if (_was_shutdown) return p.set_value(0);
 
@@ -66,7 +66,7 @@ coro::prepared_coro ServerHandleData::do_accept_async(
     return {};  //IOCP post is on way
 }
 
-coro::prepared_coro ServerHandleData::on_complete(DWORD, LPOVERLAPPED) {    
+coro::prepared_coro ServerHandleData::on_complete(DWORD, LPOVERLAPPED) {
     if (_prepared_socket == INVALID_SOCKET) return {};
     setsockopt(_prepared_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, reinterpret_cast<char *>(&_socket), sizeof(SOCKET));
     sockaddr_storage *local, *remote;
@@ -93,12 +93,12 @@ coro::prepared_coro ServerHandleData::on_error(DWORD err, LPOVERLAPPED ovr) {
         } else {
             return _p.set_exception(std::make_exception_ptr(Win32Error(err, "Accept async error")));
         }
-    } 
+    }
     return {};
 }
 
 coro::prepared_coro ServerHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
-    if (_tp <= tp) {
+    if (_tp >= tp) {
         _tp = tp.max();
         CancelIoEx(reinterpret_cast<HANDLE>(_socket), &_ovr);
     }
@@ -199,7 +199,7 @@ coro::prepared_coro StreamHandleData::on_complete(DWORD bytes, LPOVERLAPPED ovr)
 coro::prepared_coro StreamHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
     if (tp >= _send_timeout) {
         CancelIoEx(reinterpret_cast<HANDLE>(_socket), &_send_ovr);
-        _send_timeout = _send_timeout.max();        
+        _send_timeout = _send_timeout.max();
     }
     if (tp >= _recv_timeout) {
         CancelIoEx(reinterpret_cast<HANDLE>(_socket), &_recv_ovr);
@@ -212,7 +212,7 @@ coro::prepared_coro StreamHandleData::on_shutdown() {
     _was_shutdown = true;
     CancelIoEx(reinterpret_cast<HANDLE>(_socket), &_send_ovr);
     CancelIoEx(reinterpret_cast<HANDLE>(_socket), &_recv_ovr);
-    _send_timeout = _send_timeout.max();        
+    _send_timeout = _send_timeout.max();
     _recv_timeout = _recv_timeout.max();
     return {};
 }
@@ -221,12 +221,12 @@ coro::prepared_coro StreamHandleData::on_error(DWORD error, LPOVERLAPPED ovr) {
     if (ovr == &_send_ovr) {
         _send_timeout = _send_timeout.max();
         if (_opening) {
-            _connect_error = error;            
+            _connect_error = error;
             return _send_result.set_exception(std::make_exception_ptr(Win32Error(error, "Connect Error")));
         }
         if (error == WSA_OPERATION_ABORTED || error == WSAECONNABORTED || error == WSAECONNRESET) {
             return _send_result.set_value(false);
-        }            
+        }
         return _send_result.set_exception(std::make_exception_ptr(Win32Error(error, "Async send")));
     } else if (ovr == &_recv_ovr) {
         _recv_timeout = _recv_timeout.max();
@@ -285,7 +285,7 @@ void ContextImpl::thread_entry_point() {
         if (_awaiting_thread == my_thread_id && now >= _awaiting_tp) {
             auto tp = std::chrono::system_clock::time_point::max();
             for (auto &hm : _handleMap) {
-                hm._value->visit([&](auto &p) { 
+                hm._value->visit([&](auto &p) {
                     auto ctp = p.get_timeout();
                     if (ctp <= now) {
                             auto r = p.on_timeout(now);
@@ -305,7 +305,7 @@ void ContextImpl::thread_entry_point() {
                 Handle h = ev.key;
                 if (h != null_handle) {
                     auto iter = _handleMap.find(h);
-                    if (iter != _handleMap.end()) {                        
+                    if (iter != _handleMap.end()) {
                         auto p = iter->_value->visit([&](auto &item) -> coro::prepared_coro {
                             coro::prepared_coro p;
                             if (ev.error) {
@@ -363,7 +363,7 @@ void ContextImpl::close(Handle h) {
         }
     });
 }
- 
+
 ContextImpl::Handle ContextImpl::create_timer() {
     return _handleMap.insert(PHandleData(new TimerHandleData));
 }
@@ -549,13 +549,13 @@ ContextImpl::Handle ContextImpl::connect(std::string host, std::string def_port)
     if (s < 0) throw std::system_error(errno, std::system_category(), "socket");
     try {
         coro::prepared_coro pc;
-        auto hds = std::make_unique<StreamHandleData>(s);                
+        auto hds = std::make_unique<StreamHandleData>(s);
         auto &hdsr = *hds;
         hdsr.mark_opening();
         std::lock_guard _(_mx);
         Handle h = _handleMap.emplace(PHandleData(hds.release()));
         _iocp.add(reinterpret_cast<HANDLE>(s),h);
-        
+
         {
             struct sockaddr_storage addr = {};
             ZeroMemory(&addr, sizeof(addr));
@@ -636,7 +636,7 @@ std::string ContextImpl::get_host(Handle h) const {
        }
     });
 }
- 
+
 void ContextImpl::update_timeout(const AbstractHandleData &hd) {
     hd.visit([&](const auto &hd) {
         auto tm = hd.get_timeout();
@@ -651,7 +651,7 @@ ContextImpl::Handle ContextImpl::create_stream(SOCKET socket) {
     Handle h = _handleMap.emplace(PHandleData(new StreamHandleData(socket)));
     _iocp.add(reinterpret_cast<HANDLE>(socket), h);
     return h;
-    
+
 }
 
 
@@ -693,7 +693,7 @@ TwoPipesStreamData::~TwoPipesStreamData() {
 
 void TwoPipesStreamData::set_recv_buffer(char *buffer, std::size_t sz) {
     _recv_buffer = buffer;
-    _recv_buffer_size = sz;    
+    _recv_buffer_size = sz;
 }
 void TwoPipesStreamData::set_send_buffer(const char *buffer, std::size_t sz) {
     _send_buffer = buffer;
@@ -750,7 +750,7 @@ coro::prepared_coro TwoPipesStreamData::get_pid_status_async(std::chrono::system
     }
     _exit_result = std::move(p);
     _pidstat_timeout = tp;
-    return {};    
+    return {};
 }
 
 coro::prepared_coro TwoPipesStreamData::on_complete(DWORD bytes, LPOVERLAPPED ovr) {
@@ -765,19 +765,19 @@ coro::prepared_coro TwoPipesStreamData::on_complete(DWORD bytes, LPOVERLAPPED ov
         } else {
             return _send_result(true);
         }
-    } 
+    }
     return {};
 }
 coro::prepared_coro TwoPipesStreamData::on_timeout(std::chrono::system_clock::time_point tp) {
-    if (tp > _recv_timeout) {
+    if (tp >= _recv_timeout) {
         CancelIoEx(_in_fd, &_recv_ovr);
         _recv_timeout = _recv_timeout.max();
     }
-    if (tp > _send_timeout) {
+    if (tp >= _send_timeout) {
         CancelIoEx(_out_fd, &_send_ovr);
         _send_timeout = _send_timeout.max();
     }
-    if (tp > _pidstat_timeout) {
+    if (tp >= _pidstat_timeout) {
         CancelIoEx(_process_mon, &_mon_ovr);
         _pidstat_timeout = _pidstat_timeout.max();
     }
@@ -823,7 +823,7 @@ coro::prepared_coro TwoPipesStreamData::on_error(DWORD error, LPOVERLAPPED ovr) 
             WaitForSingleObject(_hprocess, INFINITE);
             DWORD ec;
             GetExitCodeProcess(_hprocess, &ec);
-            return _exit_result.set_value(static_cast<int>(ec));        
+            return _exit_result.set_value(static_cast<int>(ec));
         }
     }
     return {};
@@ -927,7 +927,7 @@ BOOL CreatePipeEx(
 
 
 ContextImpl::Handle ContextImpl::connect_process(const std::filesystem::path &fpath, std::span<const std::string_view> argv,  const Environment & envp) {
-    
+
     HANDLE hStdinRead = NULL, hStdinWrite = NULL;
     HANDLE hStdoutRead = NULL, hStdoutWrite = NULL;
     HANDLE hMonRead = NULL, hMonWrite = NULL;
@@ -943,7 +943,7 @@ ContextImpl::Handle ContextImpl::connect_process(const std::filesystem::path &fp
         SetHandleInformation(hStdoutRead, HANDLE_FLAG_INHERIT, 0); // parent read end not inherited
         SetHandleInformation(hMonRead, HANDLE_FLAG_INHERIT, 0); // parent read end not inherited
 
-        std::vector<char> args;        
+        std::vector<char> args;
         for (const auto &z: argv) {
             args.push_back(' ');
             args.push_back('"');
@@ -951,7 +951,7 @@ ContextImpl::Handle ContextImpl::connect_process(const std::filesystem::path &fp
                 if (c == '"') {
                     args.push_back('\\');
                 }
-                args.push_back(c);                
+                args.push_back(c);
             }
             args.push_back('"');
         }
@@ -990,7 +990,7 @@ ContextImpl::Handle ContextImpl::connect_process(const std::filesystem::path &fp
         si.hStdOutput = hStdoutWrite;
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE); // nebo můžeš vytvořit vlastní pipe pro STDERR
 
-        
+
         BOOL result = CreateProcessW(
             NULL,
             cmdline.data(),
@@ -1007,12 +1007,12 @@ ContextImpl::Handle ContextImpl::connect_process(const std::filesystem::path &fp
             throw Win32Error("CreateProcess failed: "+fpath.string());
         }
 
-        
-        CloseHandle(hStdinRead);   
-        CloseHandle(hStdoutWrite); 
+
+        CloseHandle(hStdinRead);
+        CloseHandle(hStdoutWrite);
         CloseHandle(hMonWrite);
-        CloseHandle(pi.hThread); 
-        
+        CloseHandle(pi.hThread);
+
         std::lock_guard _(_mx);
         Handle h = _handleMap.emplace(PHandleData(new TwoPipesStreamData(hStdoutRead, hStdinWrite, hMonRead, pi.hProcess)));
         _iocp.add(hStdoutRead, h);
@@ -1083,9 +1083,9 @@ static HANDLE make_overlapped_handle(HANDLE h) {
 }
 
 ContextImpl::Handle ContextImpl::connect_stdinout() {
-    
+
     HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
-    HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);    
+    HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
     SetStdHandle(STD_INPUT_HANDLE, INVALID_HANDLE_VALUE);
     SetStdHandle(STD_OUTPUT_HANDLE, INVALID_HANDLE_VALUE);
     std::lock_guard _(_mx);
@@ -1095,7 +1095,7 @@ ContextImpl::Handle ContextImpl::connect_stdinout() {
         _iocp.add(hStdIn, h);
     } catch (const Win32Error &e) {
         if (e.code().value() == ERROR_INVALID_PARAMETER) {
-            hStdIn = make_overlapped_handle<StdType::std_in>(hStdIn);        
+            hStdIn = make_overlapped_handle<StdType::std_in>(hStdIn);
             _iocp.add(hStdIn, h);
             ptr->replace_in(hStdIn);
         } else {
@@ -1173,7 +1173,7 @@ public:
         }
         std::vector<coro::prepared_coro> lst;
         lst.reserve(_awts.size());
-        
+
         DWORD tk = GetTickCount();
         DWORD e = tk + 5000;    //up to 5 sec
         while (tk < e)  {   //cycle to catch any handler registered after CTRL+C
@@ -1184,9 +1184,9 @@ public:
                 });
             }
             lst.clear();
-            Sleep(100); 
+            Sleep(100);
             tk = GetTickCount();
-        }        
+        }
         return FALSE;//ExitProcess will be called there
     }
 

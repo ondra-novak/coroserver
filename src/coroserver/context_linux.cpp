@@ -15,7 +15,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <numeric>
-#include "context_windows.hpp"
 
 
 extern char **environ;
@@ -78,7 +77,7 @@ coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time
 }
 
 coro::prepared_coro TimerHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
-   if (tp <= _tp) {
+   if (tp >= _tp) {
        _tp = max_timeout;
        return _p(true);
    }
@@ -148,7 +147,7 @@ coro::prepared_coro ServerHandleData::on_complete(int /*flags*/) {
 }
 
 coro::prepared_coro ServerHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
-    if (tp <= _tp) {
+    if (tp >= _tp) {
         _tp = max_timeout;
         return _p(0);
     }
@@ -204,8 +203,8 @@ void ContextImpl::thread_entry_point() {
             }
             _awaiting_tp = tp;
         }
+        lk.unlock();
         if (prepared.empty()) {
-            lk.unlock();
             std::optional<EPoll<Handle>::WaitRes> wr = _epoll.wait(_awaiting_tp);
             if (wr) {
                 lk.lock();
@@ -1050,8 +1049,9 @@ Environment Environment::current() {
       return env_vars;
 }
 
-ContextImpl::Handle ContextImpl::connect_process(std::string_view path, std::span<const std::string_view> argv,  const Environment & env) {
+ContextImpl::Handle ContextImpl::connect_process(std::filesystem::path fpath, std::span<const std::string_view> argv,  const Environment & env) {
 
+    auto path = fpath.string();
     std::size_t needsz = std::accumulate(argv.begin(), argv.end(), path.size()+1, [](std::size_t a, const std::string_view &x){
         return a + x.size()+1;
     })+ std::accumulate(env.begin(), env.end(), std::size_t(0), [](std::size_t a, const auto &x){
@@ -1329,8 +1329,9 @@ TwoCoros SigHandleData::on_complete(int) {
     switch (_sigtype) {
         case schild: return ChildManagerSingleton::getInstance().on_event();
         case sbreak: return BreakManagerSingleton::getInstance().on_event();
-        default: break;
+        default: return {};
     }
+
 }
 
 SigHandleData::SigHandleData(SigType sigtype): AbstractHandleData(HandleType::signalfd),_sigtype(sigtype) {}
@@ -1348,18 +1349,18 @@ BreakManagerSingleton::BreakManagerSingleton() {
     sa.sa_handler = BreakManagerSingleton::handleSig;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART ;
+    constexpr std::pair<int, std::string_view> sigs[] = {
+            {SIGINT,"SIGINT"},
+            {SIGTERM,"SIGTERM"},
+            {SIGQUIT, "SIGQUIT"},
+            {SIGHUP, "SIGHUP"}
+    };
 
-    if (sigaction(SIGINT, &sa, nullptr) == -1) {
-        throw std::system_error(errno, std::system_category(), "sigaction SIGINT");
-    }
-    if (sigaction(SIGTERM, &sa, nullptr) == -1) {
-        throw std::system_error(errno, std::system_category(), "sigaction SIGTERM");
-    }
-    if (sigaction(SIGQUIT, &sa, nullptr) == -1) {
-        throw std::system_error(errno, std::system_category(), "sigaction SIGQUIT");
-    }
-    if (sigaction(SIGHUP, &sa, nullptr) == -1) {
-        throw std::system_error(errno, std::system_category(), "sigaction SIGHUP");
+    for (const auto &[sig, name]: sigs) {
+        if (sigaction(sig, &sa, nullptr) == -1) {
+            throw std::system_error(errno, std::system_category(), std::string("sigaction ").append(name));
+        }
+
     }
 
 }
@@ -1385,9 +1386,9 @@ struct MultiPrepared : coro::coro_frame<MultiPrepared> {
 };
 
 TwoCoros BreakManagerSingleton::on_event() {
-    TwoCoros out;
-
+    std::vector<coro::prepared_coro> rsm;
     std::lock_guard _(_mx);
+    rsm.reserve(_awts.size());
     eventfd_t val;
     int s = std::exchange(_signal,0);
     eventfd_read(_eventfd, &val);
@@ -1404,21 +1405,14 @@ TwoCoros BreakManagerSingleton::on_event() {
         case SIGHUP: br = ExitSignalType::terminal_close;break;
         default: return {};
     }
-    if (_awts.size() == 1) {
-        out.a = _awts[0](br);
-        _awts.clear();
-    } else  if (_awts.size() == 2) {
-        out.a = _awts[0](br);
-        out.b = _awts[1](br);
-        _awts.clear();
-    } else {
-        auto m = std::make_unique<MultiPrepared>();
-        m->lst.reserve(_awts.size());
-        for (auto &x: _awts) m->lst.push_back(x(br));
-        _awts.clear();
-        out.a = m.release()->create_handle();
-    }
-    return out;
+    for (auto &x: _awts) rsm.push_back(x(br));
+    std::thread thr([rsm = std::move(rsm)]() mutable {
+        rsm.clear();
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        kill(getpid(), SIGKILL);    //kill self
+    });
+    thr.detach();
+    return {};
 }
 
 void BreakManagerSingleton::reg(coro::awaitable<ExitSignalType>::result r) {
