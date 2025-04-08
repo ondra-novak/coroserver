@@ -31,5 +31,5 @@ include_directories(BEFORE ${CMAKE_CURRENT_LIST_DIR}/src/basic_coro/src)
 enable_testing()
 include(library.cmake)
 add_subdirectory("src/tests")
-#add_subdirectory("src/examples")
+add_subdirectory("src/examples")
 

@@ -111,8 +111,8 @@ coro::awaitable<int> Context::get_process_exit_status(Handle h, std::chrono::sys
     return _impl->get_process_exit_status(h, tp);
 }
 
-coro::awaitable<BreakType> Context::wait_on_break() {
-    return _impl->wait_on_break();
+coro::awaitable<ExitSignalType> Context::wait_for_exit_signal() {
+    return _impl->wait_for_exit_signal();
 }
 
 class ContextThreaded: public ContextImpl {

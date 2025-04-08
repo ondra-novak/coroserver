@@ -150,6 +150,7 @@ public:
     coro::prepared_coro on_status_available(int status);
 
     bool terminate_process();
+    
 
 protected:
     std::chrono::system_clock::time_point _recv_timeout = std::chrono::system_clock::time_point::max();
@@ -224,7 +225,7 @@ public:
 
     Handle create_from_handles(int rd_fd, int wr_fd, pid_t pid);
 
-    coro::awaitable<BreakType> wait_on_break();
+    coro::awaitable<ExitSignalType> wait_for_exit_signal();
 
     Handle create_timer();
     void close(Handle h);

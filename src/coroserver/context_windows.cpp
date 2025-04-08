@@ -26,7 +26,7 @@ coro::prepared_coro TimerHandleData::sleep_until(std::chrono::system_clock::time
 }
 
 coro::prepared_coro TimerHandleData::on_timeout(std::chrono::system_clock::time_point tp) {
-    if (tp <= _tp) {
+    if (tp >= _tp) {
         _tp = std::chrono::system_clock::time_point::max();
         return _p(true);
     }
@@ -297,10 +297,10 @@ void ContextImpl::thread_entry_point() {
             }
             _awaiting_tp = tp;
         }
+        lk.unlock();
         if (prepared.empty()) {
-            lk.unlock();
             auto ev =  _iocp.wait(_awaiting_tp);
-            if (ev.error != ERROR_TIMEOUT) {
+            if (ev.error != WAIT_TIMEOUT) {
                 lk.lock();
                 Handle h = ev.key;
                 if (h != null_handle) {
@@ -1029,18 +1029,89 @@ ContextImpl::Handle ContextImpl::connect_process(const std::filesystem::path &fp
         if (hMonWrite) CloseHandle(hMonWrite);
         throw;
     }
-    
-
 }
+
+enum class StdType {
+    std_in,
+    std_out
+};
+template<StdType s>
+static HANDLE make_overlapped_handle(HANDLE h) {
+    HANDLE hR = INVALID_HANDLE_VALUE, hW = INVALID_HANDLE_VALUE;
+    if (!CreatePipeEx(&hR, &hW, NULL, 0)) {
+        throw Win32Error("CreatePipeEx (make_overlapped_handle)");
+    }
+    HANDLE read_end;
+    HANDLE write_end;
+    HANDLE close_end;
+    HANDLE return_end;
+    if constexpr(s == StdType::std_in) {
+        read_end = h;
+        write_end = hW;
+        close_end = hW;
+        return_end = hR;
+    } else {
+        read_end = hR;
+        write_end = h;
+        close_end = hR;
+        return_end = hW;
+    }
+
+
+    std::thread thr([=]{
+        while (true) {
+            char buff[4096];
+            DWORD rd, wr;
+            if (!ReadFile(read_end, buff, sizeof(buff), &rd, NULL) || rd == 0) {
+                CloseHandle(close_end);
+                break;
+            }
+            char *c = buff;
+            while (rd > 0) {
+                if (!WriteFile(write_end, buff, rd, &wr, NULL)) {
+                    CloseHandle(close_end);
+                    break;
+                }
+                c+=wr;
+                rd-=wr;
+            }
+        }
+    });
+    thr.detach();
+    return return_end;
+}
+
 ContextImpl::Handle ContextImpl::connect_stdinout() {
+    
     HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
     HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);    
     SetStdHandle(STD_INPUT_HANDLE, INVALID_HANDLE_VALUE);
     SetStdHandle(STD_OUTPUT_HANDLE, INVALID_HANDLE_VALUE);
     std::lock_guard _(_mx);
-    Handle h = _handleMap.emplace(PHandleData(new TwoPipesStreamData(hStdIn, hStdOut, INVALID_HANDLE_VALUE, NULL)));
-    _iocp.add(hStdIn, h);
-    _iocp.add(hStdOut, h);
+    auto ptr = new TwoPipesStreamData(hStdIn, hStdOut, INVALID_HANDLE_VALUE, NULL);
+    Handle h = _handleMap.emplace(PHandleData(ptr));
+    try {
+        _iocp.add(hStdIn, h);
+    } catch (const Win32Error &e) {
+        if (e.code().value() == ERROR_INVALID_PARAMETER) {
+            hStdIn = make_overlapped_handle<StdType::std_in>(hStdIn);        
+            _iocp.add(hStdIn, h);
+            ptr->replace_in(hStdIn);
+        } else {
+            throw;
+        }
+    }
+    try {
+        _iocp.add(hStdOut, h);
+    } catch (const Win32Error &e) {
+        if (e.code().value() == ERROR_INVALID_PARAMETER) {
+            hStdOut = make_overlapped_handle<StdType::std_out>(hStdOut);
+            _iocp.add(hStdOut, h);
+            ptr->replace_out(hStdOut);
+        } else {
+            throw;
+        }
+    }
     return h;
 }
 bool ContextImpl::terminate_process(Handle h) {
@@ -1088,16 +1159,16 @@ public:
         SetConsoleCtrlHandler(&HandleRoutine, TRUE);
     }
 
-    std::vector<coro::awaitable<BreakType>::result> _awts;
+    std::vector<coro::awaitable<ExitSignalType>::result> _awts;
     std::mutex _mx;
 
     BOOL handle_event(DWORD t) {
-        BreakType bt;
+        ExitSignalType bt;
         switch (t) {
-            case CTRL_C_EVENT : bt = BreakType::interrupt;break;
-            case CTRL_BREAK_EVENT : bt = BreakType::quit;break;
-            case CTRL_CLOSE_EVENT: bt = BreakType::terminal_close;break;
-            default: bt = BreakType::terminate;break;
+            case CTRL_C_EVENT : bt = ExitSignalType::control_c;break;
+            case CTRL_BREAK_EVENT : bt = ExitSignalType::quit;break;
+            case CTRL_CLOSE_EVENT: bt = ExitSignalType::terminal_close;break;
+            default: bt = ExitSignalType::terminate;break;
         }
         std::vector<coro::prepared_coro> lst;
         lst.reserve(_awts.size());
@@ -1113,19 +1184,20 @@ public:
             }
             lst.clear();
             Sleep(100); 
+            tk = GetTickCount();
         }        
         return FALSE;//ExitProcess will be called there
     }
 
-    void add(coro::awaitable<BreakType>::result r) {
+    void add(coro::awaitable<ExitSignalType>::result r) {
         std::lock_guard _(_mx);
         _awts.push_back(std::move(r));
     }
 
 };
 
-coro::awaitable<BreakType> ContextImpl::wait_on_break() {
-    return [](coro::awaitable<BreakType>::result r) {
+coro::awaitable<ExitSignalType> ContextImpl::wait_for_exit_signal() {
+    return [](coro::awaitable<ExitSignalType>::result r) {
         BreakHandler::getInstance().add(std::move(r));
     };
 }

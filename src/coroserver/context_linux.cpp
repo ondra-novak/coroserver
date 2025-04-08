@@ -52,13 +52,13 @@ public:
     static BreakManagerSingleton &getInstance();
 
     TwoCoros on_event();
-    void reg(coro::awaitable<BreakType>::result r);
+    void reg(coro::awaitable<ExitSignalType>::result r);
     int get_fd() const {return _eventfd;}
 
     static void handleSig(int signo);
 
 protected:
-    std::vector<coro::awaitable<BreakType>::result> _awts;
+    std::vector<coro::awaitable<ExitSignalType>::result> _awts;
     std::mutex _mx;
     int _eventfd;
     int _signal = 0;
@@ -1181,8 +1181,8 @@ ContextImpl::Handle ContextImpl::create_from_handles(int rd_fd, int wr_fd, pid_t
 
 }
 
-coro::awaitable<BreakType> ContextImpl::wait_on_break() {
-    return [this](coro::awaitable<BreakType>::result r) {
+coro::awaitable<ExitSignalType> ContextImpl::wait_for_exit_signal() {
+    return [this](coro::awaitable<ExitSignalType>::result r) {
         std::lock_guard _(_mx);
         BreakManagerSingleton &m = BreakManagerSingleton::getInstance();
         if (_break_monitor == null_handle) {
@@ -1396,12 +1396,12 @@ TwoCoros BreakManagerSingleton::on_event() {
         raise(s);
         abort();
     }
-    BreakType br;
+    ExitSignalType br;
     switch (s) {
-        case SIGINT: br = BreakType::interrupt;break;
-        case SIGTERM: br = BreakType::terminate;break;
-        case SIGQUIT: br = BreakType::quit;break;
-        case SIGHUP: br = BreakType::terminal_close;break;
+        case SIGINT: br = ExitSignalType::control_c;break;
+        case SIGTERM: br = ExitSignalType::terminate;break;
+        case SIGQUIT: br = ExitSignalType::quit;break;
+        case SIGHUP: br = ExitSignalType::terminal_close;break;
         default: return {};
     }
     if (_awts.size() == 1) {
@@ -1421,7 +1421,7 @@ TwoCoros BreakManagerSingleton::on_event() {
     return out;
 }
 
-void BreakManagerSingleton::reg(coro::awaitable<BreakType>::result r) {
+void BreakManagerSingleton::reg(coro::awaitable<ExitSignalType>::result r) {
     std::lock_guard _(_mx);
     _awts.push_back(std::move(r));
 }

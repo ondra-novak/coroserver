@@ -151,6 +151,11 @@ public:
     void send_close();
     std::chrono::system_clock::time_point get_timeout() const;
 
+    ///called when handle was modified because failed iocp
+    void replace_in(HANDLE newIn) {_in_fd = newIn;}
+    ///called when handle was modified because failed iocp
+    void replace_out(HANDLE newOut) {_out_fd = newOut;}
+    
 
     bool terminate_process();
 
@@ -225,7 +230,7 @@ public:
     Handle connect_stdinout();
     bool terminate_process(Handle h);
     coro::awaitable<int> get_process_exit_status(Handle h, std::chrono::system_clock::time_point tp);
-    coro::awaitable<BreakType> wait_on_break();
+    coro::awaitable<ExitSignalType> wait_for_exit_signal();
 
 
     void thread_entry_point();
