@@ -19,16 +19,16 @@ public:
     ///Create chunked stream reader and writer
     /**
      * @parm src source stream
-     * 
-     * By writting to the stream, each data block is wrapped into valid chunk. To write end 
+     *
+     * By writting to the stream, each data block is wrapped into valid chunk. To write end
      * chunk, just call close();
-     * 
+     *
      * Reading from the stream causes that chunk marks are removed from the data. The read()
      * returns eof if end chunk is extracted
      */
-     
-    
-    Stream create(Stream src) {
+
+
+    static Stream create(Stream src) {
         return Stream(std::make_shared<ChunkedStream>(src));
     }
 
