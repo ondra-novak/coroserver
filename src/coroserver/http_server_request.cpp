@@ -7,6 +7,7 @@
 #include "chunked_stream.hpp"
 #include <charconv>
 #include <ctime>
+#include <fstream>
 using coroserver::LimitedStream;
 namespace coroserver {
 
@@ -15,9 +16,11 @@ namespace http {
 std::string_view ServerRequest::default_server_name = "httpd";
 
 
-ServerRequest::ServerRequest(Stream s, std::string_view server_name)
-        :_cur_stream(s),
-         _server_name(server_name.empty()?default_server_name:server_name) {}
+ServerRequest::ServerRequest(Stream s, std::string_view server_name, ConnectionType con_type)
+        :_cur_stream(s)
+        , _server_name(server_name.empty()?default_server_name:server_name)
+        ,_con_type(con_type)
+        {}
 
 
 
@@ -109,6 +112,8 @@ bool ServerRequest::parse2() {
 
     std::sort(_recv_header.begin(), _recv_header.end(), compare_header);
 
+    if (get_host().empty()) return false;
+
     _keep_alive = (_protocol == Protocol::HTTP_1_1);
 
     auto hconn = get_header("Connection");
@@ -164,6 +169,7 @@ bool ServerRequest::parse2() {
 }
 
 awaitable<Stream> ServerRequest::get_body() {
+    _touched = true;
     if (_expect_100) {
         _expect_100 = false;
         auto awt = send100();
@@ -207,7 +213,7 @@ void ServerRequest::reset()
     _recv_header_data.clear();
     _recv_header.clear();
     _status = 0;
-    _send_state = SendState::status;
+
     _send_header.clear();
     _output_chunked = false;
     _output_size = {};
@@ -215,6 +221,9 @@ void ServerRequest::reset()
     _has_server = false;
     _has_connection= false;
     _has_content_type = false;
+
+    _touched = false;
+    _headers_sent = false;
 
 }
 
@@ -261,6 +270,7 @@ void ServerRequest::set_header(HeaderKey key, std::string_view value) {
 
         _has_connection = true;
     }
+    _headers_sent = true;
     insert_send_header(key, value);
 }
 
@@ -272,6 +282,10 @@ void ServerRequest::set_header(HeaderKey key, std::size_t sz) {
     } else {
         set_header(key, std::to_string(sz));
     }
+}
+
+void ServerRequest::set_content_length(std::size_t len) {
+    set_header("Content-Length", len);
 }
 
 void ServerRequest::set_status(unsigned int code) {
@@ -312,7 +326,8 @@ void ServerRequest::set_header_date_rfc5322(HeaderKey key, std::time_t t) {
 
 
 
-void ServerRequest::complete_headers() {
+std::string_view  ServerRequest::complete_headers() {
+    if (_status == 0) _status = 200;
     std::string status_str = std::to_string(_status);
     auto proto = protocols[_protocol];
     auto msg = _status_message;
@@ -338,29 +353,89 @@ void ServerRequest::complete_headers() {
         set_header_date_rfc5322("Date", std::time(nullptr));
     }
     if (!_has_server) {
-        set_header("Server","TODO"); //TODO
+        set_header("Server",_server_name); //TODO
     }
     if (!_has_content_type && !_upgrade
             && !_output_chunked && (!_output_size || *_output_size >  0)) {
         set_header("Content-Type","text/plain;charset=utf-8");
     }
 
-    std::string_view whole_header(_send_header.begin(), _send_header.end());
+    _send_header.push_back('\r');
+    _send_header.push_back('\n');
+
+    return std::string_view(_send_header.begin(), _send_header.end());
+}
+
+template<typename ... Args>
+auto ServerRequest::send_helper(Args  ... args) {
+
+    constexpr bool send_body = sizeof...(args) == 1;
+    using AwtType = std::conditional_t<sizeof...(Args) == 1, awaitable<bool>, awaitable<Stream> >;
+    using ResultType = AwtType::result;
+
+    auto hdrs = complete_headers();
+    auto awt = _cur_stream.write(hdrs);
+    if (awt.await_ready()) {
+        if (awt.await_resume()) {
+            if constexpr(send_body) {
+                return AwtType(finish_send().write(args...));
+            } else {
+                return AwtType(finish_send());
+            }
+        } else {
+            _keep_alive = false;
+            if constexpr(send_body) {
+                return AwtType(false);
+            } else {
+                return AwtType(NullStream::create());
+            }
+        }
+    } else {
+        _send_callback.set_awaiter(std::move(awt));
+        return AwtType([this, args...](ResultType r) {
+            if (!r) {
+                _send_callback.get_awaiter().cancel();
+                return r.set_empty();
+            }
+            return _send_callback.await([this, r = std::move(r), args...](auto &awt) mutable {
+                try {
+                    if (awt.has_value() && awt.await_resume()) {
+                        if constexpr(send_body) {
+                            auto awt2 = finish_send().write(args...);
+                            return awt2.forward(r);
+                        } else {
+                            return r(finish_send());
+                        }
+                    } else {
+                        _keep_alive = false;
+                        if constexpr(send_body) {
+                            return r(false);
+                        } else {
+                            return r(NullStream::create());
+                        }
+                    }
+                    return r.set_value(NullStream::create());
+                } catch (...) {
+                    return r.set_exception(std::current_exception());
+                }
+
+            });
+        });
+    }
+
 }
 
 awaitable<bool> ServerRequest::send(std::string_view response_body) {
     if (!_output_size && !_output_chunked) {
-        set_header("Content-Length", response_body.size());
+        set_content_length(response_body.size());
     }
-    send();//todo;
-    //todo
+    return send_helper(response_body);
 }
 
 awaitable<Stream> ServerRequest::send() {
-    complete_headers();
-    //todo send headers
-
+    return send_helper();
 }
+
 
 Stream ServerRequest::prepare_body() {
     if (_has_body) {
@@ -376,6 +451,127 @@ Stream ServerRequest::prepare_body() {
         return NullStream::create();
     }
 }
+Stream ServerRequest::finish_send() {
+    if (_output_chunked) return ChunkedStream::create(_cur_stream);
+    else if (_output_size) {
+        if (*_output_size == 0) return NullStream::create();
+        return LimitedStream::create_write_limited(_cur_stream, *_output_size);
+    }
+    else {
+        return _cur_stream;
+    }
+}
+
+awaitable<bool> ServerRequest::send_file(const std::filesystem::path &p) {
+    auto exs = p.extension().string();
+    auto ex = std::string_view(exs.data()+1, exs.size()-1);
+    return send_file(p, content_types_to_extension[ex]);
+
+
+}
+awaitable<bool> ServerRequest::send_file(const std::filesystem::path &p, ContentType ctx) {
+    std::error_code ec;
+    if (!std::filesystem::exists(p,ec) || !std::filesystem::is_regular_file(p,ec)) {
+        return false;
+    }
+    if (ec != std::error_code{}) return false;
+    auto sz = std::filesystem::file_size(p, ec);
+    if (ec != std::error_code{}) return false;
+
+    set_content_type(ctx);
+    set_content_length(sz);
+    std::ifstream f(p, std::ios::binary|std::ios::in);
+    if (!f) return false;
+
+    auto coro = [this](std::ifstream f) -> awaitable<bool>{
+        char buff[8192];
+        auto awt = send();
+        co_await awt.ready();
+        if (!awt.has_value()) co_return false;
+
+        Stream s = awt;
+
+        while (true) {
+            f.read(buff, sizeof(buff));
+            auto sz = f.gcount();
+            if (sz == 0) co_return true;
+            bool b = co_await s.write(std::string_view(buff, sz));
+            if (!b) co_return false;
+        }
+    };
+    return coro(std::move(f));
+}
+
+awaitable<bool> ServerRequest::send(std::ostringstream &stream) {
+    _tmp_body = std::move(stream).str();
+    return send(_tmp_body);
+
+}
+
+awaitable<bool> ServerRequest::send_error() {
+    std::ostringstream buff;
+
+    buff << "<!DOCTYPE html>"
+           "<html><head><title>"
+            << _status << " " << _status_message <<
+            "</title>"
+            "</head>"
+            "<body>"
+            "<h1>" << _status << " " << _status_message << "</h1>"
+            "</body>"
+            "</html>";
+
+    set_content_type(ContentType::html);
+    return send(buff);
+}
+
+ServerRequest::State ServerRequest::get_state() const {
+    if (_headers_sent) return headers_sent;
+    if (!_send_header.empty()) return headers_prepared;
+    if (_touched) return body_read;
+    return untouched;
+}
+
+bool ServerRequest::is_secure() const {
+    switch (_con_type) {
+        default:
+        case ConnectionType::direct_unsecure: return false;
+        case ConnectionType::direct_secure: return true;
+        case ConnectionType::reverse_proxy: {
+            auto v = get_header("X-Forwarded-Proto");
+            return (v.has_value() && HeaderKey(*v) == "https");
+        }
+    }
+}
+///Retrieve prefix for mapping paths
+std::string_view ServerRequest::get_path_prefix() const {
+    if (_con_type != ConnectionType::reverse_proxy) return {};
+    auto r = get_header("X-Forwarded-Prefix");
+    if (!r.has_value()) return {};
+    return *r;
+}
+
+std::string_view ServerRequest::get_host() const {
+    auto r = get_header("Host");
+    if (r.has_value()) return *r;
+    return {};
+}
+
+
+
+awaitable<bool> ServerRequest::redirect(std::string_view uri,RedirectType type) {
+    if (uri.find("..") != uri.npos) {
+        return redirect(normalize_uri(uri), type);
+    }
+    std::ostringstream loc;
+    if (is_secure()) loc << "https"; else loc << "http";
+    loc << "://" << get_host() << get_path_prefix() << uri;
+    set_status(static_cast<unsigned int>(type));
+    set_header("Location", loc.view());
+    set_content_type(ContentType::octet_stream);
+    return send("");
+}
+
 
 }
 }

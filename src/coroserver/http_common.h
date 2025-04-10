@@ -30,6 +30,29 @@ constexpr std::string_view trim(std::string_view text) {
     return text;
 }
 
+inline std::string normalize_uri(std::string_view uri) {
+    std::vector<std::string> segments;
+    std::istringstream stream((std::string(uri)));
+    std::string segment;
+
+    while (std::getline(stream, segment, '/')) {
+        if (segment == "..") {
+            if (!segments.empty()) {
+                segments.pop_back();
+            }
+        } else if (!segment.empty() && segment != ".") {
+            segments.push_back(segment);
+        }
+    }
+
+    std::ostringstream normalized_uri;
+    for (const auto& seg : segments) {
+        normalized_uri << "/" << seg;
+    }
+
+    return normalized_uri.str();
+}
+
 class HeaderKey : public std::string_view {
 public:
     constexpr HeaderKey() = default;
@@ -66,7 +89,7 @@ public:
 
 using HeaderValue = std::optional<std::string_view>;
 
-enum class Method {
+enum class Method : std::uint8_t{
         unknown,
         GET,
         HEAD,
@@ -79,7 +102,7 @@ enum class Method {
         PATCH
 };
 
-enum class Protocol {
+enum class Protocol :std::uint8_t {
         unknown,
         HTTP_1_0,
         HTTP_1_1
@@ -169,7 +192,7 @@ constexpr auto response_status_codes = makeStaticLookupTable<unsigned int, std::
     {511,"Network Authentication Required"},
 });
 
-enum class ContentType {
+enum class ContentType : std::uint8_t{
     plain,
     html,
     css,
@@ -302,6 +325,59 @@ constexpr auto content_types_to_extension = makeStaticLookupTable<ContentType, s
             {ContentType::octet_stream,"dat"},
             {ContentType::form_urlencoded,"form"}
 });
+
+enum class RedirectType {
+    /// Permanent redirect using GET method (status 301)
+    permanent_get = 301,
+    /// Permanent redirect, preserving the original request method and body (status 308)
+    permanent = 308,
+    /// Temporary redirect using GET method (status 303)
+    temporary_get = 303,
+    /// Temporary redirect, preserving the original request method and body (status 307)
+    temporary = 307
+};
+
+enum class ConnectionType : std::uint8_t {
+    ///direct connection with the client, no proxy in path, unsecured
+    /**
+     * The web server expects no mapping, no proxying, and no security on path
+     *
+     * - the protocol defaults to http://
+     *
+     * - no mapping, so path = uri
+     *
+     * - http://host/path
+     *
+     */
+    direct_unsecure,
+    ///direct connection with the client, secure connection
+    /**
+     * The web server expects no mapping, no proxying, but https
+     *
+     * - the protocol default to https://
+     *
+     * - no mapping
+     *
+     * - https://host/path
+     */
+    direct_secure,
+
+    ///Connection over reverse proxy
+    /**
+     * The web server expects connection over proxy, it searches for
+     * headers to find out location of the server
+     *
+     * - it expects Host, X-Forwarded-Proto, X-Forwarded-Prefix
+     * - rewrite rules are not recommended
+     * - proto://host/prefix/path
+     *
+     * In this mode, the direct connection is still posible. But in this
+     * mode, the server is on risk because it will try to find
+     * and process above headers.
+     *
+     */
+    reverse_proxy
+};
 
 }
 
