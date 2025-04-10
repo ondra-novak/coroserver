@@ -10,9 +10,19 @@ namespace http {
 class ServerRequest {
 public:
 
+    ///Create server request
+    /**
+     * @param s connected stream, right connected, or TLS session established
+     * @param server_name name of server. This is optional and specified
+     * content of Server header. The string must be allocated while
+     * this request exists, the best way to allocate name statically
+     */
+    ServerRequest(Stream s, std::string_view server_name = {});
+
     static constexpr std::size_t max_header_size = 65536;
     static constexpr std::size_t status_line_reservation = 100;
     static constexpr std::string_view header_separator = "\r\n\r\n";
+    static std::string_view default_server_name;
 
 
     ///Parse request
@@ -21,7 +31,7 @@ public:
      * @return awaitable returns true, if headers are valid, or
      * false if parse failed
      */
-    awaitable<bool> parse(Stream s);
+    awaitable<bool> parse();
 
 
     ///Returns true, if there is body to read
@@ -61,6 +71,7 @@ public:
 
     void set_header(HeaderKey key, std::string_view value);
     void set_header(HeaderKey key, std::size_t sz);
+    void set_header_date_rfc5322(HeaderKey key, std::time_t tm);
     void set_status(unsigned int code);
     void set_status(unsigned int code, std::string_view message);
     void set_content_type(ContentType ctx);
@@ -77,14 +88,15 @@ public:
 protected:
 
     Stream _cur_stream;
+    std::string_view _server_name;
     std::vector<char> _recv_header_data;
     std::vector<std::pair<HeaderKey, HeaderValue> > _recv_header;
-    Method _method;
-    Protocol _protocol;
-    std::string_view _path;
+    Method _method = {};
+    Protocol _protocol = {};
+    std::string_view _path = {};
     unsigned int _status = 0;
-    std::string_view _status_message;
-    bool _keep_alive = false;
+    std::string_view _status_message = {};
+    bool _keep_alive = true; //start with true to unblock load
     bool _expect_100 = false;
     bool _has_body = false;
     bool _has_body_chunked = false;
@@ -117,7 +129,7 @@ protected:
 
 
     void reset();
-    bool parse2(Stream s);
+    bool parse2();
 
     static bool compare_header(const std::pair<HeaderKey, HeaderValue> &a,
                                const std::pair<HeaderKey, HeaderValue> &b);
@@ -128,6 +140,7 @@ protected:
 
     void insert_send_header(std::string_view key, std::string_view value);
     void complete_headers();
+    void set_date();
 };
 
 }

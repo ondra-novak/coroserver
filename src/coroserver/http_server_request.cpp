@@ -6,32 +6,42 @@
 
 #include "chunked_stream.hpp"
 #include <charconv>
+#include <ctime>
 using coroserver::LimitedStream;
 namespace coroserver {
 
 namespace http {
 
+std::string_view ServerRequest::default_server_name = "httpd";
+
+
+ServerRequest::ServerRequest(Stream s, std::string_view server_name)
+        :_cur_stream(s),
+         _server_name(server_name.empty()?default_server_name:server_name) {}
 
 
 
-awaitable<bool> ServerRequest::parse(Stream s) {
+
+awaitable<bool> ServerRequest::parse() {
+    //to load request, _keep_alive must be true
+    if (!is_keep_alive()) return false;
     reset();
-    auto awt = s.read_until(_recv_header_data, header_separator, max_header_size);
+    auto awt = _cur_stream.read_until(_recv_header_data, header_separator, max_header_size);
     if (awt.is_ready()) {
-        return  parse2(std::move(s));
+        return  parse2();
     } else {
         _read_until_callback.set_awaiter(std::move(awt));
-        return [this,s = std::move(s)](coro::awaitable<bool>::result r) mutable {
+        return [this](coro::awaitable<bool>::result r) mutable {
             if (!r) {
                 _read_until_callback.get_awaiter().cancel();
                 return r.set_empty();
             }
-            return _read_until_callback.await([this, r = std::move(r), s = std::move(s)](auto &awt) mutable {
+            return _read_until_callback.await([this, r = std::move(r)](auto &awt) mutable {
                 try {
                     if (!awt.has_value()) return r.set_empty();
                     bool st = awt.await_resume();
                     if (!st) return r.set_empty();
-                    return r(parse2(std::move(s)));
+                    return r(parse2());
                 } catch (...) {
                     return r.set_exception(std::current_exception());
                 }
@@ -74,7 +84,7 @@ std::optional<std::string_view> ServerRequest::get_header(HeaderKey key) const {
     return iter->second;
 }
 
-bool ServerRequest::parse2(Stream s) {
+bool ServerRequest::parse2() {
     std::optional<Stream> retval;
     std::string_view data(_recv_header_data.data(), _recv_header_data.size());
     auto first_line = trim(split_at(data, "\r\n"));
@@ -150,7 +160,6 @@ bool ServerRequest::parse2(Stream s) {
     } else if (can_have_body && !_upgrade){
         return false;
     }
-    _cur_stream = std::move(s);
     return true;
 }
 
@@ -282,6 +291,27 @@ void ServerRequest::set_content_type(ContentType ctx) {
     set_header("Content-Type", s);
 }
 
+constexpr const char *tab_day_of_week[7] = {
+        "Sun","Mon","Tue","Wed","Thu","Fri","Sat"
+};
+constexpr const char *tab_month[12] = {
+        "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
+};
+
+void ServerRequest::set_header_date_rfc5322(HeaderKey key, std::time_t t) {
+    char date_buffer[60] = {};
+    std::tm tm = *std::gmtime(&t);
+
+    auto m = tab_day_of_week[tm.tm_mon];
+    auto d = tab_month[tm.tm_wday];
+
+    snprintf(date_buffer, sizeof(date_buffer)-1, "%s, %d %s %d %2d:%2d:%2d GMT",
+            d, tm.tm_mday, m, tm.tm_year+1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    set_header(key, date_buffer);
+}
+
+
+
 void ServerRequest::complete_headers() {
     std::string status_str = std::to_string(_status);
     auto proto = protocols[_protocol];
@@ -305,7 +335,7 @@ void ServerRequest::complete_headers() {
         set_header("Connection", "close");
     }
     if (!_has_date) {
-        set_header("Date","TODO"); //TODO
+        set_header_date_rfc5322("Date", std::time(nullptr));
     }
     if (!_has_server) {
         set_header("Server","TODO"); //TODO
