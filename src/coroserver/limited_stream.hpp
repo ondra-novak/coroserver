@@ -39,7 +39,7 @@ public:
     virtual coro::awaitable<bool> write(std::string_view data) override {
         data = crop_output(data);
         if (data.empty()) return false;
-        return write(data);
+        return StreamProxy::write(data);
     }
 
     virtual coro::awaitable<bool> close() override {

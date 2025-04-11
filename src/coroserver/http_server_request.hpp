@@ -310,6 +310,21 @@ public:
      */
     awaitable<bool> send_error();
 
+    ///Send error page with status code
+    /**
+     * @param status status code
+     * @return awaitable
+     * @retval true success
+     * @retval false failure
+     *
+     * @note The function sets status code and message. It is shortcut for
+     * set_status() and send_error().
+     **/
+    awaitable<bool> send_error(unsigned int status) {
+        set_status(status);
+        return send_error();
+    }
+
     ///change response protocol type
     /**
      * @param protocol protocol type

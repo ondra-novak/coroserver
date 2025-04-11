@@ -41,9 +41,11 @@ awaitable<bool> ServerRequest::parse() {
             }
             return _read_until_callback.await([this, r = std::move(r)](auto &awt) mutable {
                 try {
-                    if (!awt.has_value()) return r.set_empty();
+                    if (!awt.has_value()) {
+                        return r.set_empty();
+                    }
                     bool st = awt.await_resume();
-                    if (!st) return r.set_empty();
+                    if (!st) return r(false);
                     return r(parse2());
                 } catch (...) {
                     return r.set_exception(std::current_exception());
@@ -88,10 +90,9 @@ std::optional<std::string_view> ServerRequest::get_header(HeaderKey key) const {
 }
 
 bool ServerRequest::parse2() {
-    std::optional<Stream> retval;
     std::string_view data(_recv_header_data.data(), _recv_header_data.size());
     auto first_line = trim(split_at(data, "\r\n"));
-    while (data.empty()) {
+    while (!data.empty()) {
         auto ln = split_at(data, "\r\n");
         if (ln.empty()) continue;
         auto k = trim(split_at(ln,":"));
@@ -139,7 +140,7 @@ bool ServerRequest::parse2() {
     bool can_have_body = _method != Method::GET && _method != Method::HEAD;
     auto hcl = get_content_length();
     auto hte = get_header("Transfer-Encoding");
-    if (*hcl) {
+    if (hcl.has_value()) {
         if (!hte.has_value() && can_have_body && !_upgrade) {
             if (*hcl) { //only nonzero body
                 _has_body = true;
@@ -325,10 +326,10 @@ void ServerRequest::set_header_date_rfc5322(HeaderKey key, std::time_t t) {
     std::tm tm = *std::gmtime(&t);
     #endif
 
-    auto m = tab_day_of_week[tm.tm_mon];
-    auto d = tab_month[tm.tm_wday];
+    auto m = tab_month[tm.tm_mon];
+    auto d = tab_day_of_week[tm.tm_wday];
 
-    snprintf(date_buffer, sizeof(date_buffer)-1, "%s, %d %s %d %2d:%2d:%2d GMT",
+    snprintf(date_buffer, sizeof(date_buffer)-1, "%s, %d %s %d %02d:%02d:%02d GMT",
             d, tm.tm_mday, m, tm.tm_year+1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
     set_header(key, date_buffer);
 }
@@ -336,7 +337,7 @@ void ServerRequest::set_header_date_rfc5322(HeaderKey key, std::time_t t) {
 
 
 std::string_view  ServerRequest::complete_headers() {
-    if (_status == 0) _status = 200;
+    if (_status == 0) set_status(200);
     std::string status_str = std::to_string(_status);
     auto proto = protocols[_protocol];
     auto msg = _status_message;
@@ -372,7 +373,7 @@ std::string_view  ServerRequest::complete_headers() {
     _send_header.push_back('\r');
     _send_header.push_back('\n');
 
-    return std::string_view(_send_header.begin(), _send_header.end());
+    return std::string_view(_send_header.begin()+ status_line_reservation - sz, _send_header.end());
 }
 
 template<typename ... Args>
@@ -492,23 +493,27 @@ awaitable<bool> ServerRequest::send_file(const std::filesystem::path &p, Content
     std::ifstream f(p, std::ios::binary|std::ios::in);
     if (!f) return false;
 
-    auto coro = [this](std::ifstream f) -> awaitable<bool>{
+    auto coro = [](ServerRequest *me, std::ifstream f) -> awaitable<bool>{
         char buff[8192];
-        auto awt = send();
-        co_await awt.ready();
-        if (!awt.has_value()) co_return false;
-
-        Stream s = awt;
+        auto hdrs = me->complete_headers();
+        auto r = co_await me->_cur_stream.write(hdrs).as_optional();
+        if (!r) {
+            me->_keep_alive = false;
+            co_return false;
+        }
 
         while (true) {
             f.read(buff, sizeof(buff));
             auto sz = f.gcount();
             if (sz == 0) co_return true;
-            bool b = co_await s.write(std::string_view(buff, sz));
-            if (!b) co_return false;
+            bool b = co_await me->_cur_stream.write(std::string_view(buff, sz));
+            if (!b) {
+                me->_keep_alive = false;
+                co_return false;
+            }
         }
     };
-    return coro(std::move(f));
+    return coro(this, std::move(f));
 }
 
 awaitable<bool> ServerRequest::send(std::ostringstream &stream) {

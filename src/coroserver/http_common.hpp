@@ -33,7 +33,7 @@ constexpr std::string_view trim(std::string_view text) {
 }
 
  std::string normalize_uri(std::string_view uri);
- std::filesystem::path map_uri_to_path(std::filesystem::path base_path, std::string_view uri);
+std::optional<std::filesystem::path> map_uri_to_path(std::filesystem::path base_path, std::string_view uri);
 
 
 class HeaderKey : public std::string_view {
@@ -49,7 +49,7 @@ public:
             char c2 = fast_to_upper(other[i]);
             int diff = static_cast<int>(static_cast<unsigned char>(c1))
                         - static_cast<int>(static_cast<unsigned char>(c2));
-            if (!diff) return diff;
+            if (diff) return diff;
         }
         return size() > other.size()?1:size()<other.size()?-1:0;
     }
