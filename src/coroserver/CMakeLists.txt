@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.5)
 
 
 set(COMMON_FILES
+    stream.cpp
     ssl_stream.cpp        
     basic_stream.cpp
     chunked_stream.cpp
@@ -9,6 +10,7 @@ set(COMMON_FILES
     client.cpp
     process.cpp
     stream.cpp
+    http_common.cpp
     http_server_request.cpp
 )
 

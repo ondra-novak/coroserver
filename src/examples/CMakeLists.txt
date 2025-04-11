@@ -8,6 +8,7 @@ link_libraries(
 
 add_executable(wait_for_break wait_for_break.cpp)
 add_executable(async_console async_console.cpp)
+add_executable(simple_web_server simple_web_server.cpp)
 #add_executable(simple_web_server simple_web_server.cpp)
 #add_executable(simple_web_server2 simple_web_server2.cpp)
 #add_executable(simple_secure_web_server simple_secure_web_server.cpp)

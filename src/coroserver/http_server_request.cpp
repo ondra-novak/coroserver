@@ -288,6 +288,10 @@ void ServerRequest::set_content_length(std::size_t len) {
     set_header("Content-Length", len);
 }
 
+void ServerRequest::set_transfer_encoding_chunked() {
+    set_header("Transfer-Encoding", "chunked");
+}
+
 void ServerRequest::set_status(unsigned int code) {
     auto msg = response_status_codes[code];
     if (msg.empty()) msg = "No message";
@@ -314,7 +318,12 @@ constexpr const char *tab_month[12] = {
 
 void ServerRequest::set_header_date_rfc5322(HeaderKey key, std::time_t t) {
     char date_buffer[60] = {};
+    #ifdef _MSC_VER
+    std::tm tm;
+    gmtime_s(&tm, &t);
+    #else
     std::tm tm = *std::gmtime(&t);
+    #endif
 
     auto m = tab_day_of_week[tm.tm_mon];
     auto d = tab_month[tm.tm_wday];
@@ -563,15 +572,51 @@ awaitable<bool> ServerRequest::redirect(std::string_view uri,RedirectType type) 
     if (uri.find("..") != uri.npos) {
         return redirect(normalize_uri(uri), type);
     }
-    std::ostringstream loc;
-    if (is_secure()) loc << "https"; else loc << "http";
-    loc << "://" << get_host() << get_path_prefix() << uri;
-    set_status(static_cast<unsigned int>(type));
-    set_header("Location", loc.view());
+    auto url = get_url();
+    set_header("Location", url);
     set_content_type(ContentType::octet_stream);
     return send("");
 }
 
+std::string ServerRequest::get_url() const
+{
+    std::ostringstream loc;
+    if (is_secure()) loc << "https"; else loc << "http";
+    loc << "://" << get_host() << get_path_prefix() << _path;
+    return loc.str();
+}
+bool ServerRequest::redirect_to_directory(RedirectType type) {
+    if (_path.back() != '/') {
+        auto url = get_url();
+        set_header("Location", url + "/");
+        set_status(static_cast<unsigned int>(type));
+        set_content_type(ContentType::octet_stream);
+        return true;
+    } else {
+        return false;
+    }
 
+}
+Method ServerRequest::filter_methods(std::initializer_list<Method> ml)
+{
+    auto iter = std::find(ml.begin(), ml.end(), _method);
+    if (iter == ml.end()) {
+        std::ostringstream oss;
+        bool first = true;
+        for (auto m : ml) {
+            if (first) {
+                first = false;
+            } else {
+                oss << ",";
+            }
+            oss << methods[m];
+        }
+        set_header("Allow", oss.view());
+        set_status(405);
+        return Method::unknown;
+    } else {
+        return _method;
+    }
+}
 }
 }

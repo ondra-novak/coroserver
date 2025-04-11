@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string_view>
+#include <string>
+#include <filesystem>
 #include "utils/named_enum_class.hpp"
 
 namespace coroserver {
@@ -30,28 +32,9 @@ constexpr std::string_view trim(std::string_view text) {
     return text;
 }
 
-inline std::string normalize_uri(std::string_view uri) {
-    std::vector<std::string> segments;
-    std::istringstream stream((std::string(uri)));
-    std::string segment;
+ std::string normalize_uri(std::string_view uri);
+ std::filesystem::path map_uri_to_path(std::filesystem::path base_path, std::string_view uri);
 
-    while (std::getline(stream, segment, '/')) {
-        if (segment == "..") {
-            if (!segments.empty()) {
-                segments.pop_back();
-            }
-        } else if (!segment.empty() && segment != ".") {
-            segments.push_back(segment);
-        }
-    }
-
-    std::ostringstream normalized_uri;
-    for (const auto& seg : segments) {
-        normalized_uri << "/" << seg;
-    }
-
-    return normalized_uri.str();
-}
 
 class HeaderKey : public std::string_view {
 public:

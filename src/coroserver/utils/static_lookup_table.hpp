@@ -281,15 +281,15 @@ protected:
     constexpr int lower_bound(Field &&field, Value &&value) const {
         //branchless lower_bound
         int first = 0;
-        int count = Count;
+        int c = Count;
         for (int i = 0; i < search_cycles; i++) { //unrolled out by compiler
-            auto step = count / 2;
+            auto step = c / 2;
             auto it = first + step;
-            int cmp_res = -(field(it) < value);          // 0xFFFFFFFF when true
+            int cmp_res = ((field(it) < value)?-1:0);          // 0xFFFFFFFF when true
             first += (it - first) & cmp_res;             //cmp_res?it:first
-            count = step + ((count - 2*step) & cmp_res); //cmp_res?count-step:step
+            c = step + ((c - 2*step) & cmp_res); //cmp_res?c-step:step
         }
-        first+=count;
+        first+=c;
         int r1 = (first >= Count);                       // first>=Count?1:0
         int r2 = field(first-r1) != value;               // !found?1:0
         return Count - ((Count - first) & ((r1|r2)-1));  // (r1 || r2)?Count:first
