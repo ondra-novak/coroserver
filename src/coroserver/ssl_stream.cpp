@@ -105,6 +105,9 @@ SSLStream::TwoCoros SSLStream::async_process_read(coro::awaitable<std::string_vi
 {
     std::lock_guard _(_mx);
     try {
+        if (!awt.has_value()) {//timeout
+            return _recv_awaiting.set_empty(); //forward timeout;
+        }
         std::string_view s = awt.await_resume();
         if (s.empty()) {
             return fail_io();
@@ -177,6 +180,9 @@ SSLStream::TwoCoros SSLStream::async_process_write(coro::awaitable<bool> &awt)
 {
     std::lock_guard _(_mx);
     try {
+        if (!awt.has_value()) { //timeout?
+            return _write_awaiting.set_empty();
+        }
         //read write result
         bool r = awt.await_resume();
         //write successful

@@ -55,11 +55,11 @@ public:
     static constexpr std::size_t max_header_size = 65536;
     ///maximum size of response status line
     /**
-     * The response status line consists of status code and message. 
+     * The response status line consists of status code and message.
      * The maximum size of the status line is 100 bytes. This should cover all possible status codes and messages.
      */
     static constexpr std::size_t status_line_reservation = 100;
-    
+
     ///header separator
     static constexpr std::string_view header_separator = "\r\n\r\n";
 
@@ -98,7 +98,7 @@ public:
     /// Rerieves header value as unsigned int
     /**
      * @param key header key
-     * @return returns value of header as unsigned int, or empty if not found   
+     * @return returns value of header as unsigned int, or empty if not found
      */
 
     std::optional<std::size_t> get_header_uint(HeaderKey key) const;
@@ -106,14 +106,14 @@ public:
     /// Retrieves content length from header
     /**
      * @return returns content length, or empty if not found
-     */        
+     */
     std::optional<std::size_t> get_content_length() const;
 
     /// Retrieves header value
     /**
      * @param key header key
      * @return returns value of header, or empty if not found
-     */   
+     */
     std::optional<std::string_view> get_header(HeaderKey key) const;
 
     /// Retrieves stream associated with the request
@@ -149,12 +149,15 @@ public:
      */
     Protocol get_protocol() const {return _protocol;}
 
+    ///Retrieve content type if it is known
+    ContentType get_content_type() const;
+
     /// Retrieve all received headers as key-value pairs
     /**
      * @return returns all received headers as key-value pairs
      * @note The key is case insensitive, so the header "Content-Type" is the same as "content-type"
      */
-    const std::vector<std::pair<HeaderKey, HeaderValue> >& get_recv_header() const {return _recv_header;}
+    const std::vector<std::pair<HeaderKey, std::string_view> >& get_recv_header() const {return _recv_header;}
 
     /// Retrieve currently set status code for response
     /**
@@ -163,11 +166,11 @@ public:
      */
     unsigned int get_status() const {return _status;}
 
-    /// Retrieve whether client expects 100 continue    
+    /// Retrieve whether client expects 100 continue
     /**
      * @return returns true, if client expects 100 continue, or false if not
      * @note The function is set by header Expect: 100-continue. The default value is false
-     */    
+     */
     bool is_expect_100() const {return _expect_100;}
 
     /// Retrieve status message for response
@@ -186,7 +189,7 @@ public:
     /// Retrieve whether the connection is secure
     /**
      * @return returns true, if the connection is secure, or false if not
-     * @note Return value depends on ConnectionType value. If the ConnectionType is reverse_proxy, 
+     * @note Return value depends on ConnectionType value. If the ConnectionType is reverse_proxy,
      * it checks the header X-Forwarded-Proto. If the ConnectionType is direct_unsecure, it returns false.
      */
     bool is_secure() const;
@@ -244,10 +247,10 @@ public:
      * @note the function sets Content-Type header. The default value is text/plain;charset=utf-8
      */
     void set_content_type(ContentType ctx);
-    ///Set response content length  
+    ///Set response content length
     /**
      * @param len content length
-     * @note the function sets Content-Length header. If the header is not set, the Transfer-Encoding can be set 
+     * @note the function sets Content-Length header. If the header is not set, the Transfer-Encoding can be set
      * to chunked. If nether header is set, the response is set to Connection: close and body ends with EOF.
      */
     void set_content_length(std::size_t len);
@@ -333,10 +336,10 @@ public:
     void set_protocol(Protocol protocol) {_protocol = protocol;}
 
     ///Retrieves current state of the request
-    /** 
+    /**
      * This allows to determine whether the request is still untouched, or if the headers have been sent.
      * @return returns current state of the request
-     **/    
+     **/
     State get_state() const;
 
     ///Send redirect response
@@ -357,7 +360,7 @@ public:
      * @note The function retrieves the URL from the request. The URL is constructed based on the connection type and headers.
      * If the connection type is direct_unsecure, it uses http://. If the connection type is direct_secure, it uses https://.
      * If the connection type is reverse_proxy, it uses X-Forwarded-Proto header to determine the protocol.
-     */ 
+     */
     std::string get_url() const;
 
     ///Assumes that current path is directory and redirects to it adding trailing slash
@@ -365,15 +368,15 @@ public:
      * @param type redirect type
      * @retval true redirect is prepared, the caller must use send("") to send the prepared response.
      * @retval false redurect is not required, there is already a trailing slash
-     * 
+     *
      * @code {c++}
      * auto f = map_uri_to_path(base_path, req.get_path());
      * if (std::filesystem::is_directory(f) && req.redirect_to_directory()) {
      *      return req.send("");
      * }
      * @endcode
-     * 
-     * 
+     *
+     *
      */
     bool redirect_to_directory(RedirectType type = RedirectType::permanent);
 
@@ -381,17 +384,17 @@ public:
     /**
      * @param methods list of methods to filter
      * @return return method if it is in the list, or unknown if not
-     * @note The function sets status 405 Method Not Allowed if the method is not in the list. It also 
+     * @note The function sets status 405 Method Not Allowed if the method is not in the list. It also
      * sets Allow header with the list of allowed methods.
-     * 
+     *
      * @code {c++}
      * switch (req.filter_methods({Method::GET, Method::POST})) {
-     *     case Method::GET: return process_get(req); 
+     *     case Method::GET: return process_get(req);
      *     case Method::POST: return process_post(req);
      *     default: return req.send_error();
      * }
      * @endcode
-     * 
+     *
      */
     Method filter_methods(std::initializer_list<Method> methods);
 
@@ -399,19 +402,19 @@ protected:
 
     ///Retrieve request's stream
     Stream _cur_stream;
-    ///stores Server: name   
+    ///stores Server: name
     std::string_view _server_name;
     /// All headers received from the client
     std::vector<char> _recv_header_data;
     /// All headers received from the client as key-value pairs
-    std::vector<std::pair<HeaderKey, HeaderValue> > _recv_header;
+    std::vector<std::pair<HeaderKey, std::string_view> > _recv_header;
     /// Connection type
     ConnectionType _con_type = {};
     /// Method of request
     Method _method = {};
     /// Protocol type
     Protocol _protocol = {};
-    /// Path from request 
+    /// Path from request
     std::string_view _path = {};
     /// Status code of future response
     unsigned int _status = 0;
@@ -421,7 +424,7 @@ protected:
     bool _keep_alive = true; //start with true to unblock load
     /// Contains true, if 100-continue is expected
     bool _expect_100 = false;
-    /// Contains true, if request has a body. This flag is reset, when 
+    /// Contains true, if request has a body. This flag is reset, when
     bool _has_body = false;
     /// Contains true, if the body is transfered chunked
     bool _has_body_chunked = false;
@@ -463,8 +466,6 @@ protected:
     void reset();
     bool parse2();
 
-    static bool compare_header(const std::pair<HeaderKey, HeaderValue> &a,
-                               const std::pair<HeaderKey, HeaderValue> &b);
 
     awaitable<bool> send100();
 

@@ -59,10 +59,6 @@ Stream ServerRequest::get_source_stream() const {
     return _cur_stream;
 }
 
-bool ServerRequest::compare_header(const std::pair<HeaderKey, HeaderValue> &a,
-                           const std::pair<HeaderKey, HeaderValue> &b) {
-    return a.first < b.first;
-}
 
 
 std::optional<std::size_t> ServerRequest::get_header_uint(HeaderKey key) const {
@@ -623,5 +619,15 @@ Method ServerRequest::filter_methods(std::initializer_list<Method> ml)
         return _method;
     }
 }
+
+ContentType ServerRequest::get_content_type() const {
+    auto c = get_header("Content-Type");
+    if (c) {
+        auto sp = trim(split_at(*c, ";"));
+        return content_types[sp];
+    }
+    return ContentType::octet_stream;
+}
+
 }
 }

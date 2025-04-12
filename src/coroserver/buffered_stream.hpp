@@ -12,6 +12,8 @@ class BufferedStreamImpl: public StreamProxy, public std::enable_shared_from_thi
 public:
 
     using StreamProxy::StreamProxy;
+    BufferedStreamImpl(Stream s, std::size_t minbuff)
+        :StreamProxy(std::move(s)),_minbuff(minbuff) {}
 
     bool write_buff(std::string_view text) {
         return write_buff([&](auto iter){
@@ -84,6 +86,7 @@ protected:
     std::vector<char> _pending_buffer;
     std::vector<FlushNtf> _flush_pos;
     std::shared_ptr<BufferedStreamImpl> _is_pending = {};
+    std::size_t _minbuff = 0;
     bool _closed = false;
 
     coro::awaiting_callback<coro::awaitable<bool>, std::shared_ptr<BufferedStreamImpl> > _cb;
@@ -101,7 +104,7 @@ protected:
             if (_pending_buffer.empty()) {
                 auto h = std::move(_is_pending);
                 _is_pending.reset();
-                auto p = finish_flush(lk, wrsz + _current_buffer.size(), true); 
+                auto p = finish_flush(lk, wrsz + _current_buffer.size(), true);
                 if (_closed) {
                     _cb.await(close(), [h = std::move(h)](auto &) {});
                 }

@@ -10,6 +10,10 @@ namespace coroserver {
 
 namespace http {
 
+constexpr std::string_view header_row_separator = "\r\n";
+constexpr std::string_view header_block_separator = "\r\n\r\n";
+constexpr std::string_view header_keyvalue_separator_with_space = ": ";
+
 constexpr std::string_view split_at(std::string_view &line, std::string_view sep) {
     std::string_view out;
     auto pos = line.find(sep);
@@ -32,6 +36,7 @@ constexpr std::string_view trim(std::string_view text) {
     while (!text.empty() && fast_is_space(text.back())) text = text.substr(0,text.length()-1);
     return text;
 }
+
 
  std::string normalize_uri(std::string_view uri);
 std::optional<std::filesystem::path> map_uri_to_path(std::filesystem::path base_path, std::string_view uri);
@@ -72,6 +77,13 @@ public:
 };
 
 using HeaderValue = std::optional<std::string_view>;
+
+constexpr bool compare_header(const std::pair<HeaderKey, std::string_view> &a,
+                           const std::pair<HeaderKey, std::string_view> &b) {
+    return a.first < b.first;
+}
+
+
 
 enum class Method : std::uint8_t{
         unknown,
@@ -177,6 +189,7 @@ constexpr auto response_status_codes = makeStaticLookupTable<unsigned int, std::
 });
 
 enum class ContentType : std::uint8_t{
+    unknown,
     plain,
     html,
     css,
@@ -212,12 +225,25 @@ enum class ContentType : std::uint8_t{
     tar,
     gzip,
     rar,
+    grpc,
+    protobuf,
+    msgpack,
     form_urlencoded,
     multipart_form_data,
+    avro,
+    cbor,
+    bson,
+    thrift,
+    soap,
+    xaml,
+    hal,
+    sirens,
+    jsonlines,
+    zeromq,
     octet_stream
 };
 
-constexpr auto content_types = makeStaticLookupTable<ContentType, std::string_view>({
+constexpr auto content_types = makeStaticLookupTable<ContentType, HeaderKey>({
 
             {ContentType::plain, "text/plain"},
             {ContentType::html, "text/html"},
@@ -225,6 +251,10 @@ constexpr auto content_types = makeStaticLookupTable<ContentType, std::string_vi
             {ContentType::javascript, "application/javascript"},
             {ContentType::json, "application/json"},
             {ContentType::xml, "application/xml"},
+            {ContentType::msgpack, "application/msgpack"},
+            {ContentType::avro, "application/avro"},
+            {ContentType::cbor, "application/cbor"},
+            {ContentType::bson, "application/bson"},
             {ContentType::csv, "text/csv"},
             {ContentType::markdown, "text/markdown"},
             {ContentType::jpeg, "image/jpeg"},
@@ -253,13 +283,23 @@ constexpr auto content_types = makeStaticLookupTable<ContentType, std::string_vi
             {ContentType::zip, "application/zip"},
             {ContentType::tar, "application/x-tar"},
             {ContentType::gzip, "application/gzip"},
+            {ContentType::grpc, "application/grpc"},
+            {ContentType::protobuf, "application/x-protobuf"},
+            {ContentType::thrift, "application/x-thrift"},
+            {ContentType::soap, "application/soap+xml"},
+            {ContentType::xaml, "application/xaml+xml"},
+            {ContentType::hal, "application/hal+json"},
+            {ContentType::sirens, "application/vnd.siren+json"},
+            {ContentType::jsonlines, "application/x-ndjson"},
+            {ContentType::jsonlines, "application/jsonlines"},
+            {ContentType::zeromq, "application/x-zeromq"},
             {ContentType::rar, "application/x-rar-compressed"},
             {ContentType::form_urlencoded, "application/x-www-form-urlencoded"},
             {ContentType::multipart_form_data, "multipart/form-data"},
             {ContentType::octet_stream, "application/octet-stream"}
 });
 
-constexpr auto content_types_to_extension = makeStaticLookupTable<ContentType, std::string_view>({
+constexpr auto content_types_to_extension = makeStaticLookupTable<ContentType, HeaderKey>({
 
     {ContentType::plain,"txt"},
             {ContentType::html,"html"},

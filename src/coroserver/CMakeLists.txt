@@ -12,6 +12,7 @@ set(COMMON_FILES
     stream.cpp
     http_common.cpp
     http_server_request.cpp
+    http_client_request.cpp
 )
 
 if(MSVC)
