@@ -61,9 +61,11 @@ coro::prepared_coro ServerHandleData::do_accept_async(
         auto err = WSAGetLastError();
         if (err != WSA_IO_PENDING) {
             return p.set_exception(std::make_exception_ptr(Win32Error(err, "AcceptEx")));
+        } else {
+            return {};
         }
     }
-    return {};  //IOCP post is on way
+    return on_complete(0, &_ovr);
 }
 
 coro::prepared_coro ServerHandleData::on_complete(DWORD, LPOVERLAPPED) {
@@ -147,12 +149,10 @@ coro::prepared_coro StreamHandleData::recv_async(std::chrono::system_clock::time
         if (err == WSAECONNRESET || err == WSAECONNABORTED) {
             _state_eof = true;
             return _recv_result.set_value(0);
-        }
-        if (err == WSA_IO_PENDING) return {};
-        return _recv_result.set_exception(std::make_exception_ptr(Win32Error(err, "WSARecv")));
-    }
-    //return on_complete(bytes, &_recv_ovr);
-    return {}; //IOCP post is still on way
+        } else if (err == WSA_IO_PENDING) return {};
+        else return _recv_result.set_exception(std::make_exception_ptr(Win32Error(err, "WSARecv")));
+    }    
+    return on_complete(bytes, &_recv_ovr);
 }
 
 coro::prepared_coro StreamHandleData::send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
@@ -168,9 +168,8 @@ coro::prepared_coro StreamHandleData::send_async(std::chrono::system_clock::time
         if (err == WSA_IO_PENDING) return {};
         if (err == WSAECONNRESET || err == WSAECONNABORTED) return _send_result.set_value(false);
         return _send_result.set_exception(std::make_exception_ptr(Win32Error(err, "WSASend")));
-    }
-    //    return on_complete(bytes, &_send_ovr);
-    return {}; //IOCP post is still on way
+    }    
+    return on_complete(bytes, &_send_ovr);
 }
 
 coro::prepared_coro StreamHandleData::on_complete(DWORD bytes, LPOVERLAPPED ovr) {
@@ -378,8 +377,9 @@ coro::awaitable<bool> ContextImpl::sleep(Handle timer, std::chrono::system_clock
             using T = std::decay_t<decltype(t)>;
             coro::prepared_coro pc;
             if constexpr(std::is_same_v<T, TimerHandleData>) {
+                auto me = this;
                 pc = t.sleep_until(tp, std::move(p));
-                update_timeout(t);
+                me->update_timeout(t);  //"this" can be destroyed here
             } else {
                 pc =  p(false);
             }
@@ -461,8 +461,9 @@ coro::awaitable<ContextImpl::Handle> ContextImpl::accept(Handle server, std::chr
             using T = std::decay_t<decltype(srv)>;
             coro::prepared_coro p;
             if constexpr(std::is_same_v<T, ServerHandleData>) {
+                auto me =this;
                 p =srv.do_accept_async(timeout, std::move(r));
-                if (!p) update_timeout(srv);
+                if (!p) me->update_timeout(srv); //"this" can be destroyed here
             } else {
                 p = r(0);
             }
@@ -487,8 +488,9 @@ coro::awaitable<size_t> ContextImpl::receive(Handle stream, char *buffer, std::s
                     if (iter == _handleMap.end()) pc = p(0);
                     else {
                         auto &strm = static_cast<T &>(*iter->_value);
+                        auto me = this;
                         pc =  strm.recv_async(timeout, std::move(p));
-                        if (!pc) update_timeout(strm);
+                        if (!pc) me->update_timeout(strm); //"this" can be destroyed here
                     }
                 }
                 return pc;
@@ -514,8 +516,9 @@ coro::awaitable<bool> ContextImpl::send(Handle stream, const char *buffer, std::
                     if (iter == _handleMap.end()) pc = p(0);
                     else {
                         auto &strm = static_cast<T &>(*iter->_value);
+                        auto me = this;
                         pc =  strm.send_async(timeout, std::move(p));
-                        if (!pc) update_timeout(strm);
+                        if (!pc) me->update_timeout(strm); //"this" can be destroyed here
                     }
                 }
                 return pc;
@@ -702,55 +705,50 @@ void TwoPipesStreamData::set_send_buffer(const char *buffer, std::size_t sz) {
 
 coro::prepared_coro TwoPipesStreamData::recv_async(std::chrono::system_clock::time_point tp, coro::awaitable<std::size_t>::result p) {
     if (_was_shutdown || _state_eof) return p(0);
-    if (!ReadFile(_in_fd, _recv_buffer, static_cast<DWORD>(_recv_buffer_size), NULL, init_ovr(&_recv_ovr))) {
-        DWORD e = GetLastError();
-        if (e != ERROR_IO_PENDING) {
-            if (e == ERROR_BROKEN_PIPE) {
-                _state_eof = true;
-                return p(0);
-            } else {
-                return p.set_exception(std::make_exception_ptr(Win32Error(e, "ReadFile")));
-            }
-        }
-    }
+    DWORD bytes;
     _recv_result = std::move(p);
     _recv_timeout = tp;
-    return {};
+    if (!ReadFile(_in_fd, _recv_buffer, static_cast<DWORD>(_recv_buffer_size), &bytes, init_ovr(&_recv_ovr))) {
+        DWORD e = GetLastError();
+        if (e == ERROR_IO_PENDING) return {};
+        else if (e == ERROR_BROKEN_PIPE) {_state_eof = true;return _recv_result(0);} 
+        else return p.set_exception(std::make_exception_ptr(Win32Error(e, "ReadFile")));            
+    } else {
+        return on_complete(bytes, &_recv_ovr);
+    }
 }
 coro::prepared_coro TwoPipesStreamData::send_async(std::chrono::system_clock::time_point tp, coro::awaitable<bool>::result p) {
     if (_was_shutdown || _send_closed) return p(false);
-    if (!WriteFile(_out_fd, _send_buffer, static_cast<DWORD>(_send_buffer_size), NULL, init_ovr(&_send_ovr))) {
-        DWORD e = GetLastError();
-        if (e != ERROR_IO_PENDING) {
-            if (e == ERROR_BROKEN_PIPE) {
-                return p(false);
-            } else {
-                return p.set_exception(std::make_exception_ptr(Win32Error(e, "WriteFile")));
-            }
-        }
-    }
+    DWORD bytes = 0;
     _send_result = std::move(p);
     _send_timeout = tp;
-    return {};
+    if (!WriteFile(_out_fd, _send_buffer, static_cast<DWORD>(_send_buffer_size), &bytes, init_ovr(&_send_ovr))) {
+        DWORD e = GetLastError();
+        if (e == ERROR_IO_PENDING) return {};
+        else if (e == ERROR_BROKEN_PIPE) return _send_result(false);
+        else return p.set_exception(std::make_exception_ptr(Win32Error(e, "WriteFile")));
+    } else {
+        return on_complete(bytes, &_send_ovr);
+    }
+    
 }
 
 coro::prepared_coro TwoPipesStreamData::get_pid_status_async(std::chrono::system_clock::time_point tp, coro::awaitable<int>::result p) {
-    if (!ReadFile(_process_mon, _mon_buff, 1, NULL, init_ovr(&_mon_ovr))) {
+    DWORD bytes;
+    _exit_result = std::move(p);
+    _pidstat_timeout = tp;
+    if (!ReadFile(_process_mon, _mon_buff, 1, &bytes, init_ovr(&_mon_ovr))) {
         DWORD e = GetLastError();
-        if (e != ERROR_IO_PENDING) {
-            if (e == ERROR_BROKEN_PIPE) {
+        if (e == ERROR_IO_PENDING) return {};
+        else if (e == ERROR_BROKEN_PIPE) {
                 WaitForSingleObject(_hprocess, INFINITE);
                 DWORD ec;
                 GetExitCodeProcess(_hprocess, &ec);
-                return p(static_cast<int>(ec));
-            } else {
-                return p.set_exception(std::make_exception_ptr(Win32Error(e, "WriteFile")));
-            }
-        }
-    }
-    _exit_result = std::move(p);
-    _pidstat_timeout = tp;
-    return {};
+                return _exit_result(static_cast<int>(ec));
+        } else return p.set_exception(std::make_exception_ptr(Win32Error(e, "WriteFile")));        
+    } else {
+        return on_complete(bytes, &_mon_ovr);   
+    }   
 }
 
 coro::prepared_coro TwoPipesStreamData::on_complete(DWORD bytes, LPOVERLAPPED ovr) {

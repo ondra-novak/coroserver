@@ -79,8 +79,7 @@ protected:
                if (_buff.size() > _maxbuff) {
                    return promise(false);
                }
-               _callback.await_cont(_stream->read());
-               return {};
+               return _callback.await_cont(_stream->read());
            } catch (...) {
                return promise.set_exception(std::current_exception());
            }
@@ -144,8 +143,7 @@ protected:
             std::copy(data.begin(), data.end(), std::back_inserter(_buff));
             _processed += data.size();
             if (_processed >= _maxbuff) return promise(true);
-            _callback.await_cont(_stream->read());
-            return {};
+            return _callback.await_cont(_stream->read());
         } catch (...) {
             return promise.set_exception(std::current_exception());
         }
