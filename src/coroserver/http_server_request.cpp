@@ -42,7 +42,7 @@ awaitable<bool> ServerRequest::parse() {
             return _read_until_callback.await([this, r = std::move(r)](auto &awt) mutable {
                 try {
                     if (!awt.has_value()) {
-                        return r.set_empty();
+                        return r(false);
                     }
                     bool st = awt.await_resume();
                     if (!st) return r(false);

@@ -3,6 +3,7 @@
 #include <string_view>
 #include <string>
 #include <filesystem>
+#include <optional>
 #include "utils/named_enum_class.hpp"
 
 namespace coroserver {

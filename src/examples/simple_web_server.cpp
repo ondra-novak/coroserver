@@ -7,43 +7,54 @@
 
 using namespace coroserver;
 
-awaitable<void> co_main(Stream s) {
-    http::ServerRequest req(s);
-    while (co_await req.parse()) {
-        auto m = req.filter_methods({http::Method::GET});
-        if (m == http::Method::unknown) {
-            co_await req.send_error(404);
-            continue;
-        }
-        auto p = http::map_uri_to_path(std::filesystem::current_path(), req.get_path());
-        if (!p.has_value()) {
-            co_await req.send_error(404);
-            continue;
-        }
-        if (std::filesystem::is_directory(*p)) {
-            if (req.redirect_to_directory()) {
-                co_await req.send("");
+awaitable<void> request_handler(Stream s) {
+
+    static std::atomic<unsigned int> idcnt = {0};
+    unsigned int id = ++idcnt;
+    try {
+
+        std::cout << id << ":Connected" << std::endl;
+
+        http::ServerRequest req(s);
+        while (co_await req.parse()) {
+            auto m = req.filter_methods({http::Method::GET});
+            if (m == http::Method::unknown) {
+                co_await req.send_error(404);
                 continue;
-            } else {
-                *p = *p/"index.html";
             }
-        }
-        bool r = co_await req.send_file(*p);
-        if (!r) {
-            if (req.get_state() != http::ServerRequest::headers_sent) {
-                std::cout << "Not found " << *p << std::endl;
-                req.set_status(404);
-                co_await req.send_error();
+            auto p = http::map_uri_to_path(std::filesystem::current_path(), req.get_path());
+            if (!p.has_value()) {
+                co_await req.send_error(404);
                 continue;
-            } else {
-                break;
             }
+            if (std::filesystem::is_directory(*p)) {
+                if (req.redirect_to_directory()) {
+                    co_await req.send("");
+                    continue;
+                } else {
+                    *p = *p/"index.html";
+                }
+            }
+            bool r = co_await req.send_file(*p);
+            if (!r) {
+                if (req.get_state() != http::ServerRequest::headers_sent) {
+                    std::cout << id << ":Not found " << *p << std::endl;
+                    req.set_status(404);
+                    co_await req.send_error();
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            std::cout << id << ":Served " << *p << std::endl;
         }
-        std::cout << "Served " << *p << std::endl;
+        std::cout << id << ":closed " << std::endl;
+    } catch (std::exception &e) {
+        std::cout << id << ":exception:  " << e.what() << std::endl;
     }
 }
 
-awaitable<void> server(Context &ctx, std::stop_token tkn){    
+awaitable<void> server(Context &ctx, std::stop_token tkn){
     TCPServer server = TCPServer::create(ctx, "127.0.0.1", "10000");
     std::cout << "Server started on: " << server.get_host() << std::endl;
     std::stop_callback cb(tkn, [&](){
@@ -51,8 +62,10 @@ awaitable<void> server(Context &ctx, std::stop_token tkn){
     });
 
     while (true) {
-        Stream s = co_await server.accept();
-        co_main(s); //detached mode;
+        auto s = co_await server.accept().as_optional();
+        if (!s) break;
+        s->set_timeouts({std::chrono::seconds(10),std::chrono::seconds(10)});
+        request_handler(*s); //detached mode;
     }
 }
 
@@ -92,11 +105,14 @@ int main() {
     });
 
     server(ctx, ssrc.get_token()).await();
+    return 0;
 
 } catch (const std::exception &e) {
     std::cerr << "Error: " << e.what() << std::endl;
     return 1;
 }
-
 }
+
+
+
 
