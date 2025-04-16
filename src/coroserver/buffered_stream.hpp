@@ -38,7 +38,7 @@ public:
             if (_closed) return false;
             auto iter = std::back_inserter(_current_buffer);
             fn(iter);
-            if (_is_pending) return true;
+            if (_is_pending) return true;            
             _is_pending = shared_from_this();
             _pending_buffer = std::move(_current_buffer);
         }
