@@ -4,9 +4,9 @@
 namespace coroserver {
 namespace ws {
 
-WebSocketStream::WebSocketStream(Stream s, bool server, bool need_fragmented)
-    :WebSocketStream(BufferedStream(std::move(s)), server, need_fragmented) {}
-WebSocketStream::WebSocketStream(BufferedStream s, bool server, bool need_fragmented)
+WebSocketStreamImpl::WebSocketStreamImpl(Stream s, bool server, bool need_fragmented)
+    :WebSocketStreamImpl(BufferedStream(std::move(s)), server, need_fragmented) {}
+WebSocketStreamImpl::WebSocketStreamImpl(BufferedStream s, bool server, bool need_fragmented)
 : _stream(std::move(s))
 ,_parser(_buffer, need_fragmented)
 ,_server(server) {
@@ -18,11 +18,11 @@ if (_server){
 }
 
 
-WebSocketStream::~WebSocketStream() {
+WebSocketStreamImpl::~WebSocketStreamImpl() {
     close();
 }
 
-awaitable<Message> WebSocketStream::read() {
+awaitable<Message> WebSocketStreamImpl::read() {
     _parser.reset();
     auto awt = _stream.read();
     while (awt.await_ready()) {
@@ -73,7 +73,7 @@ awaitable<Message> WebSocketStream::read() {
     };
 }
 
-std::array<std::uint8_t, 4> WebSocketStream::generate_masking_key() {
+std::array<std::uint8_t, 4> WebSocketStreamImpl::generate_masking_key() {
     std::array<std::uint8_t, 4> key;
     std::uniform_int_distribution<std::uint8_t> dist(0, 255);
     for (auto &k : key) {
@@ -81,7 +81,7 @@ std::array<std::uint8_t, 4> WebSocketStream::generate_masking_key() {
     }
     return key;
 }
-bool WebSocketStream::write(const Message &message)
+bool WebSocketStreamImpl::write(const Message &message)
 {    
     bool c = true;
     bool r = _stream.write([&](auto output_iter){
@@ -99,13 +99,13 @@ bool WebSocketStream::write(const Message &message)
     return r && c;
 }
 
-bool WebSocketStream::close(std::uint16_t code, std::string_view message)
+bool WebSocketStreamImpl::close(std::uint16_t code, std::string_view message)
 {
     if (get_state() == StreamState::closing) return true;
     return write({message, Type::connClose, code});
 }
 
-bool WebSocketStream::handle_message(const Message &msg)
+bool WebSocketStreamImpl::handle_message(const Message &msg)
 {
     switch (msg.type) {    
         default: return false;

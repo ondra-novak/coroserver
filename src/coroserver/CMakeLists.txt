@@ -15,6 +15,7 @@ set(COMMON_FILES
     http_client_request.cpp
     ws_defs.cpp
     websocket_stream.cpp
+    websocket_server.cpp
 )
 
 if(MSVC)

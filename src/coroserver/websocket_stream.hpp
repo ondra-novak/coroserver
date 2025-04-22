@@ -8,12 +8,12 @@ namespace coroserver {
 
 namespace ws {
 
-class WebSocketStream {
+class WebSocketStreamImpl {
 public:
 
-    WebSocketStream(Stream s, bool server = false, bool need_fragmented = false);
-    WebSocketStream(BufferedStream s, bool server = false, bool need_fragmented = false);
-    ~WebSocketStream();
+    WebSocketStreamImpl(Stream s, bool server = false, bool need_fragmented = false);
+    WebSocketStreamImpl(BufferedStream s, bool server = false, bool need_fragmented = false);
+    ~WebSocketStreamImpl();
 
     StreamState get_state() const {        
         if (_close_recv) return StreamState::closed;
@@ -134,7 +134,7 @@ protected:
 
 
     coro::awaiting_callback<awaitable<std::string_view>, 
-            WebSocketStream *, awaitable<Message>::result > _read_callback;
+            WebSocketStreamImpl *, awaitable<Message>::result > _read_callback;
 
 
     ///Handle message   
@@ -148,6 +148,105 @@ protected:
 
     std::array<std::uint8_t, 4> generate_masking_key();
 
+};
+
+/**
+ * @class WebSocketStream
+ * @brief A wrapper class for managing WebSocket streams.
+ *
+ * This class provides an interface for interacting with WebSocket streams,
+ * delegating the actual implementation to an internal `WebSocketStreamImpl` instance.
+ */
+class WebSocketStream {
+public:
+    /**
+     * @brief Constructs a WebSocketStream with an existing implementation.
+     * @param impl A shared pointer to an existing WebSocketStreamImpl instance.
+     */
+    WebSocketStream(std::shared_ptr<WebSocketStreamImpl> impl);
+
+    /**
+     * @brief Constructs a WebSocketStream with a new implementation.
+     * @param s The underlying stream to use for WebSocket communication.
+     * @param server Indicates whether the WebSocket is operating in server mode.
+     * @param need_fragmented Indicates whether fragmented messages are required.
+     */
+    WebSocketStream(Stream s, bool server = false, bool need_fragmented = false);
+
+    /**
+     * @brief Retrieves the current state of the WebSocket stream.
+     * @return The current state of the WebSocket stream.
+     */
+    StreamState get_state() const;
+
+    /**
+     * @brief Sets whether the WebSocket stream requires timeout handling.
+     * @param need_timeout True if timeout handling is required, false otherwise.
+     */
+    void set_need_timeout(bool need_timeout);
+
+    /**
+     * @brief Checks whether the WebSocket stream requires timeout handling.
+     * @return True if timeout handling is required, false otherwise.
+     */
+    bool get_need_timeout() const;
+
+    /**
+     * @brief Reads a message from the WebSocket stream asynchronously.
+     * @return An awaitable object that resolves to the next WebSocket message.
+     */
+    awaitable<Message> read();
+
+    /**
+     * @brief Writes a message to the WebSocket stream.
+     * @param message The message to send.
+     * @return True if the message was successfully written, false otherwise.
+     */
+    bool write(const Message &message);
+
+    /**
+     * @brief Closes the WebSocket stream.
+     * @param code The close code to send (default is normal closure).
+     * @param message An optional close message to send.
+     * @return True if the stream was successfully closed, false otherwise.
+     */
+    bool close(std::uint16_t code = Base::closeNormal, std::string_view message = {});
+
+    /**
+     * @brief Sets the I/O timeouts for the WebSocket stream.
+     * @param timeout The timeout configuration to apply.
+     */
+    void set_timeouts(IOTimeout timeout);
+
+    /**
+     * @brief Retrieves the current I/O timeout configuration.
+     * @return The current I/O timeout configuration.
+     */
+    IOTimeout getIOTimeouts() const;
+
+    /**
+     * @brief Retrieves the counters for the underlying stream.
+     * @return The counters for the underlying stream.
+     */
+    Stream::Counters getCounters() const;
+
+    /**
+     * @brief Retrieves the size of the buffered data in the WebSocket stream.
+     * @return The size of the buffered data in bytes.
+     */
+    std::size_t get_buffered_size() const;
+
+    /**
+     * @brief Flushes the WebSocket stream asynchronously.
+     * @return An awaitable object that resolves to true if the flush was successful, false otherwise.
+     */
+    awaitable<bool> flush();
+
+private:
+    /**
+     * @brief A shared pointer to the internal WebSocketStreamImpl instance.
+     */
+    std::shared_ptr<WebSocketStreamImpl> _impl;
 };
 
 }
