@@ -1,6 +1,6 @@
-#include <coroserver/client.hpp>
-#include <coroserver/timer.hpp>
-#include <coroserver/stream.hpp>
+#include "../coroserver/client.hpp"
+#include "../coroserver/timer.hpp"
+#include "../coroserver/stream.hpp"
 #include <basic_coro/when_all.hpp>
 
 using namespace coroserver;

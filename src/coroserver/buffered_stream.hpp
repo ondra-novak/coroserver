@@ -1,8 +1,7 @@
 #pragma once
 
+#include "coroutines.hpp"
 #include "stream.hpp"
-#include "coroutines.h"
-
 #include <mutex>
 #include <vector>
 #include <format>
@@ -33,29 +32,30 @@ public:
         {v(std::back_inserter(buff))};
     })
     bool write_buff(Fn &&fn) {
-        {
-            std::lock_guard _(_wrmx);
-            if (_closed) return false;
-            auto iter = std::back_inserter(_current_buffer);
-            fn(iter);
-            if (_is_pending) return true;            
-            _is_pending = shared_from_this();
-            _pending_buffer = std::move(_current_buffer);
-        }
-        _cb.await(write(std::string_view(_pending_buffer.data(), _pending_buffer.size())),
-                [this](auto &awt){return finish_write(awt);});
+        prepared_coro pc;
+        std::lock_guard _(_wrmx);
+        if (_closed) return false;
+        auto iter = std::back_inserter(_current_buffer);
+        fn(iter);
+        pc = flush_if_data(_minbuff);
         return true;
     }
 
     void close_buff() {
+        prepared_coro pc;
         std::lock_guard _(_wrmx);
+        pc = flush_if_data(0);
         _closed = true;
-        if (_is_pending) return;
-        _cb.await(close(),[h = shared_from_this()](auto &){});
+        if (!pc && !_is_pending) {
+            _cb.await(close(),[h = shared_from_this()](auto &){});
+        }
+
     }
 
     coro::awaitable<bool> flush() {
+        prepared_coro pc;
         std::lock_guard _(_wrmx);
+        pc = flush_if_data(0);
         if (!_is_pending) return !_closed;
         return [this](coro::awaitable<bool>::result r) {
             std::lock_guard _(_wrmx);
@@ -64,6 +64,13 @@ public:
                 std::move(r)
             });
         };
+    }
+
+
+    void flush_bg() {
+        prepared_coro pc;
+        std::lock_guard _(_wrmx);
+        pc =  flush_if_data(0);
     }
 
     std::size_t get_buffered_size() const {
@@ -146,6 +153,13 @@ protected:
         return p;
     }
 
+    prepared_coro flush_if_data(std::size_t sz) {
+        if (_current_buffer.size() < sz || _is_pending) return {};
+        _is_pending = shared_from_this();
+        _pending_buffer = std::move(_current_buffer);
+         return _cb.await(write(std::string_view(_pending_buffer.data(), _pending_buffer.size())),
+                [this](auto &awt){return finish_write(awt);});
+    }
 
 };
 
@@ -165,7 +179,24 @@ public:
     ///Construct buffered stream from some normal stream
     BufferedStream(Stream s):Stream(std::make_shared<BufferedStreamImpl>(s)) {}
 
-    ///Write a text to buffered stream
+    ///Construct buffered stream
+    /**
+     * @param s target stream
+     * @param size size of buffer. If the buffered size reaches this size,
+     * the buffer is flushed at background. This isn't hard limit, the buffer
+     * can grow if the data are pushed faster than can be transfered by the stream.
+     * However if the buffered size if less than this value, data are not sent waiting
+     * for more data to come
+     *
+     * @note When internal buffer holds less than specified size, it doesn't pass them
+     * to the output stream. Once the amount of data reaches specified size, everything
+     * is flushed to the output stream including any data stored in the buffer meanwhile.
+     *
+     *
+     */
+    BufferedStream(Stream s, std::size_t size):Stream(std::make_shared<BufferedStreamImpl>(s, size)) {}
+
+    ///Write a text to buffered stream.
     /**
      * @param text text to write
      * @retval true success
@@ -205,9 +236,10 @@ public:
 
     ///waits until buffered content is sent
     /**
-     * Actually, no flushing is needed, all data are immediately send to the stream. However
-     * if you need to ensure, that really all written data has been sent, you
-     * need to call this function and wait for completion
+     *
+     * If there are some data waiting to be send, they are sent now. The function
+     * returns awaitable which is fullfilled when all buffered data
+     * are successfuly passed to the output stream or when error condition is reported
      *
      * @return awaitable
      * @retval true sent
@@ -216,6 +248,16 @@ public:
     coro::awaitable<bool> flush() {
         return std::static_pointer_cast<BufferedStreamImpl>(_ptr)->flush();
     }
+
+    ///Flush at background
+    /**
+     * Forces any buffered data to be flushed. The flush operation is executed at background
+     * you will not receive notification about completion
+     */
+    void flush_bg() {
+        std::static_pointer_cast<BufferedStreamImpl>(_ptr)->flush_bg();
+    }
+
     ///retrieves current buffered size
     std::size_t get_buffered_size() const {
         return std::static_pointer_cast<BufferedStreamImpl>(_ptr)->get_buffered_size();
@@ -225,6 +267,8 @@ public:
      * The function schedule such operation at the end of the current buffer. You
      * can no longer write to the stream, but if there are buffered data, they are
      * all written before the stream is closed
+     *
+     * @note executes flush at background
      */
     void close() {
         std::static_pointer_cast<BufferedStreamImpl>(_ptr)->close();

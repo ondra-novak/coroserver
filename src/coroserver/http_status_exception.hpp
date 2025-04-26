@@ -1,8 +1,8 @@
 #pragma once
 
+#include "null_stream.hpp"
 #include "stream.hpp"
 #include "http_common.hpp"
-#include "null_stream.h"
 #include <stdexcept>
 namespace coroserver {
 

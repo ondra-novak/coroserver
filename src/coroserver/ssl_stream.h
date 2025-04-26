@@ -1,5 +1,5 @@
 #pragma once
-#include <coroserver/stream.hpp>
+#include "stream.hpp"
 #include <functional>
 
 typedef struct bio_st BIO;

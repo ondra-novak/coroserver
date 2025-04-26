@@ -5,6 +5,7 @@ set(testFiles
     compile_test.cpp
     tcp_test.cpp
     spawn_process.cpp
+    http_client.cpp
 )
 
 link_libraries(

@@ -1,5 +1,5 @@
 #pragma once
-#include "string_search.h"
+#include "string_search.hpp"
 #include "istream.hpp"
 
 namespace coroserver{

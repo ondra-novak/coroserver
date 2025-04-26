@@ -1,9 +1,9 @@
 #include "check.h"
 
-#include <coroserver/stream.hpp>
-#include <coroserver/context.hpp>
-#include <coroserver/server.hpp>
-#include <coroserver/client.hpp>
+#include "../coroserver/stream.hpp"
+#include "../coroserver/context.hpp"
+#include "../coroserver/server.hpp"
+#include "../coroserver/client.hpp"
 #include <format>
 
 using namespace coroserver;

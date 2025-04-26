@@ -1,8 +1,8 @@
 #pragma once
 
+#include "coroutines.hpp"
+#include "timeout.hpp"
 #include "stream_state.h"
-#include "coroutines.h"
-#include "timeout.h"
 
 namespace coroserver {
 

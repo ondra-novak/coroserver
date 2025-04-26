@@ -1,9 +1,9 @@
 #pragma once
 
 #include <chrono>
+#include "coroutines.hpp"
 #include <memory>
 #include <span>
-#include "coroutines.h"
 #include "stream_state.h"
 #include <filesystem>
 

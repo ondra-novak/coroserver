@@ -111,11 +111,11 @@ std::string_view ChunkedStream::ChunkParser::received(std::string_view data)
             case reading_chunk_size: {
                 bool nx = _state == reading_chunk_size_next;
                 _state = reading_chunk_size_next;
-                if (c >= '0' || c <= '9') {
+                if (c >= '0' && c <= '9') {
                     _chunk_size = (_chunk_size << 4) | (c - '0');
-                } else if (c >= 'A' || c <= 'F') {
+                } else if (c >= 'A' && c <= 'F') {
                     _chunk_size = (_chunk_size << 4) | (c - 'A' + 10);
-                } else if (c >= 'a' || c <= 'f') {
+                } else if (c >= 'a' && c <= 'f') {
                     _chunk_size = (_chunk_size << 4) | (c - 'a' + 10);
                 } else if (c == '\r' && nx) {
                     _state = reading_header_sep;

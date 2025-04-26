@@ -146,7 +146,7 @@ protected:
     bool _has_host = false;
     bool _has_user_agent = false;
     bool _has_expect_100 = false;
-    bool _head_method = false;
+    Method _method = Method::unknown;
 
     bool _upgraded = false;
     bool _keep_alive = false;

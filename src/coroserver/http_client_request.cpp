@@ -1,4 +1,4 @@
-#include "null_stream.h"
+#include "null_stream.hpp"
 #include "limited_stream.hpp"
 #include "chunked_stream.hpp"
 #include "http_client_request.hpp"
@@ -19,7 +19,7 @@ void ClientRequest::open(Method method,std::string_view path,Protocol proto) {
     _has_host = false;
     _has_user_agent = false;
     _has_expect_100 = false;
-    _head_method = method == Method::HEAD;
+    _method = method;
     _status_message = {};
     _status = 0;
     std::format_to(std::back_inserter(_header_data), "{} {} {}\r\n",
@@ -75,12 +75,13 @@ std::string_view ClientRequest::finish_header() {
 }
 
 awaitable<Stream> ClientRequest::send2(coro::reusable_allocator &, std::string_view body) {
-    add_header_internal("Content-Length", std::to_string(body.size()));
+    bool _has_body = _method != Method::HEAD && _method != Method::GET;
+    if (_has_body) add_header_internal("Content-Length", std::to_string(body.size()));
     auto hdr = finish_header();
     bool b = co_await _stream.write(hdr);
     if (!b) co_return std::nullopt;
     _header_data.clear();
-    if (_has_expect_100) {
+    if (_has_body && _has_expect_100) {
         b = co_await _stream.read_until(_header_data, header_block_separator, max_header_size);
         if (!b) co_return std::nullopt;
         if (!parse_input_headers()) co_return std::nullopt;
@@ -88,8 +89,10 @@ awaitable<Stream> ClientRequest::send2(coro::reusable_allocator &, std::string_v
             co_return [&]{return prepare_body();};
         }
     }
-    b = co_await _stream.write(body);
-    if (!b) co_return std::nullopt;
+    if (_has_body) {
+        b = co_await _stream.write(body);
+        if (!b) co_return std::nullopt;
+    }
 
     b = co_await _stream.read_until(_header_data, header_block_separator, max_header_size);
     if (!b) co_return std::nullopt;
@@ -123,7 +126,7 @@ bool ClientRequest::is_upgrated() const {
 }
 
 Stream ClientRequest::prepare_body() {
-    if (_head_method) return NullStream::create();
+    if (_method == Method::HEAD) return NullStream::create();
     if (_upgraded) return _stream;
     auto te = get_header("Transfer-Encoding");
     auto cl = get_header_uint("Content-Length");
