@@ -104,7 +104,7 @@ int main() {
         ssrc.request_stop();
     });
 
-    server(ctx, ssrc.get_token()).await();
+    server(ctx, ssrc.get_token()).wait();
     return 0;
 
 } catch (const std::exception &e) {

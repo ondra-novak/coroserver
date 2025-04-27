@@ -5,7 +5,7 @@
 
 
 
-coro::awaitable<int> run_child(coroserver::Context &ctx) {
+coro::coroutine<int> run_child(coroserver::Context &ctx) {
     auto env = coroserver::Environment::current();
     std::string resp = env["RESPONSE"];
     coroserver::Stream s = coroserver::connect_stdinout(ctx);
@@ -24,7 +24,7 @@ coro::awaitable<int> run_child(coroserver::Context &ctx) {
 }
 
 
-coro::awaitable<int> run_test(coroserver::Context &ctx, const char *arg0) {
+coro::coroutine<int> run_test(coroserver::Context &ctx, const char *arg0) {
     auto env = coroserver::Environment::current();
     std::string resp = "test_string";
     env["RESPONSE"] = resp ;

@@ -33,14 +33,9 @@ public:
 
 
     coro::prepared_coro operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-        if (!promise) {
-            _callback.get_awaiter().cancel();
-            return {};
-        } else {
-            return _callback.await([this,promise = std::move(promise)](auto &awt) mutable {
-                return process_data(awt, promise);
-            });
-        }
+        return _callback.await([this,promise = std::move(promise)](auto &awt) mutable {
+            return process_data(awt, promise);
+        });
     }
 
 protected:
@@ -115,14 +110,9 @@ public:
         }
 
         coro::prepared_coro operator()(coro::awaitable_result<ReceiveBlockStatus> promise) {
-            if (!promise) {
-                _callback.get_awaiter().cancel();
-                return {};
-            } else {
-                return _callback.await([this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
-                    return process_data(awt, promise);
-                });
-            }
+            return _callback.await([this, promise = std::move(promise)](coro::awaitable<std::string_view> &awt) mutable {
+                return process_data(awt, promise);
+            });
     }
 
 protected:
@@ -335,7 +325,6 @@ public:
     template<std::size_t buffer_size = 1024>
     coro::awaitable<bool> fill(std::size_t count, char byte) {
         if (count == 0) co_return true;
-        if (co_await coro::awaitable<bool>::is_detached()) co_return false;
 
         char buffer[buffer_size];
         std::fill(std::begin(buffer), std::end(buffer), byte);

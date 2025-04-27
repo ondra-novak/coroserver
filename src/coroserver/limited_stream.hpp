@@ -23,10 +23,6 @@ public:
         }
         _cb.set_awaiter(awt);
         return [this](coro::awaitable<std::string_view>::result r) -> coro::prepared_coro {
-            if (!r) {
-                _cb.get_awaiter().cancel();
-                return {};
-            }
             return _cb.await([this, r = std::move(r)](coro::awaitable<std::string_view> &awt) mutable {
                 try {
                     return r(crop_input(awt.await_resume()));
@@ -67,10 +63,10 @@ public:
 
     static Stream create_read_limited(Stream s, std::size_t count) {
         return Stream(std::make_shared<LimitedStream>(std::move(s),count,0));
-    } 
+    }
     static Stream create_write_limited(Stream s, std::size_t count) {
         return Stream(std::make_shared<LimitedStream>(std::move(s),0,count));
-    } 
+    }
 
 protected:
     std::size_t _limit_read;

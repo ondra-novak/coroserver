@@ -36,10 +36,6 @@ coro::awaitable<std::string_view> ChunkedStream::read()
     }
     _cb.set_awaiter(awt);
     return [this](coro::awaitable<std::string_view>::result p) -> coro::prepared_coro {
-        if (!p) {
-            _cb.get_awaiter().cancel();
-            return {};
-        }
         _read_result = std::move(p);
         return _cb.await([this](auto &awt){return read_from_stream(awt);});
     };

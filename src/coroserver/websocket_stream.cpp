@@ -30,17 +30,13 @@ awaitable<Message> WebSocketStreamImpl::read() {
         if (data.empty()) return Message{"",Type::connClose, Base::closeAbnormal};
         if (_parser.push_data(data)) {
             auto msg = _parser.get_message();
-            if (handle_message(msg)) return read(); 
+            if (handle_message(msg)) return read();
             return msg;
         }
         awt = _stream.read();
     }
     _read_callback.set_awaiter(awt);
     return [this](awaitable<Message>::result result) {
-        if (!result) {
-            _read_callback.get_awaiter().cancel();
-            return result.set_empty();
-        }
         return _read_callback.await([this,r = std::move(result)](auto &awt) mutable {
             try {
                 if (awt.has_value()) {
@@ -65,11 +61,11 @@ awaitable<Message> WebSocketStreamImpl::read() {
                     } else {
                         return r(Message{"",Type::connClose, Base::closeAbnormal});
                     }
-                }                        
+                }
             } catch (...) {
                 return r.set_exception(std::current_exception());
             }
-        });                
+        });
     };
 }
 
@@ -82,7 +78,7 @@ std::array<std::uint8_t, 4> WebSocketStreamImpl::generate_masking_key() {
     return key;
 }
 bool WebSocketStreamImpl::write(const Message &message)
-{    
+{
     bool c = true;
     bool r = _stream.write([&](auto output_iter){
         //under lock!
@@ -90,11 +86,11 @@ bool WebSocketStreamImpl::write(const Message &message)
             c = false;
             return;
         }
-        if (message.type == Type::connClose) _close_sent = true;     
+        if (message.type == Type::connClose) _close_sent = true;
         build(message, [&](char c) {
             *output_iter = c;
             ++output_iter;
-        }, _server ? nullptr : generate_masking_key().data());    
+        }, _server ? nullptr : generate_masking_key().data());
     });
     return r && c;
 }
@@ -107,7 +103,7 @@ bool WebSocketStreamImpl::close(std::uint16_t code, std::string_view message)
 
 bool WebSocketStreamImpl::handle_message(const Message &msg)
 {
-    switch (msg.type) {    
+    switch (msg.type) {
         default: return false;
         case Type::connClose:
             if (get_state() == StreamState::closing) {
@@ -122,7 +118,7 @@ bool WebSocketStreamImpl::handle_message(const Message &msg)
             write({msg.payload, Type::pong});
             return true; //handled ping, no need to pass to the client
         case Type::pong:
-            return true; //handled pong, no need to pass to the client        
+            return true; //handled pong, no need to pass to the client
     }
 }
 

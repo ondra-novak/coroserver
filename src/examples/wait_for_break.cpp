@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
     if (!wt) std::cout << "add 'w' argument to test exit timeout\n";
 
     Context ctx = Context::create(1);
-    wait_coro(ctx).await();
+    wait_coro(ctx).wait();
     if (wt) std::this_thread::sleep_for(std::chrono::seconds(1000));
 
     return 0;

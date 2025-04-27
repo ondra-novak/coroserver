@@ -34,10 +34,6 @@ awaitable<bool> ServerRequest::parse() {
     } else {
         _read_until_callback.set_awaiter(std::move(awt));
         return [this](coro::awaitable<bool>::result r) mutable {
-            if (!r) {
-                _read_until_callback.get_awaiter().cancel();
-                return r.set_empty();
-            }
             return _read_until_callback.await([this, r = std::move(r)](auto &awt) mutable {
                 try {
                     if (!awt.has_value()) {
@@ -174,10 +170,6 @@ awaitable<Stream> ServerRequest::get_body() {
         }
         _send_callback.set_awaiter(awt);
         return [this](awaitable<Stream>::result r){
-            if (!r) {
-                _send_callback.get_awaiter().cancel();
-                return r();
-            }
             return _send_callback.await([this, r = std::move(r)](auto &awt) mutable{
                 try {
                     if (awt.await_resume()) {
@@ -398,10 +390,6 @@ auto ServerRequest::send_helper(Args  ... args) {
     } else {
         _send_callback.set_awaiter(std::move(awt));
         return AwtType([this, args...](ResultType r) {
-            if (!r) {
-                _send_callback.get_awaiter().cancel();
-                return r.set_empty();
-            }
             return _send_callback.await([this, r = std::move(r), args...](auto &awt) mutable {
                 try {
                     if (awt.has_value() && awt.await_resume()) {
