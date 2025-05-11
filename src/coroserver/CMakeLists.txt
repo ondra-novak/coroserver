@@ -16,6 +16,13 @@ set(COMMON_FILES
     ws_defs.cpp
     websocket_stream.cpp
     websocket_server.cpp
+    
+    zerobus/local_bus.cpp
+    zerobus/channel_list_storage.cpp
+    zerobus/abstract_bridge.cpp
+    zerobus/mailbox_gen.cpp
+    zerobus/null_bridge.cpp
+    
 )
 
 if(MSVC)
